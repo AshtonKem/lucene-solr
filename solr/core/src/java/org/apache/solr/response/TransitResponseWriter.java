@@ -22,7 +22,6 @@ package org.apache.solr.response;
  *  - ResultContext
  *  - DocList
  *  - BytesRef (read the docs carefully, UTF8 vs. UTF16 concerns here)
- *  - Mangling of NamedList
  */
 
 import java.io.IOException;
@@ -75,7 +74,7 @@ public class TransitResponseWriter implements QueryResponseWriter {
     return returnVal;
   }
   
-  private HashMap<String, Object> transformSolrDocumentList(SolrDocumentList c, SolrQueryRequest request, SolrQueryResponse response) {
+  private HashMap<String, Object> transformSolrDocumentList(SolrDocumentList c, SolrQueryRequest request, SolrQueryResponse response, DocTransformer transformer) throws IOException {
     HashMap<String, Object> returnVal = new HashMap<>();
     returnVal.put("numFound", c.getNumFound());
     returnVal.put("start", c.getStart());
@@ -84,13 +83,19 @@ public class TransitResponseWriter implements QueryResponseWriter {
     }
     ArrayList<HashMap<String, Object>> documents = new ArrayList<>();
     for (SolrDocument doc : c) {
-      documents.add(transformSolrDocument(doc, request, response));
+      documents.add(transformSolrDocument(doc, request, response, transformer));
     }
     returnVal.put("documents", documents);
     return returnVal;
   }
   
-  private HashMap<String, Object> transformSolrDocument(SolrDocument c, SolrQueryRequest request, SolrQueryResponse response) {
+  private HashMap<String, Object> transformSolrDocument(SolrDocument c, SolrQueryRequest request, SolrQueryResponse response, DocTransformer transformer) throws IOException {
+    if( transformer != null ) {
+      TransformContext context = new TransformContext();
+      context.req = request;
+      transformer.setContext(context);
+      transformer.transform(c, -1);
+    }
     ReturnFields returnFields = response.getReturnFields();
     HashMap<String, Object> docHash = new HashMap<>();
     for (String fname : c.getFieldNames()) {
@@ -109,7 +114,7 @@ public class TransitResponseWriter implements QueryResponseWriter {
   
   private Object transformObject(Object c, SolrQueryRequest request, SolrQueryResponse response) throws IOException {
     if (c instanceof SolrDocumentList) {
-      return transformSolrDocumentList((SolrDocumentList) c, request, response);
+      return transformSolrDocumentList((SolrDocumentList) c, request, response, null);
     }
     if (c instanceof NamedList) {
       return transformNamedList((NamedList)c, request, response);
@@ -118,13 +123,7 @@ public class TransitResponseWriter implements QueryResponseWriter {
       SolrDocument doc = toSolrDocument( (StoredDocument)c, request );
       ReturnFields returnFields = response.getReturnFields();
       DocTransformer transformer = returnFields.getTransformer();
-      if( transformer != null ) {
-        TransformContext context = new TransformContext();
-        context.req = request;
-        transformer.setContext(context);
-        transformer.transform(doc, -1);
-      }
-      return transformSolrDocument(doc, request, response);
+      return transformSolrDocument(doc, request, response, transformer);
     }
     
     return c;
