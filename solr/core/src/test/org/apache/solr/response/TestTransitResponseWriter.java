@@ -23,6 +23,8 @@ import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.HashMap;
 
+import org.apache.lucene.document.FieldType;
+import org.apache.lucene.document.StoredField;
 import org.apache.solr.SolrTestCaseJ4;
 import org.apache.solr.common.SolrDocument;
 import org.apache.solr.common.SolrDocumentList;
@@ -90,6 +92,7 @@ public class TestTransitResponseWriter extends SolrTestCaseJ4 {
                  buf.toString());
     req.close();
   }
+
   
   @Test
   public void testComposite() throws IOException {
@@ -154,6 +157,7 @@ public class TestTransitResponseWriter extends SolrTestCaseJ4 {
     data.put("response", response);
     assertEquals( writeTransit(data), result);
   }
+  
   
   @Test
   public void testMultiValuedField() throws IOException {

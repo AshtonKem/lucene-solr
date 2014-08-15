@@ -19,6 +19,9 @@ package org.apache.solr.response;
 
 import java.io.IOException;
 
+import org.apache.lucene.document.LazyDocument.LazyField;
+import org.apache.lucene.document.StoredField;
+import org.apache.lucene.index.StorableField;
 import org.apache.lucene.index.StoredDocument;
 import org.apache.lucene.util.BytesRef;
 import org.apache.solr.common.SolrDocument;
@@ -27,8 +30,11 @@ import org.apache.solr.common.util.NamedList;
 import org.apache.solr.request.SolrQueryRequest;
 import org.apache.solr.response.transform.DocTransformer;
 import org.apache.solr.response.transform.TransformContext;
+import org.apache.solr.schema.SchemaField;
 import org.apache.solr.search.DocList;
 import org.apache.solr.search.ReturnFields;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
 
@@ -39,8 +45,10 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Set;
 
+
 public class TransitResponseWriter implements QueryResponseWriter {
   static String CONTENT_TYPE = "application/transit+json";
+  private static final Logger log = LoggerFactory.getLogger(TransitResponseWriter.class.getName());
 
   @Override
   public void init(NamedList namedList) {
@@ -132,7 +140,7 @@ public class TransitResponseWriter implements QueryResponseWriter {
       if (!returnFields.wantsField(fname)) {
         continue;
       }
-      docHash.put(fname, c.getFieldValue(fname));
+      docHash.put(fname, transformObject(c.getFieldValue(fname), request, response));
     }
     return docHash;
   }
@@ -160,6 +168,29 @@ public class TransitResponseWriter implements QueryResponseWriter {
       ctx.docs = (DocList)c;
       return transformResultContext(ctx, request, response);
     }
+    if (c instanceof StorableField) {
+      StorableField f = (StorableField)c;
+      return f.stringValue();
+    }
+    
+    if (c instanceof LazyField) {
+      StorableField f = (LazyField)c;
+      return f.stringValue();
+    }
+    
+    if (c instanceof StoredField) {
+      StorableField f = (StoredField)c;
+      return f.stringValue();
+    }
+    
+    if (c instanceof Iterable) {
+      ArrayList arr = new ArrayList();
+      for (Object i : (Iterable)c) {
+        arr.add(transformObject(i, request, response));
+      }
+      return arr;
+    }
+   
     
     if (c instanceof ResultContext) {
       return transformResultContext((ResultContext) c, request, response);
