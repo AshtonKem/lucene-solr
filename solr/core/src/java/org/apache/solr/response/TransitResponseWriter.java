@@ -17,6 +17,16 @@
 
 package org.apache.solr.response;
 
+/**
+ * Types Left TODO:
+ *  - StoredDocument
+ *  - ResultContext
+ *  - DocList
+ *  - NamedList vs Map
+ *  - BytesRef (read the docs carefully, UTF8 vs. UTF16 concerns here)
+ *  - Mangling of NamedList
+ */
+
 import java.io.IOException;
 
 import org.apache.solr.common.SolrDocument;
@@ -44,7 +54,7 @@ public class TransitResponseWriter implements QueryResponseWriter {
   public void write(java.io.Writer writer, SolrQueryRequest req, SolrQueryResponse rsp) throws IOException {
     ByteArrayOutputStream baos = new ByteArrayOutputStream();
     Writer transit = TransitFactory.writer(TransitFactory.Format.JSON, baos);
-    transit.write(getData(rsp.getValues(), req, rsp));
+    transit.write(transformObject(rsp.getValues(), req, rsp));
     writer.write(baos.toString());
   }
 
@@ -53,7 +63,7 @@ public class TransitResponseWriter implements QueryResponseWriter {
     return CONTENT_TYPE;
   }
 
-  private HashMap<String, Object> getData(NamedList val, SolrQueryRequest request, SolrQueryResponse response) {
+  private HashMap<String, Object> transformNamedList(NamedList val, SolrQueryRequest request, SolrQueryResponse response) {
     HashMap<String, Object> returnVal = new HashMap<>();
     int size = val.size();
     for (int i = 0; i < size; i++) {
@@ -90,6 +100,9 @@ public class TransitResponseWriter implements QueryResponseWriter {
   private Object transformObject(Object c, SolrQueryRequest request, SolrQueryResponse response) {
     if (c instanceof SolrDocumentList) {
       return transformSolrDocumentList((SolrDocumentList) c, request, response);
+    }
+    if (c instanceof NamedList) {
+      return transformNamedList((NamedList)c, request, response);
     }
     return c;
   }
