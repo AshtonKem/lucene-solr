@@ -17,22 +17,17 @@
 
 package org.apache.solr.response;
 
-/**
- * Types Left TODO:
- *  - ResultContext
- *  - DocList
- *  - BytesRef (read the docs carefully, UTF8 vs. UTF16 concerns here)
- */
-
 import java.io.IOException;
 
 import org.apache.lucene.index.StoredDocument;
+import org.apache.lucene.util.BytesRef;
 import org.apache.solr.common.SolrDocument;
 import org.apache.solr.common.SolrDocumentList;
 import org.apache.solr.common.util.NamedList;
 import org.apache.solr.request.SolrQueryRequest;
 import org.apache.solr.response.transform.DocTransformer;
 import org.apache.solr.response.transform.TransformContext;
+import org.apache.solr.search.DocList;
 import org.apache.solr.search.ReturnFields;
 
 import java.io.ByteArrayOutputStream;
@@ -42,6 +37,7 @@ import com.cognitect.transit.Writer;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Set;
 
 public class TransitResponseWriter implements QueryResponseWriter {
   static String CONTENT_TYPE = "application/transit+json";
@@ -74,7 +70,8 @@ public class TransitResponseWriter implements QueryResponseWriter {
     return returnVal;
   }
   
-  private HashMap<String, Object> transformSolrDocumentList(SolrDocumentList c, SolrQueryRequest request, SolrQueryResponse response, DocTransformer transformer) throws IOException {
+  private HashMap<String, Object> transformSolrDocumentList(SolrDocumentList c, SolrQueryRequest request, 
+      SolrQueryResponse response, DocTransformer transformer) throws IOException {
     HashMap<String, Object> returnVal = new HashMap<>();
     returnVal.put("numFound", c.getNumFound());
     returnVal.put("start", c.getStart());
@@ -87,6 +84,39 @@ public class TransitResponseWriter implements QueryResponseWriter {
     }
     returnVal.put("documents", documents);
     return returnVal;
+  }
+  
+  private HashMap<String, Object> transformResultContext(ResultContext res, SolrQueryRequest req, SolrQueryResponse resp) throws IOException {
+    ReturnFields fields = resp.getReturnFields();
+    DocList ids = res.docs;
+    TransformContext context = new TransformContext();
+    context.query = res.query;
+    context.wantsScores = fields.wantsScore() && ids.hasScores();
+    context.req = req;
+    
+    SolrDocumentList docList = new SolrDocumentList();
+    docList.setStart(ids.offset());
+    docList.setNumFound(ids.size());
+    if (context.wantsScores) {
+      docList.setMaxScore(new Float(ids.maxScore()));
+    }
+    
+    DocTransformer transformer = fields.getTransformer();
+    context.searcher = req.getSearcher();
+    context.iterator = ids.iterator();
+    if( transformer != null ) {
+      transformer.setContext( context );
+    }
+    int sz = ids.size();
+    Set<String> fnames = fields.getLuceneFieldNames();
+    for (int i=0; i<sz; i++) {
+      int id = context.iterator.nextDoc();
+      StoredDocument doc = context.searcher.doc(id, fnames);
+      SolrDocument sdoc = toSolrDocument( doc, req );
+      docList.add(sdoc);
+    }
+    return transformSolrDocumentList(docList, req, resp, transformer);
+    
   }
   
   private HashMap<String, Object> transformSolrDocument(SolrDocument c, SolrQueryRequest request, SolrQueryResponse response, DocTransformer transformer) throws IOException {
@@ -119,6 +149,14 @@ public class TransitResponseWriter implements QueryResponseWriter {
     if (c instanceof NamedList) {
       return transformNamedList((NamedList)c, request, response);
     } 
+    
+    if (c instanceof BytesRef) {
+      return ((BytesRef)c).utf8ToString();
+    }
+    
+    if (c instanceof ResultContext) {
+      return transformResultContext((ResultContext) c, request, response);
+    }
     if (c instanceof StoredDocument) {
       SolrDocument doc = toSolrDocument( (StoredDocument)c, request );
       ReturnFields returnFields = response.getReturnFields();
