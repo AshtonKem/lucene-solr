@@ -154,6 +154,13 @@ public class TransitResponseWriter implements QueryResponseWriter {
       return ((BytesRef)c).utf8ToString();
     }
     
+    if (c instanceof DocList) {
+      // Should not happen normally
+      ResultContext ctx = new ResultContext();
+      ctx.docs = (DocList)c;
+      return transformResultContext(ctx, request, response);
+    }
+    
     if (c instanceof ResultContext) {
       return transformResultContext((ResultContext) c, request, response);
     }
