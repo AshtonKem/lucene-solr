@@ -56,6 +56,7 @@ import org.apache.solr.request.SolrRequestHandler;
 import org.apache.solr.response.BinaryResponseWriter;
 import org.apache.solr.response.CSVResponseWriter;
 import org.apache.solr.response.JSONResponseWriter;
+import org.apache.solr.response.TransitResponseWriter;
 import org.apache.solr.response.PHPResponseWriter;
 import org.apache.solr.response.PHPSerializedResponseWriter;
 import org.apache.solr.response.PythonResponseWriter;
@@ -2076,6 +2077,7 @@ public final class SolrCore implements SolrInfoMBean, Closeable {
     m.put("raw", new RawResponseWriter());
     m.put("javabin", new BinaryResponseWriter());
     m.put("csv", new CSVResponseWriter());
+    m.put("transit", new TransitResponseWriter());
     m.put("xsort", new SortingResponseWriter());
     m.put("schema.xml", new SchemaXmlResponseWriter());
     DEFAULT_RESPONSE_WRITERS = Collections.unmodifiableMap(m);
