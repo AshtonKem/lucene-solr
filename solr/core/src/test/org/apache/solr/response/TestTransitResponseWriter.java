@@ -30,11 +30,9 @@ import org.apache.solr.common.params.CommonParams;
 import org.apache.solr.request.SolrQueryRequest;
 import org.apache.solr.search.ReturnFields;
 import org.apache.solr.search.SolrReturnFields;
-import org.apache.tools.ant.filters.StringInputStream;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
-import com.cognitect.transit.Reader;
 import com.cognitect.transit.TransitFactory;
 import com.cognitect.transit.Writer;
 
