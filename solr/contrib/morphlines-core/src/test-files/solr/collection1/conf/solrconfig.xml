@@ -1667,6 +1667,7 @@
      <queryResponseWriter name="php" class="solr.PHPResponseWriter"/>
      <queryResponseWriter name="phps" class="solr.PHPSerializedResponseWriter"/>
      <queryResponseWriter name="csv" class="solr.CSVResponseWriter"/>
+     <queryResponseWriter name="transit" class="solr.TransitResponseWriter"/>
     -->
 
   <queryResponseWriter name="json" class="solr.JSONResponseWriter">
