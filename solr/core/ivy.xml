@@ -76,7 +76,12 @@
     <dependency org="org.mortbay.jetty" name="jetty-util" rev="${/org.mortbay.jetty/jetty-util}" conf="test.DfsMiniCluster->*"/>
     <dependency org="com.sun.jersey" name="jersey-core" rev="${/com.sun.jersey/jersey-core}" conf="test.DfsMiniCluster->*"/>
     <dependency org="commons-collections" name="commons-collections" rev="${/commons-collections/commons-collections}" conf="test.DfsMiniCluster->*"/>
+    <!-- Transit dependencies -->
+    <dependency org="com.fasterxml.jackson.core" name="jackson-core" rev="2.3.2" />
+    <dependency org="com.fasterxml.jackson.datatype" name="jackson-datatype-json-org" rev="2.3.2"/>
+    <dependency org="com.cognitect" name="transit-java" rev="0.8.257"/>
 
-    <exclude org="*" ext="*" matcher="regexp" type="${ivy.exclude.types}"/> 
+
+    <exclude org="*" ext="*" matcher="regexp" type="${ivy.exclude.types}"/>
   </dependencies>
 </ivy-module>
