@@ -19,11 +19,18 @@ package org.apache.solr.response;
 
 import java.io.IOException;
 
+import org.apache.solr.common.SolrDocument;
+import org.apache.solr.common.SolrDocumentList;
 import org.apache.solr.common.util.NamedList;
 import org.apache.solr.request.SolrQueryRequest;
+import org.apache.solr.search.ReturnFields;
+
 import java.io.ByteArrayOutputStream;
+
 import com.cognitect.transit.TransitFactory;
 import com.cognitect.transit.Writer;
+
+import java.util.ArrayList;
 import java.util.HashMap;
 
 public class TransitResponseWriter implements QueryResponseWriter {
@@ -37,7 +44,7 @@ public class TransitResponseWriter implements QueryResponseWriter {
   public void write(java.io.Writer writer, SolrQueryRequest req, SolrQueryResponse rsp) throws IOException {
     ByteArrayOutputStream baos = new ByteArrayOutputStream();
     Writer transit = TransitFactory.writer(TransitFactory.Format.JSON, baos);
-    transit.write(getData(rsp.getValues()));
+    transit.write(getData(rsp.getValues(), req, rsp));
     writer.write(baos.toString());
   }
 
@@ -46,19 +53,44 @@ public class TransitResponseWriter implements QueryResponseWriter {
     return CONTENT_TYPE;
   }
 
-  private HashMap<String, Object> getData(NamedList val) {
+  private HashMap<String, Object> getData(NamedList val, SolrQueryRequest request, SolrQueryResponse response) {
     HashMap<String, Object> returnVal = new HashMap<>();
     int size = val.size();
     for (int i = 0; i < size; i++) {
       String key = val.getName(i);
       if (key == null) key = "";
-      returnVal.put(key, transformObject(val.getVal(i)));
+      returnVal.put(key, transformObject(val.getVal(i), request, response));
     }
     return returnVal;
   }
   
-  private Object transformObject(Object c) {
-    
+  private HashMap<String, Object> transformSolrDocumentList(SolrDocumentList c, SolrQueryRequest request, SolrQueryResponse response) {
+    HashMap<String, Object> returnVal = new HashMap<>();
+    ReturnFields returnFields = response.getReturnFields();
+    returnVal.put("numFound", c.getNumFound());
+    returnVal.put("start", c.getStart());
+    if (c.getMaxScore() != null) {
+      returnVal.put("maxScore", c.getMaxScore());
+    }
+    ArrayList<HashMap<String, Object>> documents = new ArrayList<>();
+    for (SolrDocument doc : c) {
+      HashMap<String, Object> docHash = new HashMap<>();
+      for (String fname : doc.getFieldNames()) {
+        if (!returnFields.wantsField(fname)) {
+          continue;
+        }
+        docHash.put(fname, doc.getFieldValue(fname));
+      }
+      documents.add(docHash);
+    }
+    returnVal.put("documents", documents);
+    return returnVal;
+  }
+  
+  private Object transformObject(Object c, SolrQueryRequest request, SolrQueryResponse response) {
+    if (c instanceof SolrDocumentList) {
+      return transformSolrDocumentList((SolrDocumentList) c, request, response);
+    }
     return c;
   }
 

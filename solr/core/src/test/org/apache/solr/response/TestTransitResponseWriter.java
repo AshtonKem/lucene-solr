@@ -24,18 +24,25 @@ import java.util.ArrayList;
 import java.util.HashMap;
 
 import org.apache.solr.SolrTestCaseJ4;
-import org.apache.solr.common.util.NamedList;
+import org.apache.solr.common.SolrDocument;
+import org.apache.solr.common.SolrDocumentList;
+import org.apache.solr.common.params.CommonParams;
 import org.apache.solr.request.SolrQueryRequest;
+import org.apache.solr.search.ReturnFields;
+import org.apache.solr.search.SolrReturnFields;
+import org.apache.tools.ant.filters.StringInputStream;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
+import com.cognitect.transit.Reader;
 import com.cognitect.transit.TransitFactory;
 import com.cognitect.transit.Writer;
 
 
 /**
- * Basic PHPS tests based on JSONWriterTest
+ * Basic TransitResponseWriter tests based on JSONWriterTest
  *
+ * Be warned, a few of these tests are ordering sensitive.
  */
 public class TestTransitResponseWriter extends SolrTestCaseJ4 {
   private String writeTransit(Object data) {
@@ -105,50 +112,91 @@ public class TestTransitResponseWriter extends SolrTestCaseJ4 {
                  buf.toString());
     req.close();
   }
-
-
-  // @Test
-  // public void testSolrDocuments() throws IOException {
-  //   SolrQueryRequest req = req("q","*:*");
-  //   SolrQueryResponse rsp = new SolrQueryResponse();
-  //   QueryResponseWriter w = new PHPSerializedResponseWriter();
-  //   StringWriter buf = new StringWriter();
-
-  //   SolrDocument d = new SolrDocument();
-
-  //   SolrDocument d1 = d;
-  //   d.addField("id","1");
-  //   d.addField("data1","hello");
-  //   d.addField("data2",42);
-  //   d.addField("data3",true);
-
-  //   // multivalued fields:
-
-  //   // extremely odd edge case: value is a map
-
-  //   // we use LinkedHashMap because we are doing a string comparison
-  //   // later and we need predictible ordering
-  //   LinkedHashMap<String,String> nl = new LinkedHashMap<>();
-  //   nl.put("data4.1", "hashmap");
-  //   nl.put("data4.2", "hello");
-  //   d.addField("data4",nl);
-  //   // array value
-  //   d.addField("data5",Arrays.asList("data5.1", "data5.2", "data5.3"));
-
-  //   // adding one more document to test array indexes
-  //   d = new SolrDocument();
-  //   SolrDocument d2 = d;
-  //   d.addField("id","2");
-
-  //   SolrDocumentList sdl = new SolrDocumentList();
-  //   sdl.add(d1);
-  //   sdl.add(d2);
-  //   rsp.add("response", sdl);
-
-  //   w.write(buf, req, rsp);
-  //   assertEquals("a:1:{s:8:\"response\";a:3:{s:8:\"numFound\";i:0;s:5:\"start\";i:0;s:4:\"docs\";a:2:{i:0;a:6:{s:2:\"id\";s:1:\"1\";s:5:\"data1\";s:5:\"hello\";s:5:\"data2\";i:42;s:5:\"data3\";b:1;s:5:\"data4\";a:2:{s:7:\"data4.1\";s:7:\"hashmap\";s:7:\"data4.2\";s:5:\"hello\";}s:5:\"data5\";a:3:{i:0;s:7:\"data5.1\";i:1;s:7:\"data5.2\";i:2;s:7:\"data5.3\";}}i:1;a:1:{s:2:\"id\";s:1:\"2\";}}}}",
-  //                buf.toString());
-  //   req.close();
-  // }
-
+  
+  @Test
+  public void testResponseDocuments() throws IOException {
+    SolrQueryRequest req = req(CommonParams.WT,"json",
+        CommonParams.FL,"id,score");
+    SolrQueryResponse rsp = new SolrQueryResponse();
+    TransitResponseWriter w = new TransitResponseWriter();
+    
+    ReturnFields returnFields = new SolrReturnFields(req);
+    rsp.setReturnFields(returnFields);
+    
+    StringWriter buf = new StringWriter();
+    
+    SolrDocument solrDoc = new SolrDocument();
+    solrDoc.addField("id", "1");
+    solrDoc.addField("subject", "hello2");
+    solrDoc.addField("title", "hello3");
+    solrDoc.addField("score", "0.7");
+    
+    SolrDocumentList list = new SolrDocumentList();
+    list.setNumFound(1);
+    list.setStart(0);
+    list.setMaxScore(0.7f);
+    list.add(solrDoc);
+    
+    rsp.add("response", list);
+    
+    w.write(buf, req, rsp);
+    String result = buf.toString();
+    HashMap<String, Object> data = new HashMap<>();
+    HashMap<String, Object> response = new HashMap<>();
+    HashMap<String, Object> document = new HashMap<>();
+    ArrayList docs = new ArrayList();
+    
+    document.put("id", "1");
+    document.put("score", "0.7");
+    docs.add(document);
+    response.put("start", 0);
+    response.put("documents", docs);
+    response.put("numFound", 1);
+    response.put("maxScore", 0.7);
+    data.put("response", response);
+    assertEquals( writeTransit(data), result);
+  }
+  
+  @Test
+  public void testMultiValuedField() throws IOException {
+    SolrQueryRequest req = req(CommonParams.WT,"json",
+        CommonParams.FL,"id,tags");
+    SolrQueryResponse rsp = new SolrQueryResponse();
+    TransitResponseWriter w = new TransitResponseWriter();
+    
+    ReturnFields returnFields = new SolrReturnFields(req);
+    rsp.setReturnFields(returnFields);
+    
+    StringWriter buf = new StringWriter();
+    
+    SolrDocument solrDoc = new SolrDocument();
+    solrDoc.addField("id", "1");
+    solrDoc.addField("tags", "one");
+    solrDoc.addField("tags", "two");
+    
+    SolrDocumentList list = new SolrDocumentList();
+    list.setNumFound(1);
+    list.setStart(0);
+    list.add(solrDoc);
+    
+    rsp.add("response", list);
+    
+    w.write(buf, req, rsp);
+    String result = buf.toString();
+    HashMap<String, Object> data = new HashMap<>();
+    HashMap<String, Object> response = new HashMap<>();
+    HashMap<String, Object> document = new HashMap<>();
+    ArrayList docs = new ArrayList();
+    
+    document.put("id", "1");
+    Object[] tags = {"one", "two"};
+    document.put("tags", tags);
+    docs.add(document);
+    response.put("start", 0);
+    response.put("documents", docs);
+    response.put("numFound", 1);
+    data.put("response", response);
+    String expected = writeTransit(data);
+    assertEquals( expected, result);
+  }
 }
