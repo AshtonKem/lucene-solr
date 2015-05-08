@@ -86,8 +86,6 @@
     <dependency org="org.apache.hadoop" name="hadoop-minikdc" rev="${/org.apache.hadoop/hadoop-minikdc}" conf="test.MiniKdc"/>
     <dependency org="org.apache.directory.server" name="apacheds-all" rev="${/org.apache.directory.server/apacheds-all}" conf="test.MiniKdc"/>
 
-    <exclude org="*" ext="*" matcher="regexp" type="${ivy.exclude.types}"/>
-
     <!-- StatsComponents percentiles Dependencies-->
     <dependency org="com.tdunning" name="t-digest" rev="${/com.tdunning/t-digest}" conf="compile->*"/>
 
