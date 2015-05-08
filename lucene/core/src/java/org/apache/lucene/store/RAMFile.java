@@ -81,5 +81,9 @@ public class RAMFile implements Accountable {
   public synchronized long ramBytesUsed() {
     return sizeInBytes;
   }
-  
+
+  @Override
+  public String toString() {
+    return getClass().getSimpleName() + "(length=" + length + ")";
+  }
 }

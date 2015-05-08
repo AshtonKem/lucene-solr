@@ -17,23 +17,21 @@ package org.apache.lucene.search.join;
  * limitations under the License.
  */
 
-import java.io.IOException;
-
-import org.apache.lucene.index.AtomicReaderContext;
 import org.apache.lucene.index.BinaryDocValues;
 import org.apache.lucene.index.DocValues;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.SortedSetDocValues;
-import org.apache.lucene.search.LeafCollector;
-import org.apache.lucene.search.Collector;
 import org.apache.lucene.search.Scorer;
 import org.apache.lucene.search.SimpleCollector;
 import org.apache.lucene.util.ArrayUtil;
-import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.BytesRefHash;
+
+import java.io.IOException;
+import java.util.Arrays;
 
 abstract class TermsWithScoreCollector extends SimpleCollector {
 
-  private final static int INITIAL_ARRAY_SIZE = 256;
+  private final static int INITIAL_ARRAY_SIZE = 0;
 
   final String field;
   final BytesRefHash collectedTerms = new BytesRefHash();
@@ -45,6 +43,11 @@ abstract class TermsWithScoreCollector extends SimpleCollector {
   TermsWithScoreCollector(String field, ScoreMode scoreMode) {
     this.field = field;
     this.scoreMode = scoreMode;
+    if (scoreMode == ScoreMode.Min) {
+      Arrays.fill(scoreSums, Float.POSITIVE_INFINITY);
+    } else if (scoreMode == ScoreMode.Max) {
+      Arrays.fill(scoreSums, Float.NEGATIVE_INFINITY);
+    }
   }
 
   public BytesRefHash getCollectedTerms() {
@@ -58,11 +61,6 @@ abstract class TermsWithScoreCollector extends SimpleCollector {
   @Override
   public void setScorer(Scorer scorer) throws IOException {
     this.scorer = scorer;
-  }
-
-  @Override
-  public boolean acceptsDocsOutOfOrder() {
-    return true;
   }
 
   /**
@@ -106,7 +104,13 @@ abstract class TermsWithScoreCollector extends SimpleCollector {
         ord = -ord - 1;
       } else {
         if (ord >= scoreSums.length) {
+          int begin = scoreSums.length;
           scoreSums = ArrayUtil.grow(scoreSums);
+          if (scoreMode == ScoreMode.Min) {
+            Arrays.fill(scoreSums, begin, scoreSums.length, Float.POSITIVE_INFINITY);
+          } else if (scoreMode == ScoreMode.Max) {
+            Arrays.fill(scoreSums, begin, scoreSums.length, Float.NEGATIVE_INFINITY);
+          }
         }
       }
 
@@ -119,16 +123,22 @@ abstract class TermsWithScoreCollector extends SimpleCollector {
           case Total:
             scoreSums[ord] = scoreSums[ord] + current;
             break;
+          case Min:
+            if (current < existing) {
+              scoreSums[ord] = current;
+            }
+            break;
           case Max:
             if (current > existing) {
               scoreSums[ord] = current;
             }
+            break;
         }
       }
     }
 
     @Override
-    protected void doSetNextReader(AtomicReaderContext context) throws IOException {
+    protected void doSetNextReader(LeafReaderContext context) throws IOException {
       fromDocTerms = DocValues.getBinary(context.reader(), field);
     }
 
@@ -195,7 +205,13 @@ abstract class TermsWithScoreCollector extends SimpleCollector {
           termID = -termID - 1;
         } else {
           if (termID >= scoreSums.length) {
+            int begin = scoreSums.length;
             scoreSums = ArrayUtil.grow(scoreSums);
+            if (scoreMode == ScoreMode.Min) {
+              Arrays.fill(scoreSums, begin, scoreSums.length, Float.POSITIVE_INFINITY);
+            } else if (scoreMode == ScoreMode.Max) {
+              Arrays.fill(scoreSums, begin, scoreSums.length, Float.NEGATIVE_INFINITY);
+            }
           }
         }
         
@@ -203,14 +219,18 @@ abstract class TermsWithScoreCollector extends SimpleCollector {
           case Total:
             scoreSums[termID] += scorer.score();
             break;
+          case Min:
+            scoreSums[termID] = Math.min(scoreSums[termID], scorer.score());
+            break;
           case Max:
             scoreSums[termID] = Math.max(scoreSums[termID], scorer.score());
+            break;
         }
       }
     }
 
     @Override
-    protected void doSetNextReader(AtomicReaderContext context) throws IOException {
+    protected void doSetNextReader(LeafReaderContext context) throws IOException {
       fromDocTermOrds = DocValues.getSortedSet(context.reader(), field);
     }
 
@@ -255,4 +275,8 @@ abstract class TermsWithScoreCollector extends SimpleCollector {
     }
   }
 
+  @Override
+  public boolean needsScores() {
+    return true;
+  }
 }

@@ -19,6 +19,8 @@ package org.apache.lucene.search;
 
 import java.io.IOException;
 
+import org.apache.lucene.search.spans.Spans;
+
 /**
  * This abstract class defines methods to iterate over a set of non-decreasing
  * doc ids. Note that this class assumes it iterates on doc Ids, and therefore
@@ -58,7 +60,39 @@ public abstract class DocIdSetIterator {
       }
     };
   }
-  
+
+  /** A {@link DocIdSetIterator} that matches all documents up to
+   *  {@code maxDoc - 1}. */
+  public static final DocIdSetIterator all(int maxDoc) {
+    return new DocIdSetIterator() {
+      int doc = -1;
+
+      @Override
+      public int docID() {
+        return doc;
+      }
+
+      @Override
+      public int nextDoc() throws IOException {
+        return advance(doc + 1);
+      }
+
+      @Override
+      public int advance(int target) throws IOException {
+        doc = target;
+        if (doc >= maxDoc) {
+          doc = NO_MORE_DOCS;
+        }
+        return doc;
+      }
+
+      @Override
+      public long cost() {
+        return maxDoc;
+      }
+    };
+  }
+
   /**
    * When returned by {@link #nextDoc()}, {@link #advance(int)} and
    * {@link #docID()} it means there are no more docs in the iterator.
@@ -143,4 +177,5 @@ public abstract class DocIdSetIterator {
    * completely inaccurate.
    */
   public abstract long cost();
+  
 }

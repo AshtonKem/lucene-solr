@@ -17,18 +17,23 @@ package org.apache.lucene.queries.function;
  * limitations under the License.
  */
 
-import org.apache.lucene.search.*;
-import org.apache.lucene.index.AtomicReaderContext;
-import org.apache.lucene.index.IndexReader;
-import org.apache.lucene.index.Term;
-import org.apache.lucene.util.Bits;
-import org.apache.lucene.util.ToStringUtils;
-
 import java.io.IOException;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Set;
 import java.util.Map;
+import java.util.Set;
+
+import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.search.Explanation;
+import org.apache.lucene.search.FilterScorer;
+import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.Query;
+import org.apache.lucene.search.Scorer;
+import org.apache.lucene.search.Weight;
+import org.apache.lucene.util.Bits;
+import org.apache.lucene.util.ToStringUtils;
 
 /**
  * Query that is boosted by a ValueSource
@@ -57,13 +62,8 @@ public class BoostedQuery extends Query {
   }
 
   @Override
-  public void extractTerms(Set<Term> terms) {
-    q.extractTerms(terms);
-  }
-
-  @Override
-  public Weight createWeight(IndexSearcher searcher) throws IOException {
-    return new BoostedQuery.BoostedWeight(searcher);
+  public Weight createWeight(IndexSearcher searcher, boolean needsScores) throws IOException {
+    return new BoostedQuery.BoostedWeight(searcher, needsScores);
   }
 
   private class BoostedWeight extends Weight {
@@ -71,16 +71,17 @@ public class BoostedQuery extends Query {
     Weight qWeight;
     Map fcontext;
 
-    public BoostedWeight(IndexSearcher searcher) throws IOException {
+    public BoostedWeight(IndexSearcher searcher, boolean needsScores) throws IOException {
+      super(BoostedQuery.this);
       this.searcher = searcher;
-      this.qWeight = q.createWeight(searcher);
+      this.qWeight = q.createWeight(searcher, needsScores);
       this.fcontext = ValueSource.newContext(searcher);
       boostVal.createWeight(fcontext,searcher);
     }
 
     @Override
-    public Query getQuery() {
-      return BoostedQuery.this;
+    public void extractTerms(Set<Term> terms) {
+      qWeight.extractTerms(terms);
     }
 
     @Override
@@ -97,7 +98,7 @@ public class BoostedQuery extends Query {
     }
 
     @Override
-    public Scorer scorer(AtomicReaderContext context, Bits acceptDocs) throws IOException {
+    public Scorer scorer(LeafReaderContext context, Bits acceptDocs) throws IOException {
       Scorer subQueryScorer = qWeight.scorer(context, acceptDocs);
       if (subQueryScorer == null) {
         return null;
@@ -106,57 +107,36 @@ public class BoostedQuery extends Query {
     }
 
     @Override
-    public Explanation explain(AtomicReaderContext readerContext, int doc) throws IOException {
+    public Explanation explain(LeafReaderContext readerContext, int doc) throws IOException {
       Explanation subQueryExpl = qWeight.explain(readerContext,doc);
       if (!subQueryExpl.isMatch()) {
         return subQueryExpl;
       }
       FunctionValues vals = boostVal.getValues(fcontext, readerContext);
       float sc = subQueryExpl.getValue() * vals.floatVal(doc);
-      Explanation res = new ComplexExplanation(
-        true, sc, BoostedQuery.this.toString() + ", product of:");
-      res.addDetail(subQueryExpl);
-      res.addDetail(vals.explain(doc));
-      return res;
+      return Explanation.match(sc, BoostedQuery.this.toString() + ", product of:", subQueryExpl, vals.explain(doc));
     }
   }
 
 
-  private class CustomScorer extends Scorer {
+  private class CustomScorer extends FilterScorer {
     private final BoostedQuery.BoostedWeight weight;
     private final float qWeight;
-    private final Scorer scorer;
     private final FunctionValues vals;
-    private final AtomicReaderContext readerContext;
+    private final LeafReaderContext readerContext;
 
-    private CustomScorer(AtomicReaderContext readerContext, BoostedQuery.BoostedWeight w, float qWeight,
+    private CustomScorer(LeafReaderContext readerContext, BoostedQuery.BoostedWeight w, float qWeight,
         Scorer scorer, ValueSource vs) throws IOException {
-      super(w);
+      super(scorer);
       this.weight = w;
       this.qWeight = qWeight;
-      this.scorer = scorer;
       this.readerContext = readerContext;
       this.vals = vs.getValues(weight.fcontext, readerContext);
     }
 
-    @Override
-    public int docID() {
-      return scorer.docID();
-    }
-
-    @Override
-    public int advance(int target) throws IOException {
-      return scorer.advance(target);
-    }
-
-    @Override
-    public int nextDoc() throws IOException {
-      return scorer.nextDoc();
-    }
-
     @Override   
     public float score() throws IOException {
-      float score = qWeight * scorer.score() * vals.floatVal(scorer.docID());
+      float score = qWeight * in.score() * vals.floatVal(in.docID());
 
       // Current Lucene priority queues can't handle NaN and -Infinity, so
       // map to -Float.MAX_VALUE. This conditional handles both -infinity
@@ -165,13 +145,8 @@ public class BoostedQuery extends Query {
     }
 
     @Override
-    public int freq() throws IOException {
-      return scorer.freq();
-    }
-
-    @Override
     public Collection<ChildScorer> getChildren() {
-      return Collections.singleton(new ChildScorer(scorer, "CUSTOM"));
+      return Collections.singleton(new ChildScorer(in, "CUSTOM"));
     }
 
     public Explanation explain(int doc) throws IOException {
@@ -180,17 +155,9 @@ public class BoostedQuery extends Query {
         return subQueryExpl;
       }
       float sc = subQueryExpl.getValue() * vals.floatVal(doc);
-      Explanation res = new ComplexExplanation(
-        true, sc, BoostedQuery.this.toString() + ", product of:");
-      res.addDetail(subQueryExpl);
-      res.addDetail(vals.explain(doc));
-      return res;
+      return Explanation.match(sc, BoostedQuery.this.toString() + ", product of:", subQueryExpl, vals.explain(doc));
     }
 
-    @Override
-    public long cost() {
-      return scorer.cost();
-    }
   }
 
 

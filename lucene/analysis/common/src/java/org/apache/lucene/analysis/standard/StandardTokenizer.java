@@ -31,7 +31,6 @@ import org.apache.lucene.util.AttributeFactory;
  * This class implements the Word Break rules from the
  * Unicode Text Segmentation algorithm, as specified in 
  * <a href="http://unicode.org/reports/tr29/">Unicode Standard Annex #29</a>.
- * <p/>
  * <p>Many applications have specific tokenizer needs.  If this tokenizer does
  * not suit your application, please consider copying this source code
  * directory to your project and maintaining your own grammar-based tokenizer.
@@ -39,7 +38,7 @@ import org.apache.lucene.util.AttributeFactory;
 
 public final class StandardTokenizer extends Tokenizer {
   /** A private instance of the JFlex-constructed scanner */
-  private StandardTokenizerInterface scanner;
+  private StandardTokenizerImpl scanner;
 
   // TODO: how can we remove these old types?!
   public static final int ALPHANUM          = 0;
@@ -100,6 +99,7 @@ public final class StandardTokenizer extends Tokenizer {
       throw new IllegalArgumentException("maxTokenLength must be greater than zero");
     }
     this.maxTokenLength = length;
+    scanner.setBufferSize(Math.min(length, 1024 * 1024)); // limit buffer size to 1M chars
   }
 
   /** @see #setMaxTokenLength */
@@ -149,7 +149,7 @@ public final class StandardTokenizer extends Tokenizer {
     while(true) {
       int tokenType = scanner.getNextToken();
 
-      if (tokenType == StandardTokenizerInterface.YYEOF) {
+      if (tokenType == StandardTokenizerImpl.YYEOF) {
         return false;
       }
 

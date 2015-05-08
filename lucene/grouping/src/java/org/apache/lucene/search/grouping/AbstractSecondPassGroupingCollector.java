@@ -17,7 +17,7 @@ package org.apache.lucene.search.grouping;
  * limitations under the License.
  */
 
-import org.apache.lucene.index.AtomicReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.search.*;
 
 import java.io.IOException;
@@ -69,10 +69,10 @@ public abstract class AbstractSecondPassGroupingCollector<GROUP_VALUE_TYPE> exte
       final TopDocsCollector<?> collector;
       if (withinGroupSort == null) {
         // Sort by score
-        collector = TopScoreDocCollector.create(maxDocsPerGroup, true);
+        collector = TopScoreDocCollector.create(maxDocsPerGroup);
       } else {
         // Sort by fields
-        collector = TopFieldCollector.create(withinGroupSort, maxDocsPerGroup, fillSortFields, getScores, getMaxScores, true);
+        collector = TopFieldCollector.create(withinGroupSort, maxDocsPerGroup, fillSortFields, getScores, getMaxScores);
       }
       groupMap.put(group.groupValue,
           new SearchGroupDocs<>(group.groupValue,
@@ -83,7 +83,7 @@ public abstract class AbstractSecondPassGroupingCollector<GROUP_VALUE_TYPE> exte
   @Override
   public void setScorer(Scorer scorer) throws IOException {
     for (SearchGroupDocs<GROUP_VALUE_TYPE> group : groupMap.values()) {
-      group.collector.setScorer(scorer);
+      group.leafCollector.setScorer(scorer);
     }
   }
 
@@ -93,7 +93,7 @@ public abstract class AbstractSecondPassGroupingCollector<GROUP_VALUE_TYPE> exte
     SearchGroupDocs<GROUP_VALUE_TYPE> group = retrieveGroup(doc);
     if (group != null) {
       totalGroupedHitCount++;
-      group.collector.collect(doc);
+      group.leafCollector.collect(doc);
     }
   }
 
@@ -107,16 +107,11 @@ public abstract class AbstractSecondPassGroupingCollector<GROUP_VALUE_TYPE> exte
   protected abstract SearchGroupDocs<GROUP_VALUE_TYPE> retrieveGroup(int doc) throws IOException;
 
   @Override
-  protected void doSetNextReader(AtomicReaderContext readerContext) throws IOException {
+  protected void doSetNextReader(LeafReaderContext readerContext) throws IOException {
     //System.out.println("SP.setNextReader");
     for (SearchGroupDocs<GROUP_VALUE_TYPE> group : groupMap.values()) {
-      group.collector.getLeafCollector(readerContext);
+      group.leafCollector = group.collector.getLeafCollector(readerContext);
     }
-  }
-
-  @Override
-  public boolean acceptsDocsOutOfOrder() {
-    return false;
   }
 
   public TopGroups<GROUP_VALUE_TYPE> getTopGroups(int withinGroupOffset) {
@@ -151,6 +146,7 @@ public abstract class AbstractSecondPassGroupingCollector<GROUP_VALUE_TYPE> exte
 
     public final GROUP_VALUE_TYPE groupValue;
     public final TopDocsCollector<?> collector;
+    public LeafCollector leafCollector;
 
     public SearchGroupDocs(GROUP_VALUE_TYPE groupValue, TopDocsCollector<?> collector) {
       this.groupValue = groupValue;

@@ -17,19 +17,23 @@ package org.apache.lucene.index;
  * limitations under the License.
  */
 
-
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Matcher;
 
 import org.apache.lucene.codecs.Codec;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.TrackingDirectoryWrapper;
+import org.apache.lucene.util.StringHelper;
+import org.apache.lucene.util.Version;
 
 /**
- * Information about a segment such as it's name, directory, and files related
+ * Information about a segment such as its name, directory, and files related
  * to the segment.
  *
  * @lucene.experimental
@@ -48,30 +52,35 @@ public final class SegmentInfo {
   /** Unique segment name in the directory. */
   public final String name;
 
-  private int docCount;         // number of docs in seg
+  private int maxDoc;         // number of docs in seg
 
   /** Where this segment resides. */
   public final Directory dir;
 
   private boolean isCompoundFile;
 
+  /** Id that uniquely identifies this segment. */
+  private final byte[] id;
+
   private Codec codec;
 
   private Map<String,String> diagnostics;
   
+  private final Map<String,String> attributes;
+
   // Tracks the Lucene version this segment was created with, since 3.1. Null
   // indicates an older than 3.0 index, and it's used to detect a too old index.
   // The format expected is "x.y" - "2.x" for pre-3.0 indexes (or null), and
-  // specific versions afterwards ("3.0", "3.1" etc.).
-  // see Constants.LUCENE_MAIN_VERSION.
-  private String version;
+  // specific versions afterwards ("3.0.0", "3.1.0" etc.).
+  // see o.a.l.util.Version.
+  private Version version;
 
   void setDiagnostics(Map<String, String> diagnostics) {
-    this.diagnostics = diagnostics;
+    this.diagnostics = Objects.requireNonNull(diagnostics);
   }
 
   /** Returns diagnostics saved into the segment when it was
-   *  written. */
+   *  written. The map is immutable. */
   public Map<String, String> getDiagnostics() {
     return diagnostics;
   }
@@ -81,16 +90,22 @@ public final class SegmentInfo {
    * <p>Note: this is public only to allow access from
    * the codecs package.</p>
    */
-  public SegmentInfo(Directory dir, String version, String name, int docCount, 
-                     boolean isCompoundFile, Codec codec, Map<String,String> diagnostics) {
+  public SegmentInfo(Directory dir, Version version, String name, int maxDoc,
+                     boolean isCompoundFile, Codec codec, Map<String,String> diagnostics,
+                     byte[] id, Map<String,String> attributes) {
     assert !(dir instanceof TrackingDirectoryWrapper);
-    this.dir = dir;
-    this.version = version;
-    this.name = name;
-    this.docCount = docCount;
+    this.dir = Objects.requireNonNull(dir);
+    this.version = Objects.requireNonNull(version);
+    this.name = Objects.requireNonNull(name);
+    this.maxDoc = maxDoc;
     this.isCompoundFile = isCompoundFile;
     this.codec = codec;
-    this.diagnostics = diagnostics;
+    this.diagnostics = Objects.requireNonNull(diagnostics);
+    this.id = id;
+    if (id.length != StringHelper.ID_LENGTH) {
+      throw new IllegalArgumentException("invalid id: " + Arrays.toString(id));
+    }
+    this.attributes = Objects.requireNonNull(attributes);
   }
 
   /**
@@ -127,19 +142,19 @@ public final class SegmentInfo {
 
   /** Returns number of documents in this segment (deletions
    *  are not taken into account). */
-  public int getDocCount() {
-    if (this.docCount == -1) {
-      throw new IllegalStateException("docCount isn't set yet");
+  public int maxDoc() {
+    if (this.maxDoc == -1) {
+      throw new IllegalStateException("maxDoc isn't set yet");
     }
-    return docCount;
+    return maxDoc;
   }
 
   // NOTE: leave package private
-  void setDocCount(int docCount) {
-    if (this.docCount != -1) {
-      throw new IllegalStateException("docCount was already set");
+  void setMaxDoc(int maxDoc) {
+    if (this.maxDoc != -1) {
+      throw new IllegalStateException("maxDoc was already set: this.maxDoc=" + this.maxDoc + " vs maxDoc=" + maxDoc);
     }
-    this.docCount = docCount;
+    this.maxDoc = maxDoc;
   }
 
   /** Return all files referenced by this SegmentInfo. */
@@ -152,7 +167,7 @@ public final class SegmentInfo {
 
   @Override
   public String toString() {
-    return toString(dir, 0);
+    return toString(0);
   }
 
   /** Used for debugging.  Format may suddenly change.
@@ -165,16 +180,13 @@ public final class SegmentInfo {
    *  has 45 documents; it has 4 deletions (this part is
    *  left off when there are no deletions).</p>
    */
-  public String toString(Directory dir, int delCount) {
+  public String toString(int delCount) {
     StringBuilder s = new StringBuilder();
     s.append(name).append('(').append(version == null ? "?" : version).append(')').append(':');
     char cfs = getUseCompoundFile() ? 'c' : 'C';
     s.append(cfs);
 
-    if (this.dir != dir) {
-      s.append('x');
-    }
-    s.append(docCount);
+    s.append(maxDoc);
 
     if (delCount != 0) {
       s.append('/').append(delCount);
@@ -203,46 +215,39 @@ public final class SegmentInfo {
     return dir.hashCode() + name.hashCode();
   }
 
-  /**
-   * Used by DefaultSegmentInfosReader to upgrade a 3.0 segment to record its
-   * version is "3.0". This method can be removed when we're not required to
-   * support 3x indexes anymore, e.g. in 5.0.
-   * <p>
-   * <b>NOTE:</b> this method is used for internal purposes only - you should
-   * not modify the version of a SegmentInfo, or it may result in unexpected
-   * exceptions thrown when you attempt to open the index.
-   *
-   * @lucene.internal
+  /** Returns the version of the code which wrote the segment.
    */
-  public void setVersion(String version) {
-    this.version = version;
+  public Version getVersion() {
+    return version;
   }
 
-  /** Returns the version of the code which wrote the segment. */
-  public String getVersion() {
-    return version;
+  /** Return the id that uniquely identifies this segment. */
+  public byte[] getId() {
+    return id.clone();
   }
 
   private Set<String> setFiles;
 
   /** Sets the files written for this segment. */
-  public void setFiles(Set<String> files) {
-    checkFileNames(files);
-    setFiles = files;
+  public void setFiles(Collection<String> files) {
+    setFiles = new HashSet<>();
+    addFiles(files);
   }
 
   /** Add these files to the set of files written for this
    *  segment. */
   public void addFiles(Collection<String> files) {
     checkFileNames(files);
-    setFiles.addAll(files);
+    for (String f : files) {
+      setFiles.add(namedForThisSegment(f));
+    }
   }
 
   /** Add this file to the set of files written for this
    *  segment. */
   public void addFile(String file) {
     checkFileNames(Collections.singleton(file));
-    setFiles.add(file);
+    setFiles.add(namedForThisSegment(file));
   }
   
   private void checkFileNames(Collection<String> files) {
@@ -254,5 +259,42 @@ public final class SegmentInfo {
       }
     }
   }
-    
+  
+  /** 
+   * strips any segment name from the file, naming it with this segment
+   * this is because "segment names" can change, e.g. by addIndexes(Dir)
+   */
+  String namedForThisSegment(String file) {
+    return name + IndexFileNames.stripSegmentName(file);
+  }
+  
+  /**
+   * Get a codec attribute value, or null if it does not exist
+   */
+  public String getAttribute(String key) {
+    return attributes.get(key);
+  }
+  
+  /**
+   * Puts a codec attribute value.
+   * <p>
+   * This is a key-value mapping for the field that the codec can use to store
+   * additional metadata, and will be available to the codec when reading the
+   * segment via {@link #getAttribute(String)}
+   * <p>
+   * If a value already exists for the field, it will be replaced with the new
+   * value.
+   */
+  public String putAttribute(String key, String value) {
+    return attributes.put(key, value);
+  }
+  
+  /**
+   * Returns the internal codec attributes map.
+   * @return internal codec attributes map.
+   */
+  public Map<String,String> getAttributes() {
+    return attributes;
+  }
 }
+

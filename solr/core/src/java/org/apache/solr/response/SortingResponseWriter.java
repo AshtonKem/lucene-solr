@@ -17,46 +17,48 @@
     
 package org.apache.solr.response;
 
-import com.carrotsearch.hppc.IntArrayList;
-import org.apache.lucene.index.AtomicReaderContext;
-import org.apache.lucene.index.AtomicReader;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.Writer;
+import java.util.List;
+
+import org.apache.lucene.index.LeafReader;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.MultiDocValues;
-import org.apache.lucene.index.SortedDocValues;
 import org.apache.lucene.index.NumericDocValues;
+import org.apache.lucene.index.SortedDocValues;
 import org.apache.lucene.index.SortedSetDocValues;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.SortField;
 import org.apache.lucene.util.ArrayUtil;
+import org.apache.lucene.util.BitSetIterator;
 import org.apache.lucene.util.BytesRef;
-import org.apache.lucene.util.CharsRef;
 import org.apache.lucene.util.CharsRefBuilder;
-import org.apache.lucene.util.LongValues;
 import org.apache.lucene.util.FixedBitSet;
+import org.apache.lucene.util.LongValues;
 import org.apache.solr.common.params.SolrParams;
 import org.apache.solr.common.util.NamedList;
 import org.apache.solr.request.SolrQueryRequest;
 import org.apache.solr.request.SolrRequestInfo;
+import org.apache.solr.schema.FieldType;
 import org.apache.solr.schema.IndexSchema;
 import org.apache.solr.schema.SchemaField;
-import org.apache.solr.schema.FieldType;
-import org.apache.solr.schema.TrieFloatField;
+import org.apache.solr.schema.StrField;
 import org.apache.solr.schema.TrieDoubleField;
+import org.apache.solr.schema.TrieFloatField;
 import org.apache.solr.schema.TrieIntField;
 import org.apache.solr.schema.TrieLongField;
-import org.apache.solr.schema.StrField;
 import org.apache.solr.search.SolrIndexSearcher;
 import org.apache.solr.search.SortSpec;
 import org.apache.solr.search.SyntaxError;
-
-import java.io.IOException;
-import java.io.Writer;
-import java.io.PrintWriter;
-import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 public class SortingResponseWriter implements QueryResponseWriter {
 
+  private final static Logger logger = LoggerFactory.getLogger(SortingResponseWriter.class);
 
   public void init(NamedList args) {
     /* NOOP */
@@ -69,7 +71,9 @@ public class SortingResponseWriter implements QueryResponseWriter {
   public void write(Writer writer, SolrQueryRequest req, SolrQueryResponse res) throws IOException {
     Exception e1 = res.getException();
     if(e1 != null) {
-      e1.printStackTrace(new PrintWriter(writer));
+      if(!(e1 instanceof IgnoreException)) {
+        e1.printStackTrace(new PrintWriter(writer));
+      }
       return;
     }
     SolrRequestInfo info = SolrRequestInfo.getRequestInfo();
@@ -114,26 +118,24 @@ public class SortingResponseWriter implements QueryResponseWriter {
     }
 
     FieldWriter[] fieldWriters = getFieldWriters(fields, req.getSearcher());
-    writer.write("{\"numFound\":"+totalHits+", \"docs\":[");
+    writer.write("{\"responseHeader\": {\"status\": 0}, \"response\":{\"numFound\":"+totalHits+", \"docs\":[");
 
     //Write the data.
-    List<AtomicReaderContext> leaves = req.getSearcher().getTopReaderContext().leaves();
+    List<LeafReaderContext> leaves = req.getSearcher().getTopReaderContext().leaves();
     SortDoc sortDoc = getSortDoc(req.getSearcher(), sort.getSort());
     int count = 0;
     int queueSize = 30000;
     SortQueue queue = new SortQueue(queueSize, sortDoc);
     SortDoc[] outDocs = new SortDoc[queueSize];
 
-    long total = 0;
-
+    boolean commaNeeded = false;
     while(count < totalHits) {
       //long begin = System.nanoTime();
-      boolean commaNeeded = false;
       queue.reset();
       SortDoc top = queue.top();
       for(int i=0; i<leaves.size(); i++) {
         sortDoc.setNextReader(leaves.get(i));
-        DocIdSetIterator it = sets[i].iterator();
+        DocIdSetIterator it = new BitSetIterator(sets[i], 0); // cost is not useful here
         int docId = -1;
         while((docId = it.nextDoc()) != DocIdSetIterator.NO_MORE_DOCS) {
           sortDoc.setValues(docId);
@@ -157,28 +159,53 @@ public class SortingResponseWriter implements QueryResponseWriter {
 
       count += (outDocsIndex+1);
 
-      for(int i=outDocsIndex; i>=0; --i) {
-        SortDoc s = outDocs[i];
-        if(commaNeeded){writer.write(',');}
-        writer.write('{');
-        writeDoc(s, leaves, fieldWriters, sets, writer);
-        writer.write('}');
-        commaNeeded = true;
-        s.reset();
+      try {
+        for(int i=outDocsIndex; i>=0; --i) {
+          SortDoc s = outDocs[i];
+          if(commaNeeded){writer.write(',');}
+          writer.write('{');
+          writeDoc(s, leaves, fieldWriters, sets, writer);
+          writer.write('}');
+          commaNeeded = true;
+          s.reset();
+        }
+      } catch(Throwable e) {
+        Throwable ex = e;
+        while(ex != null) {
+          String m = ex.getMessage();
+          if(m != null && m.contains("Broken pipe")) {
+            throw new IgnoreException();
+          }
+          ex = ex.getCause();
+        }
+
+        if(e instanceof IOException) {
+          throw ((IOException)e);
+        } else {
+          throw new IOException(e);
+        }
       }
-      //total+=end-begin;
     }
 
     //System.out.println("Sort Time 2:"+Long.toString(total/1000000));
-    writer.write("]}");
+    writer.write("]}}");
     writer.flush();
   }
 
+  public static class IgnoreException extends IOException {
+    public void printStackTrace(PrintWriter pw) {
+      pw.print("Early Client Disconnect");
 
+    }
+
+    public String getMessage() {
+      return "Early Client Disconnect";
+    }
+  }
 
 
   protected void writeDoc(SortDoc sortDoc,
-                          List<AtomicReaderContext> leaves,
+                          List<LeafReaderContext> leaves,
                           FieldWriter[] fieldWriters,
                           FixedBitSet[] sets,
                           Writer out) throws IOException{
@@ -186,7 +213,7 @@ public class SortingResponseWriter implements QueryResponseWriter {
     int ord = sortDoc.ord;
     FixedBitSet set = sets[ord];
     set.clear(sortDoc.docId);
-    AtomicReaderContext context = leaves.get(ord);
+    LeafReaderContext context = leaves.get(ord);
     boolean needsComma = false;
     for(FieldWriter fieldWriter : fieldWriters) {
       if(needsComma) {
@@ -240,6 +267,8 @@ public class SortingResponseWriter implements QueryResponseWriter {
         } else {
           writers[i] = new StringFieldWriter(field, fieldType);
         }
+      } else {
+        throw new IOException("Export fields must either be one of the following types: int,float,long,double,string");
       }
     }
     return writers;
@@ -252,7 +281,13 @@ public class SortingResponseWriter implements QueryResponseWriter {
       SortField sf = sortFields[i];
       String field = sf.getField();
       boolean reverse = sf.getReverse();
-      FieldType ft = schema.getField(field).getType();
+      SchemaField schemaField = schema.getField(field);
+      FieldType ft = schemaField.getType();
+
+      if(!schemaField.hasDocValues()) {
+        throw new IOException(field+" must have DocValues to use this feature.");
+      }
+
       if(ft instanceof TrieIntField) {
         if(reverse) {
           sortValues[i] = new IntValue(field, new IntDesc());
@@ -278,13 +313,15 @@ public class SortingResponseWriter implements QueryResponseWriter {
           sortValues[i] = new LongValue(field, new LongAsc());
         }
       } else if(ft instanceof StrField) {
-        AtomicReader reader = searcher.getAtomicReader();
+        LeafReader reader = searcher.getLeafReader();
         SortedDocValues vals =  reader.getSortedDocValues(field);
         if(reverse) {
           sortValues[i] = new StringValue(vals, field, new IntDesc());
         } else {
           sortValues[i] = new StringValue(vals, field, new IntAsc());
         }
+      } else {
+        throw new IOException("Sort fields must be one of the following types: int,float,long,double,string");
       }
     }
 
@@ -347,7 +384,7 @@ public class SortingResponseWriter implements QueryResponseWriter {
 
     }
 
-    public void setNextReader(AtomicReaderContext context) throws IOException {
+    public void setNextReader(LeafReaderContext context) throws IOException {
       this.ord = context.ord;
       for(SortValue value : sortValues) {
         value.setNextReader(context);
@@ -404,13 +441,17 @@ public class SortingResponseWriter implements QueryResponseWriter {
       }
       return docId+docBase < sd.docId+sd.docBase;
     }
+
+    public String toString() {
+      return "";
+    }
   }
 
   class SingleValueSortDoc extends SortDoc {
 
     protected SortValue value1;
 
-    public void setNextReader(AtomicReaderContext context) throws IOException {
+    public void setNextReader(LeafReaderContext context) throws IOException {
       this.ord = context.ord;
       value1.setNextReader(context);
     }
@@ -456,13 +497,17 @@ public class SortingResponseWriter implements QueryResponseWriter {
       SingleValueSortDoc sd = (SingleValueSortDoc)o;
       return value1.compareTo(sd.value1);
     }
+
+    public String toString() {
+      return docId+":"+value1.toString();
+    }
   }
 
   class DoubleValueSortDoc extends SingleValueSortDoc {
 
     protected SortValue value2;
 
-    public void setNextReader(AtomicReaderContext context) throws IOException {
+    public void setNextReader(LeafReaderContext context) throws IOException {
       this.ord = context.ord;
       value1.setNextReader(context);
       value2.setNextReader(context);
@@ -530,7 +575,7 @@ public class SortingResponseWriter implements QueryResponseWriter {
 
     protected SortValue value3;
 
-    public void setNextReader(AtomicReaderContext context) throws IOException {
+    public void setNextReader(LeafReaderContext context) throws IOException {
       this.ord = context.ord;
       value1.setNextReader(context);
       value2.setNextReader(context);
@@ -616,7 +661,7 @@ public class SortingResponseWriter implements QueryResponseWriter {
 
     protected SortValue value4;
 
-    public void setNextReader(AtomicReaderContext context) throws IOException {
+    public void setNextReader(LeafReaderContext context) throws IOException {
       this.ord = context.ord;
       value1.setNextReader(context);
       value2.setNextReader(context);
@@ -715,7 +760,7 @@ public class SortingResponseWriter implements QueryResponseWriter {
 
   public interface SortValue extends Comparable<SortValue> {
     public void setCurrentValue(int docId) throws IOException;
-    public void setNextReader(AtomicReaderContext context) throws IOException;
+    public void setNextReader(LeafReaderContext context) throws IOException;
     public void setCurrentValue(SortValue value);
     public void reset();
     public SortValue copy();
@@ -738,7 +783,7 @@ public class SortingResponseWriter implements QueryResponseWriter {
       this.currentValue = comp.resetValue();
     }
 
-    public void setNextReader(AtomicReaderContext context) throws IOException {
+    public void setNextReader(LeafReaderContext context) throws IOException {
       this.vals = context.reader().getNumericDocValues(field);
     }
 
@@ -816,7 +861,7 @@ public class SortingResponseWriter implements QueryResponseWriter {
       return new LongValue(field, comp);
     }
 
-    public void setNextReader(AtomicReaderContext context) throws IOException {
+    public void setNextReader(LeafReaderContext context) throws IOException {
       this.vals = context.reader().getNumericDocValues(field);
     }
 
@@ -895,7 +940,7 @@ public class SortingResponseWriter implements QueryResponseWriter {
       return new FloatValue(field, comp);
     }
 
-    public void setNextReader(AtomicReaderContext context) throws IOException {
+    public void setNextReader(LeafReaderContext context) throws IOException {
       this.vals = context.reader().getNumericDocValues(field);
     }
 
@@ -972,7 +1017,7 @@ public class SortingResponseWriter implements QueryResponseWriter {
       return new DoubleValue(field, comp);
     }
 
-    public void setNextReader(AtomicReaderContext context) throws IOException {
+    public void setNextReader(LeafReaderContext context) throws IOException {
       this.vals = context.reader().getNumericDocValues(field);
     }
 
@@ -1048,8 +1093,10 @@ public class SortingResponseWriter implements QueryResponseWriter {
 
     public StringValue(SortedDocValues vals, String field, IntComp comp)  {
       this.vals = vals;
-      this.segmentVals = ((MultiDocValues.MultiSortedDocValues) vals).values;
-      this.ordinalMap = ((MultiDocValues.MultiSortedDocValues) vals).mapping;
+      if(vals instanceof  MultiDocValues.MultiSortedDocValues) {
+        this.segmentVals = ((MultiDocValues.MultiSortedDocValues) vals).values;
+        this.ordinalMap = ((MultiDocValues.MultiSortedDocValues) vals).mapping;
+      }
       this.field = field;
       this.comp = comp;
       this.currentOrd = comp.resetValue();
@@ -1060,7 +1107,16 @@ public class SortingResponseWriter implements QueryResponseWriter {
     }
 
     public void setCurrentValue(int docId) {
-      currentOrd = (int)globalOrds.get(currentVals.getOrd(docId));
+      int ord = currentVals.getOrd(docId);
+      if(ord < 0) {
+        currentOrd = -1;
+      } else {
+        if(globalOrds != null) {
+          currentOrd = (int)globalOrds.get(ord);
+        } else {
+          currentOrd = ord;
+        }
+      }
     }
 
     public void setCurrentValue(SortValue sv) {
@@ -1068,10 +1124,14 @@ public class SortingResponseWriter implements QueryResponseWriter {
       this.currentOrd = v.currentOrd;
     }
 
-    public void setNextReader(AtomicReaderContext context) {
+    public void setNextReader(LeafReaderContext context) {
       segment = context.ord;
-      globalOrds = ordinalMap.getGlobalOrds(segment);
-      currentVals = segmentVals[segment];
+      if(ordinalMap != null) {
+        globalOrds = ordinalMap.getGlobalOrds(segment);
+        currentVals = segmentVals[segment];
+      } else {
+        currentVals = vals;
+      }
     }
 
     public void reset() {
@@ -1082,10 +1142,14 @@ public class SortingResponseWriter implements QueryResponseWriter {
       StringValue sv = (StringValue)o;
       return comp.compare(currentOrd, sv.currentOrd);
     }
+
+    public String toString() {
+      return Integer.toString(this.currentOrd);
+    }
   }
 
   protected abstract class FieldWriter {
-    public abstract void write(int docId, AtomicReader reader, Writer out) throws IOException;
+    public abstract void write(int docId, LeafReader reader, Writer out) throws IOException;
   }
 
   class IntFieldWriter extends FieldWriter {
@@ -1095,7 +1159,7 @@ public class SortingResponseWriter implements QueryResponseWriter {
       this.field = field;
     }
 
-    public void write(int docId, AtomicReader reader, Writer out) throws IOException {
+    public void write(int docId, LeafReader reader, Writer out) throws IOException {
       NumericDocValues vals = reader.getNumericDocValues(this.field);
       int val = (int)vals.get(docId);
        out.write('"');
@@ -1118,7 +1182,7 @@ public class SortingResponseWriter implements QueryResponseWriter {
       this.numeric = numeric;
     }
 
-    public void write(int docId, AtomicReader reader, Writer out) throws IOException {
+    public void write(int docId, LeafReader reader, Writer out) throws IOException {
       SortedSetDocValues vals = reader.getSortedSetDocValues(this.field);
       vals.setDocument(docId);
       out.write('"');
@@ -1157,7 +1221,7 @@ public class SortingResponseWriter implements QueryResponseWriter {
       this.field = field;
     }
 
-    public void write(int docId, AtomicReader reader, Writer out) throws IOException {
+    public void write(int docId, LeafReader reader, Writer out) throws IOException {
       NumericDocValues vals = reader.getNumericDocValues(this.field);
       long val = vals.get(docId);
       out.write('"');
@@ -1175,7 +1239,7 @@ public class SortingResponseWriter implements QueryResponseWriter {
       this.field = field;
     }
 
-    public void write(int docId, AtomicReader reader, Writer out) throws IOException {
+    public void write(int docId, LeafReader reader, Writer out) throws IOException {
       NumericDocValues vals = reader.getNumericDocValues(this.field);
       int val = (int)vals.get(docId);
       out.write('"');
@@ -1193,7 +1257,7 @@ public class SortingResponseWriter implements QueryResponseWriter {
       this.field = field;
     }
 
-    public void write(int docId, AtomicReader reader, Writer out) throws IOException {
+    public void write(int docId, LeafReader reader, Writer out) throws IOException {
       NumericDocValues vals = reader.getNumericDocValues(this.field);
       long val = vals.get(docId);
       out.write('"');
@@ -1214,7 +1278,7 @@ public class SortingResponseWriter implements QueryResponseWriter {
       this.fieldType = fieldType;
     }
 
-    public void write(int docId, AtomicReader reader, Writer out) throws IOException {
+    public void write(int docId, LeafReader reader, Writer out) throws IOException {
       SortedDocValues vals = reader.getSortedDocValues(this.field);
       BytesRef ref = vals.get(docId);
       fieldType.indexedToReadable(ref, cref);

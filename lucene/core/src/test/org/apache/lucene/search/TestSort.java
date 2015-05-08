@@ -31,7 +31,6 @@ import org.apache.lucene.index.RandomIndexWriter;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.LuceneTestCase;
-import org.apache.lucene.util.LuceneTestCase.SuppressCodecs;
 
 /*
  * Very simple tests of sorting.
@@ -48,7 +47,6 @@ import org.apache.lucene.util.LuceneTestCase.SuppressCodecs;
  *        |
  *       \./
  */
-@SuppressCodecs({"Lucene40", "Lucene41", "Lucene42"}) // avoid codecs that don't support "missing"
 public class TestSort extends LuceneTestCase {
   
   /** Tests sorting on type string */
@@ -783,6 +781,65 @@ public class TestSort extends LuceneTestCase {
     assertEquals("4.2333333333332", searcher.doc(td.scoreDocs[1].doc).get("value"));
     assertEquals("4.2333333333333", searcher.doc(td.scoreDocs[2].doc).get("value"));
     assertNull(searcher.doc(td.scoreDocs[3].doc).get("value"));
+
+    ir.close();
+    dir.close();
+  }
+
+  /** Tests sorting on multiple sort fields */
+  public void testMultiSort() throws IOException {
+    Directory dir = newDirectory();
+    RandomIndexWriter writer = new RandomIndexWriter(random(), dir);
+    Document doc = new Document();
+    doc.add(new SortedDocValuesField("value1", new BytesRef("foo")));
+    doc.add(new NumericDocValuesField("value2", 0));
+    doc.add(newStringField("value1", "foo", Field.Store.YES));
+    doc.add(newStringField("value2", "0", Field.Store.YES));
+    writer.addDocument(doc);
+    doc = new Document();
+    doc.add(new SortedDocValuesField("value1", new BytesRef("bar")));
+    doc.add(new NumericDocValuesField("value2", 1));
+    doc.add(newStringField("value1", "bar", Field.Store.YES));
+    doc.add(newStringField("value2", "1", Field.Store.YES));
+    writer.addDocument(doc);
+    doc = new Document();
+    doc.add(new SortedDocValuesField("value1", new BytesRef("bar")));
+    doc.add(new NumericDocValuesField("value2", 0));
+    doc.add(newStringField("value1", "bar", Field.Store.YES));
+    doc.add(newStringField("value2", "0", Field.Store.YES));
+    writer.addDocument(doc);
+    doc = new Document();
+    doc.add(new SortedDocValuesField("value1", new BytesRef("foo")));
+    doc.add(new NumericDocValuesField("value2", 1));
+    doc.add(newStringField("value1", "foo", Field.Store.YES));
+    doc.add(newStringField("value2", "1", Field.Store.YES));
+    writer.addDocument(doc);
+    IndexReader ir = writer.getReader();
+    writer.close();
+    
+    IndexSearcher searcher = newSearcher(ir);
+    Sort sort = new Sort(
+        new SortField("value1", SortField.Type.STRING),
+        new SortField("value2", SortField.Type.LONG));
+
+    TopDocs td = searcher.search(new MatchAllDocsQuery(), 10, sort);
+    assertEquals(4, td.totalHits);
+    // 'bar' comes before 'foo'
+    assertEquals("bar", searcher.doc(td.scoreDocs[0].doc).get("value1"));
+    assertEquals("bar", searcher.doc(td.scoreDocs[1].doc).get("value1"));
+    assertEquals("foo", searcher.doc(td.scoreDocs[2].doc).get("value1"));
+    assertEquals("foo", searcher.doc(td.scoreDocs[3].doc).get("value1"));
+    // 0 comes before 1
+    assertEquals("0", searcher.doc(td.scoreDocs[0].doc).get("value2"));
+    assertEquals("1", searcher.doc(td.scoreDocs[1].doc).get("value2"));
+    assertEquals("0", searcher.doc(td.scoreDocs[2].doc).get("value2"));
+    assertEquals("1", searcher.doc(td.scoreDocs[3].doc).get("value2"));
+
+    // Now with overflow
+    td = searcher.search(new MatchAllDocsQuery(), 1, sort);
+    assertEquals(4, td.totalHits);
+    assertEquals("bar", searcher.doc(td.scoreDocs[0].doc).get("value1"));
+    assertEquals("0", searcher.doc(td.scoreDocs[0].doc).get("value2"));
 
     ir.close();
     dir.close();

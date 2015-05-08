@@ -32,14 +32,14 @@ import org.apache.lucene.document.IntField;
 import org.apache.lucene.document.LongField;
 import org.apache.lucene.document.NumericDocValuesField;
 import org.apache.lucene.document.SortedSetDocValuesField;
+import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.StorableField;
 import org.apache.lucene.queries.function.ValueSource;
 import org.apache.lucene.queries.function.valuesource.DoubleFieldSource;
 import org.apache.lucene.queries.function.valuesource.FloatFieldSource;
 import org.apache.lucene.queries.function.valuesource.IntFieldSource;
 import org.apache.lucene.queries.function.valuesource.LongFieldSource;
-import org.apache.lucene.search.ConstantScoreQuery;
-import org.apache.lucene.search.DocValuesRangeFilter;
+import org.apache.lucene.search.DocValuesRangeQuery;
 import org.apache.lucene.search.NumericRangeQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.SortField;
@@ -61,13 +61,13 @@ import org.apache.solr.search.QParser;
  * {@link DoubleField}.
  * See {@link org.apache.lucene.search.NumericRangeQuery} for more details.
  * It supports integer, float, long, double and date types.
- * <p/>
+ * <p>
  * For each number being added to this field, multiple terms are generated as per the algorithm described in the above
  * link. The possible number of terms increases dramatically with lower precision steps. For
  * the fast range search to work, trie fields must be indexed.
- * <p/>
+ * <p>
  * Trie fields are sortable in numerical order and can be used in function queries.
- * <p/>
+ * <p>
  * Note that if you use a precisionStep of 32 for int/float and 64 for long/double/date, then multiple terms will not be
  * generated, range search will be no faster than any other number field, but sorting will still be possible.
  *
@@ -309,10 +309,10 @@ public class TrieField extends PrimitiveFieldType {
     switch (type) {
       case INTEGER:
         if (matchOnly) {
-          query = new ConstantScoreQuery(DocValuesRangeFilter.newIntRange(field.getName(),
-                min == null ? null : Integer.parseInt(min),
-                max == null ? null : Integer.parseInt(max),
-                minInclusive, maxInclusive));
+          query = DocValuesRangeQuery.newLongRange(field.getName(),
+                min == null ? null : (long) Integer.parseInt(min),
+                max == null ? null : (long) Integer.parseInt(max),
+                minInclusive, maxInclusive);
         } else {
           query = NumericRangeQuery.newIntRange(field.getName(), ps,
                 min == null ? null : Integer.parseInt(min),
@@ -322,10 +322,10 @@ public class TrieField extends PrimitiveFieldType {
         break;
       case FLOAT:
         if (matchOnly) {
-          query = new ConstantScoreQuery(DocValuesRangeFilter.newFloatRange(field.getName(),
-                min == null ? null : Float.parseFloat(min),
-                max == null ? null : Float.parseFloat(max),
-                minInclusive, maxInclusive));
+          query = DocValuesRangeQuery.newLongRange(field.getName(),
+                min == null ? null : (long) NumericUtils.floatToSortableInt(Float.parseFloat(min)),
+                max == null ? null : (long) NumericUtils.floatToSortableInt(Float.parseFloat(max)),
+                minInclusive, maxInclusive);
         } else {
           query = NumericRangeQuery.newFloatRange(field.getName(), ps,
                 min == null ? null : Float.parseFloat(min),
@@ -335,10 +335,10 @@ public class TrieField extends PrimitiveFieldType {
         break;
       case LONG:
         if (matchOnly) {
-          query = new ConstantScoreQuery(DocValuesRangeFilter.newLongRange(field.getName(),
+          query = DocValuesRangeQuery.newLongRange(field.getName(),
                 min == null ? null : Long.parseLong(min),
                 max == null ? null : Long.parseLong(max),
-                minInclusive, maxInclusive));
+                minInclusive, maxInclusive);
         } else {
           query = NumericRangeQuery.newLongRange(field.getName(), ps,
                 min == null ? null : Long.parseLong(min),
@@ -348,10 +348,10 @@ public class TrieField extends PrimitiveFieldType {
         break;
       case DOUBLE:
         if (matchOnly) {
-          query = new ConstantScoreQuery(DocValuesRangeFilter.newDoubleRange(field.getName(),
-                min == null ? null : Double.parseDouble(min),
-                max == null ? null : Double.parseDouble(max),
-                minInclusive, maxInclusive));
+          query = DocValuesRangeQuery.newLongRange(field.getName(),
+                min == null ? null : NumericUtils.doubleToSortableLong(Double.parseDouble(min)),
+                max == null ? null : NumericUtils.doubleToSortableLong(Double.parseDouble(max)),
+                minInclusive, maxInclusive);
         } else {
           query = NumericRangeQuery.newDoubleRange(field.getName(), ps,
                 min == null ? null : Double.parseDouble(min),
@@ -361,10 +361,10 @@ public class TrieField extends PrimitiveFieldType {
         break;
       case DATE:
         if (matchOnly) {
-          query = new ConstantScoreQuery(DocValuesRangeFilter.newLongRange(field.getName(),
+          query = DocValuesRangeQuery.newLongRange(field.getName(),
                 min == null ? null : dateField.parseMath(null, min).getTime(),
                 max == null ? null : dateField.parseMath(null, max).getTime(),
-                minInclusive, maxInclusive));
+                minInclusive, maxInclusive);
         } else {
           query = NumericRangeQuery.newLongRange(field.getName(), ps,
                 min == null ? null : dateField.parseMath(null, min).getTime(),
@@ -600,9 +600,8 @@ public class TrieField extends PrimitiveFieldType {
     FieldType ft = new FieldType();
     ft.setStored(stored);
     ft.setTokenized(true);
-    ft.setIndexed(indexed);
     ft.setOmitNorms(field.omitNorms());
-    ft.setIndexOptions(getIndexOptions(field, value.toString()));
+    ft.setIndexOptions(indexed ? getIndexOptions(field, value.toString()) : IndexOptions.NONE);
 
     switch (type) {
       case INTEGER:

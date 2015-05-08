@@ -17,10 +17,6 @@ package org.apache.lucene.analysis.util;
  * limitations under the License.
  */
 
-import org.apache.lucene.analysis.core.StopFilter;
-import org.apache.lucene.util.IOUtils;
-import org.apache.lucene.util.Version;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -28,6 +24,7 @@ import java.io.Reader;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -39,6 +36,10 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
+
+import org.apache.lucene.analysis.core.StopFilter;
+import org.apache.lucene.util.IOUtils;
+import org.apache.lucene.util.Version;
 
 /**
  * Abstract parent class for analysis factories {@link TokenizerFactory},
@@ -68,22 +69,20 @@ public abstract class AbstractAnalysisFactory {
   protected AbstractAnalysisFactory(Map<String,String> args) {
     originalArgs = Collections.unmodifiableMap(new HashMap<>(args));
     String version = get(args, LUCENE_MATCH_VERSION_PARAM);
-    luceneMatchVersion = version == null ? null : Version.parseLeniently(version);
+    if (version == null) {
+      luceneMatchVersion = Version.LATEST;
+    } else {
+      try {
+        luceneMatchVersion = Version.parseLeniently(version);
+      } catch (ParseException pe) {
+        throw new IllegalArgumentException(pe);
+      }
+    }
     args.remove(CLASS_NAME);  // consume the class arg
   }
   
   public final Map<String,String> getOriginalArgs() {
     return originalArgs;
-  }
-
-   /** this method can be called in the {@link org.apache.lucene.analysis.util.TokenizerFactory#create()}
-   * or {@link org.apache.lucene.analysis.util.TokenFilterFactory#create(org.apache.lucene.analysis.TokenStream)} methods,
-   * to inform user, that for this factory a {@link #luceneMatchVersion} is required */
-  protected final void assureMatchVersion() {
-    if (luceneMatchVersion == null) {
-      throw new IllegalArgumentException("Configuration Error: Factory '" + this.getClass().getName() +
-        "' needs a 'luceneMatchVersion' parameter");
-    }
   }
 
   public final Version getLuceneMatchVersion() {
@@ -232,7 +231,6 @@ public abstract class AbstractAnalysisFactory {
    */
   protected final CharArraySet getWordSet(ResourceLoader loader,
       String wordFiles, boolean ignoreCase) throws IOException {
-    assureMatchVersion();
     List<String> files = splitFileNames(wordFiles);
     CharArraySet words = null;
     if (files.size() > 0) {
@@ -258,7 +256,6 @@ public abstract class AbstractAnalysisFactory {
    * except the input is in snowball format. */
   protected final CharArraySet getSnowballWordSet(ResourceLoader loader,
       String wordFiles, boolean ignoreCase) throws IOException {
-    assureMatchVersion();
     List<String> files = splitFileNames(wordFiles);
     CharArraySet words = null;
     if (files.size() > 0) {

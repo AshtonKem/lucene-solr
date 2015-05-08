@@ -17,11 +17,11 @@ package org.apache.lucene.search;
  * limitations under the License.
  */
 
-import org.apache.lucene.index.AtomicReaderContext;
+import java.io.IOException;
+
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.util.Counter;
 import org.apache.lucene.util.ThreadInterruptedException;
-
-import java.io.IOException;
 
 /**
  * The {@link TimeLimitingCollector} is used to timeout search requests that
@@ -39,7 +39,7 @@ public class TimeLimitingCollector implements Collector {
     private long timeElapsed;
     private int lastDocCollected;
     private TimeExceededException(long timeAllowed, long timeElapsed, int lastDocCollected) {
-      super("Elapsed time: " + timeElapsed + "Exceeded allowed search time: " + timeAllowed + " ms.");
+      super("Elapsed time: " + timeElapsed + ".  Exceeded allowed search time: " + timeAllowed + " ms.");
       this.timeAllowed = timeAllowed;
       this.timeElapsed = timeElapsed;
       this.lastDocCollected = lastDocCollected;
@@ -94,7 +94,6 @@ public class TimeLimitingCollector implements Collector {
    *   collector.setBaseline(baseline);
    *   indexSearcher.search(query, collector);
    * </pre>
-   * </p>
    * @see #setBaseline() 
    */
   public void setBaseline(long clockTime) {
@@ -132,7 +131,7 @@ public class TimeLimitingCollector implements Collector {
   }
   
   @Override
-  public LeafCollector getLeafCollector(AtomicReaderContext context) throws IOException {
+  public LeafCollector getLeafCollector(LeafReaderContext context) throws IOException {
     this.docBase = context.docBase;
     if (Long.MIN_VALUE == t0) {
       setBaseline();
@@ -142,7 +141,7 @@ public class TimeLimitingCollector implements Collector {
       @Override
       public void collect(int doc) throws IOException {
         final long time = clock.get();
-        if (timeout < time) {
+        if (time - timeout > 0L) {
           if (greedy) {
             //System.out.println(this+"  greedy: before failing, collecting doc: "+(docBase + doc)+"  "+(time-t0));
             in.collect(doc);
@@ -156,7 +155,12 @@ public class TimeLimitingCollector implements Collector {
       
     };
   }
-  
+
+  @Override
+  public boolean needsScores() {
+    return collector.needsScores();
+  }
+
   /**
    * This is so the same timer can be used with a multi-phase search process such as grouping. 
    * We don't want to create a new TimeLimitingCollector for each phase because that would 

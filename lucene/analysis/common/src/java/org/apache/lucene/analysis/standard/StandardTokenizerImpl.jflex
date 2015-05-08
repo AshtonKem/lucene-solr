@@ -23,7 +23,7 @@ import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
  * This class implements Word Break rules from the Unicode Text Segmentation 
  * algorithm, as specified in 
  * <a href="http://unicode.org/reports/tr29/">Unicode Standard Annex #29</a>. 
- * <p/>
+ * <p>
  * Tokens produced are of the following types:
  * <ul>
  *   <li>&lt;ALPHANUM&gt;: A sequence of alphabetic and numeric characters</li>
@@ -43,10 +43,9 @@ import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 %final
 %public
 %class StandardTokenizerImpl
-%implements StandardTokenizerInterface
 %function getNextToken
 %char
-%buffer 4096
+%buffer 255
 
 // UAX#29 WB4. X (Extend | Format)* --> X
 //
@@ -101,6 +100,16 @@ ComplexContextEx    = \p{LB:Complex_Context}                                    
   public final void getText(CharTermAttribute t) {
     t.copyBuffer(zzBuffer, zzStartRead, zzMarkedPos-zzStartRead);
   }
+  
+  /**
+   * Sets the scanner buffer size in chars
+   */
+   public final void setBufferSize(int numChars) {
+     ZZ_BUFFERSIZE = numChars;
+     char[] newZzBuffer = new char[ZZ_BUFFERSIZE];
+     System.arraycopy(zzBuffer, 0, newZzBuffer, 0, Math.min(zzBuffer.length, ZZ_BUFFERSIZE));
+     zzBuffer = newZzBuffer;
+   }
 %}
 
 %%
@@ -108,7 +117,7 @@ ComplexContextEx    = \p{LB:Complex_Context}                                    
 // UAX#29 WB1.   sot   ÷
 //        WB2.     ÷   eot
 //
-<<EOF>> { return StandardTokenizerInterface.YYEOF; }
+<<EOF>> { return YYEOF; }
 
 // UAX#29 WB8.   Numeric × Numeric
 //        WB11.  Numeric (MidNum | MidNumLet | Single_Quote) × Numeric

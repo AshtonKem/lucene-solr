@@ -21,19 +21,19 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.apache.lucene.index.AtomicReader;
-import org.apache.lucene.index.AtomicReaderContext;
-import org.apache.lucene.index.DocsEnum;
+import org.apache.lucene.index.CodecReader;
+import org.apache.lucene.index.FilterCodecReader;
+import org.apache.lucene.index.LeafReader;
+import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.Fields;
-import org.apache.lucene.index.FilterAtomicReader;
-import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
+import org.apache.lucene.index.SlowCodecReaderWrapper;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.BytesRef;
-import org.apache.lucene.util.CharsRef;
 import org.apache.lucene.util.CharsRefBuilder;
 import org.apache.lucene.util.FixedBitSet;
 import org.apache.lucene.util.IOUtils;
@@ -90,12 +90,12 @@ public class SolrIndexSplitter {
 
   public void split() throws IOException {
 
-    List<AtomicReaderContext> leaves = searcher.getRawReader().leaves();
+    List<LeafReaderContext> leaves = searcher.getRawReader().leaves();
     List<FixedBitSet[]> segmentDocSets = new ArrayList<>(leaves.size());
 
     log.info("SolrIndexSplitter: partitions=" + numPieces + " segments="+leaves.size());
 
-    for (AtomicReaderContext readerContext : leaves) {
+    for (LeafReaderContext readerContext : leaves) {
       assert readerContext.ordInParent == segmentDocSets.size();  // make sure we're going in order
       FixedBitSet[] docSets = split(readerContext);
       segmentDocSets.add( docSets );
@@ -121,7 +121,7 @@ public class SolrIndexSplitter {
       } else {
         SolrCore core = searcher.getCore();
         String path = paths.get(partitionNumber);
-        iw = SolrIndexWriter.create("SplittingIndexWriter"+partitionNumber + (ranges != null ? " " + ranges.get(partitionNumber) : ""), path,
+        iw = SolrIndexWriter.create(core, "SplittingIndexWriter"+partitionNumber + (ranges != null ? " " + ranges.get(partitionNumber) : ""), path,
                                     core.getDirectoryFactory(), true, core.getLatestSchema(),
                                     core.getSolrConfig().indexConfig, core.getDeletionPolicy(), core.getCodec());
       }
@@ -130,8 +130,8 @@ public class SolrIndexSplitter {
         // This removes deletions but optimize might still be needed because sub-shards will have the same number of segments as the parent shard.
         for (int segmentNumber = 0; segmentNumber<leaves.size(); segmentNumber++) {
           log.info("SolrIndexSplitter: partition #" + partitionNumber + " partitionCount=" + numPieces + (ranges != null ? " range=" + ranges.get(partitionNumber) : "") + " segment #"+segmentNumber + " segmentCount=" + leaves.size());
-          IndexReader subReader = new LiveDocsReader( leaves.get(segmentNumber), segmentDocSets.get(segmentNumber)[partitionNumber] );
-          iw.addIndexes(subReader);
+          CodecReader subReader = SlowCodecReaderWrapper.wrap(leaves.get(segmentNumber).reader());
+          iw.addIndexes(new LiveDocsReader(subReader, segmentDocSets.get(segmentNumber)[partitionNumber]));
         }
         success = true;
       } finally {
@@ -152,8 +152,8 @@ public class SolrIndexSplitter {
 
 
 
-  FixedBitSet[] split(AtomicReaderContext readerContext) throws IOException {
-    AtomicReader reader = readerContext.reader();
+  FixedBitSet[] split(LeafReaderContext readerContext) throws IOException {
+    LeafReader reader = readerContext.reader();
     FixedBitSet[] docSets = new FixedBitSet[numPieces];
     for (int i=0; i<docSets.length; i++) {
       docSets[i] = new FixedBitSet(reader.maxDoc());
@@ -162,11 +162,17 @@ public class SolrIndexSplitter {
 
     Fields fields = reader.fields();
     Terms terms = fields==null ? null : fields.terms(field.getName());
-    TermsEnum termsEnum = terms==null ? null : terms.iterator(null);
+    TermsEnum termsEnum = terms==null ? null : terms.iterator();
     if (termsEnum == null) return docSets;
 
     BytesRef term = null;
-    DocsEnum docsEnum = null;
+    PostingsEnum postingsEnum = null;
+
+    int[] docsMatchingRanges = null;
+    if (ranges != null) {
+      // +1 because documents can belong to *zero*, one, several or all ranges in rangesArr
+      docsMatchingRanges = new int[rangesArr.length+1];
+    }
 
     CharsRefBuilder idRef = new CharsRefBuilder();
     for (;;) {
@@ -195,19 +201,45 @@ public class SolrIndexSplitter {
         hash = hashRouter.sliceHash(idString, null, null, null);
       }
 
-      docsEnum = termsEnum.docs(liveDocs, docsEnum, DocsEnum.FLAG_NONE);
+      postingsEnum = termsEnum.postings(liveDocs, postingsEnum, PostingsEnum.NONE);
       for (;;) {
-        int doc = docsEnum.nextDoc();
+        int doc = postingsEnum.nextDoc();
         if (doc == DocIdSetIterator.NO_MORE_DOCS) break;
         if (ranges == null) {
           docSets[currPartition].set(doc);
           currPartition = (currPartition + 1) % numPieces;
         } else  {
+          int matchingRangesCount = 0;
           for (int i=0; i<rangesArr.length; i++) {      // inner-loop: use array here for extra speed.
             if (rangesArr[i].includes(hash)) {
               docSets[i].set(doc);
+              ++matchingRangesCount;
             }
           }
+          docsMatchingRanges[matchingRangesCount]++;
+        }
+      }
+    }
+
+    if (docsMatchingRanges != null) {
+      for (int ii = 0; ii < docsMatchingRanges.length; ii++) {
+        if (0 == docsMatchingRanges[ii]) continue;
+        switch (ii) {
+          case 0:
+            // document loss
+            log.error("Splitting {}: {} documents belong to no shards and will be dropped",
+                reader, docsMatchingRanges[ii]);
+            break;
+          case 1:
+            // normal case, each document moves to one of the sub-shards
+            log.info("Splitting {}: {} documents will move into a sub-shard",
+                reader, docsMatchingRanges[ii]);
+            break;
+          default:
+            // document duplication
+            log.error("Splitting {}: {} documents will be moved to multiple ({}) sub-shards",
+                reader, docsMatchingRanges[ii], ii);
+            break;
         }
       }
     }
@@ -233,12 +265,12 @@ public class SolrIndexSplitter {
 
 
   // change livedocs on the reader to delete those docs we don't want
-  static class LiveDocsReader extends FilterAtomicReader {
+  static class LiveDocsReader extends FilterCodecReader {
     final FixedBitSet liveDocs;
     final int numDocs;
 
-    public LiveDocsReader(AtomicReaderContext context, FixedBitSet liveDocs) throws IOException {
-      super(context.reader());
+    public LiveDocsReader(CodecReader in, FixedBitSet liveDocs) throws IOException {
+      super(in);
       this.liveDocs = liveDocs;
       this.numDocs = liveDocs.cardinality();
     }

@@ -85,7 +85,7 @@ public class TestPrefixRandom extends LuceneTestCase {
     
     @Override
     protected TermsEnum getTermsEnum(Terms terms, AttributeSource atts) throws IOException {
-      return new SimplePrefixTermsEnum(terms.iterator(null), prefix);
+      return new SimplePrefixTermsEnum(terms.iterator(), prefix);
     }
 
     private class SimplePrefixTermsEnum extends FilteredTermsEnum {
@@ -106,6 +106,15 @@ public class TestPrefixRandom extends LuceneTestCase {
     @Override
     public String toString(String field) {
       return field.toString() + ":" + prefix.toString();
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      if (super.equals(obj) == false) {
+        return false;
+      }
+      final DumbPrefixQuery that = (DumbPrefixQuery) obj;
+      return prefix.equals(that.prefix);
     }
   }
   

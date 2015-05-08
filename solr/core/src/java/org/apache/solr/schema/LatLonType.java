@@ -22,19 +22,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import com.spatial4j.core.shape.Point;
-
 import org.apache.lucene.document.FieldType;
-import org.apache.lucene.index.AtomicReaderContext;
 import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.StorableField;
 import org.apache.lucene.queries.function.FunctionValues;
 import org.apache.lucene.queries.function.ValueSource;
 import org.apache.lucene.queries.function.valuesource.VectorValueSource;
-import org.apache.lucene.search.LeafCollector;
 import org.apache.lucene.search.BooleanClause;
 import org.apache.lucene.search.BooleanQuery;
-import org.apache.lucene.search.ComplexExplanation;
 import org.apache.lucene.search.Explanation;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
@@ -50,12 +46,12 @@ import org.apache.solr.search.ExtendedQueryBase;
 import org.apache.solr.search.PostFilter;
 import org.apache.solr.search.QParser;
 import org.apache.solr.search.SpatialOptions;
+import org.apache.solr.util.SpatialUtils;
 
 import com.spatial4j.core.context.SpatialContext;
 import com.spatial4j.core.distance.DistanceUtils;
+import com.spatial4j.core.shape.Point;
 import com.spatial4j.core.shape.Rectangle;
-
-import org.apache.solr.util.SpatialUtils;
 
 
 /**
@@ -257,6 +253,11 @@ public class LatLonType extends AbstractSubTypeFieldType implements SpatialQuery
     throw new UnsupportedOperationException("LatLonType uses multiple fields.  field=" + field.getName());
   }
 
+  @Override
+  public double getSphereRadius() {
+    return DistanceUtils.EARTH_MEAN_RADIUS_KM;
+  }
+
 }
 
 class LatLonValueSource extends VectorValueSource {
@@ -305,10 +306,6 @@ class SpatialDistanceQuery extends ExtendedQueryBase implements PostFilter {
     return bboxQuery != null ? bboxQuery.rewrite(reader) : this;
   }
 
-  @Override
-  public void extractTerms(Set terms) {}
-
-
   protected class SpatialWeight extends Weight {
     protected IndexSearcher searcher;
     protected float queryNorm;
@@ -317,6 +314,7 @@ class SpatialDistanceQuery extends ExtendedQueryBase implements PostFilter {
     protected Map lonContext;
 
     public SpatialWeight(IndexSearcher searcher) throws IOException {
+      super(SpatialDistanceQuery.this);
       this.searcher = searcher;
       this.latContext = ValueSource.newContext(searcher);
       this.lonContext = ValueSource.newContext(searcher);
@@ -325,9 +323,7 @@ class SpatialDistanceQuery extends ExtendedQueryBase implements PostFilter {
     }
 
     @Override
-    public Query getQuery() {
-      return SpatialDistanceQuery.this;
-    }
+    public void extractTerms(Set terms) {}
 
     @Override
     public float getValueForNormalization() throws IOException {
@@ -342,12 +338,12 @@ class SpatialDistanceQuery extends ExtendedQueryBase implements PostFilter {
     }
 
     @Override
-    public Scorer scorer(AtomicReaderContext context, Bits acceptDocs) throws IOException {
+    public Scorer scorer(LeafReaderContext context, Bits acceptDocs) throws IOException {
       return new SpatialScorer(context, acceptDocs, this, queryWeight);
     }
 
     @Override
-    public Explanation explain(AtomicReaderContext context, int doc) throws IOException {
+    public Explanation explain(LeafReaderContext context, int doc) throws IOException {
       return ((SpatialScorer)scorer(context, context.reader().getLiveDocs())).explain(doc);
     }
   }
@@ -376,7 +372,7 @@ class SpatialDistanceQuery extends ExtendedQueryBase implements PostFilter {
     int lastDistDoc;
     double lastDist;
 
-    public SpatialScorer(AtomicReaderContext readerContext, Bits acceptDocs, SpatialWeight w, float qWeight) throws IOException {
+    public SpatialScorer(LeafReaderContext readerContext, Bits acceptDocs, SpatialWeight w, float qWeight) throws IOException {
       super(w);
       this.weight = w;
       this.qWeight = qWeight;
@@ -499,14 +495,16 @@ class SpatialDistanceQuery extends ExtendedQueryBase implements PostFilter {
 
       String description = SpatialDistanceQuery.this.toString();
 
-      Explanation result = new ComplexExplanation
-        (this.doc == doc, sc, description +  " product of:");
-      // result.addDetail(new Explanation((float)dist, "hsin("+latVals.explain(doc)+","+lonVals.explain(doc)));
-      result.addDetail(new Explanation((float)dist, "hsin("+latVals.doubleVal(doc)+","+lonVals.doubleVal(doc)));
-      result.addDetail(new Explanation(getBoost(), "boost"));
-      result.addDetail(new Explanation(weight.queryNorm,"queryNorm"));
-      return result;
+      if (matched) {
+        return Explanation.match(sc, description + " product of:",
+            Explanation.match((float) dist, "hsin("+latVals.doubleVal(doc)+","+lonVals.doubleVal(doc)),
+            Explanation.match(getBoost(), "boost"),
+            Explanation.match(weight.queryNorm,"queryNorm"));
+      } else {
+        return Explanation.noMatch("No match");
+      }
     }
+
   }
 
   @Override
@@ -535,7 +533,7 @@ class SpatialDistanceQuery extends ExtendedQueryBase implements PostFilter {
     }
 
     @Override
-    protected void doSetNextReader(AtomicReaderContext context) throws IOException {
+    protected void doSetNextReader(LeafReaderContext context) throws IOException {
       super.doSetNextReader(context);
       maxdoc = context.reader().maxDoc();
       spatialScorer = new SpatialScorer(context, null, weight, 1.0f);
@@ -544,7 +542,7 @@ class SpatialDistanceQuery extends ExtendedQueryBase implements PostFilter {
 
 
   @Override
-  public Weight createWeight(IndexSearcher searcher) throws IOException {
+  public Weight createWeight(IndexSearcher searcher, boolean needsScores) throws IOException {
     // if we were supposed to use bboxQuery, then we should have been rewritten using that query
     assert bboxQuery == null;
     return new SpatialWeight(searcher);

@@ -16,10 +16,17 @@
  */
 package org.apache.lucene.classification;
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.LinkedList;
+import java.util.List;
+
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
-import org.apache.lucene.index.AtomicReader;
+import org.apache.lucene.index.LeafReader;
 import org.apache.lucene.index.MultiFields;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.index.Terms;
@@ -33,10 +40,6 @@ import org.apache.lucene.search.TotalHitCountCollector;
 import org.apache.lucene.search.WildcardQuery;
 import org.apache.lucene.util.BytesRef;
 
-import java.io.IOException;
-import java.util.Collection;
-import java.util.LinkedList;
-
 /**
  * A simplistic Lucene based NaiveBayes classifier, see <code>http://en.wikipedia.org/wiki/Naive_Bayes_classifier</code>
  *
@@ -44,56 +47,140 @@ import java.util.LinkedList;
  */
 public class SimpleNaiveBayesClassifier implements Classifier<BytesRef> {
 
-  private AtomicReader atomicReader;
-  private String[] textFieldNames;
-  private String classFieldName;
-  private int docsWithClassSize;
-  private Analyzer analyzer;
-  private IndexSearcher indexSearcher;
-  private Query query;
+  /**
+   * {@link org.apache.lucene.index.LeafReader} used to access the {@link org.apache.lucene.classification.Classifier}'s
+   * index
+   */
+  protected final LeafReader leafReader;
+
+  /**
+   * names of the fields to be used as input text
+   */
+  protected final String[] textFieldNames;
+
+  /**
+   * name of the field to be used as a class / category output
+   */
+  protected final String classFieldName;
+
+  /**
+   * {@link org.apache.lucene.analysis.Analyzer} to be used for tokenizing unseen input text
+   */
+  protected final Analyzer analyzer;
+
+  /**
+   * {@link org.apache.lucene.search.IndexSearcher} to run searches on the index for retrieving frequencies
+   */
+  protected final IndexSearcher indexSearcher;
+
+  /**
+   * {@link org.apache.lucene.search.Query} used to eventually filter the document set to be used to classify
+   */
+  protected final Query query;
 
   /**
    * Creates a new NaiveBayes classifier.
-   * Note that you must call {@link #train(AtomicReader, String, String, Analyzer) train()} before you can
-   * classify any documents.
+   *
+   * @param leafReader     the reader on the index to be used for classification
+   * @param analyzer       an {@link Analyzer} used to analyze unseen text
+   * @param query          a {@link Query} to eventually filter the docs used for training the classifier, or {@code null}
+   *                       if all the indexed docs should be used
+   * @param classFieldName the name of the field used as the output for the classifier
+   * @param textFieldNames the name of the fields used as the inputs for the classifier
    */
-  public SimpleNaiveBayesClassifier() {
-  }
-
-  /**
-   * {@inheritDoc}
-   */
-  @Override
-  public void train(AtomicReader atomicReader, String textFieldName, String classFieldName, Analyzer analyzer) throws IOException {
-    train(atomicReader, textFieldName, classFieldName, analyzer, null);
-  }
-
-  /**
-   * {@inheritDoc}
-   */
-  @Override
-  public void train(AtomicReader atomicReader, String textFieldName, String classFieldName, Analyzer analyzer, Query query)
-      throws IOException {
-    train(atomicReader, new String[]{textFieldName}, classFieldName, analyzer, query);
-  }
-
-  /**
-   * {@inheritDoc}
-   */
-  @Override
-  public void train(AtomicReader atomicReader, String[] textFieldNames, String classFieldName, Analyzer analyzer, Query query)
-      throws IOException {
-    this.atomicReader = atomicReader;
-    this.indexSearcher = new IndexSearcher(this.atomicReader);
+  public SimpleNaiveBayesClassifier(LeafReader leafReader, Analyzer analyzer, Query query, String classFieldName, String... textFieldNames) {
+    this.leafReader = leafReader;
+    this.indexSearcher = new IndexSearcher(this.leafReader);
     this.textFieldNames = textFieldNames;
     this.classFieldName = classFieldName;
     this.analyzer = analyzer;
     this.query = query;
-    this.docsWithClassSize = countDocsWithClass();
   }
 
-  private int countDocsWithClass() throws IOException {
-    int docCount = MultiFields.getTerms(this.atomicReader, this.classFieldName).getDocCount();
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public ClassificationResult<BytesRef> assignClass(String inputDocument) throws IOException {
+    List<ClassificationResult<BytesRef>> doclist = assignClassNormalizedList(inputDocument);
+    ClassificationResult<BytesRef> retval = null;
+    double maxscore = -Double.MAX_VALUE;
+    for (ClassificationResult<BytesRef> element : doclist) {
+      if (element.getScore() > maxscore) {
+        retval = element;
+        maxscore = element.getScore();
+      }
+    }
+    return retval;
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public List<ClassificationResult<BytesRef>> getClasses(String text) throws IOException {
+    List<ClassificationResult<BytesRef>> doclist = assignClassNormalizedList(text);
+    Collections.sort(doclist);
+    return doclist;
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public List<ClassificationResult<BytesRef>> getClasses(String text, int max) throws IOException {
+    List<ClassificationResult<BytesRef>> doclist = assignClassNormalizedList(text);
+    Collections.sort(doclist);
+    return doclist.subList(0, max);
+  }
+
+  private List<ClassificationResult<BytesRef>> assignClassNormalizedList(String inputDocument) throws IOException {
+    List<ClassificationResult<BytesRef>> dataList = new ArrayList<>();
+
+    Terms terms = MultiFields.getTerms(leafReader, classFieldName);
+    TermsEnum termsEnum = terms.iterator();
+    BytesRef next;
+    String[] tokenizedDoc = tokenizeDoc(inputDocument);
+    int docsWithClassSize = countDocsWithClass();
+    while ((next = termsEnum.next()) != null) {
+      double clVal = calculateLogPrior(next, docsWithClassSize) + calculateLogLikelihood(tokenizedDoc, next, docsWithClassSize);
+      dataList.add(new ClassificationResult<>(BytesRef.deepCopyOf(next), clVal));
+    }
+
+    // normalization; the values transforms to a 0-1 range
+    ArrayList<ClassificationResult<BytesRef>> returnList = new ArrayList<>();
+    if (!dataList.isEmpty()) {
+      Collections.sort(dataList);
+      // this is a negative number closest to 0 = a
+      double smax = dataList.get(0).getScore();
+
+      double sumLog = 0;
+      // log(sum(exp(x_n-a)))
+      for (ClassificationResult<BytesRef> cr : dataList) {
+        // getScore-smax <=0 (both negative, smax is the smallest abs()
+        sumLog += Math.exp(cr.getScore() - smax);
+      }
+      // loga=a+log(sum(exp(x_n-a))) = log(sum(exp(x_n)))
+      double loga = smax;
+      loga += Math.log(sumLog);
+
+      // 1/sum*x = exp(log(x))*1/sum = exp(log(x)-log(sum))
+      for (ClassificationResult<BytesRef> cr : dataList) {
+        returnList.add(new ClassificationResult<>(cr.getAssignedClass(), Math.exp(cr.getScore() - loga)));
+      }
+    }
+
+    return returnList;
+  }
+
+  /**
+   * count the number of documents in the index having at least a value for the 'class' field
+   *
+   * @return the no. of documents having a value for the 'class' field
+   * @throws IOException if accessing to term vectors or search fails
+   */
+  protected int countDocsWithClass() throws IOException {
+    int docCount = MultiFields.getTerms(this.leafReader, this.classFieldName).getDocCount();
     if (docCount == -1) { // in case codec doesn't support getDocCount
       TotalHitCountCollector totalHitCountCollector = new TotalHitCountCollector();
       BooleanQuery q = new BooleanQuery();
@@ -102,13 +189,20 @@ public class SimpleNaiveBayesClassifier implements Classifier<BytesRef> {
         q.add(query, BooleanClause.Occur.MUST);
       }
       indexSearcher.search(q,
-          totalHitCountCollector);
+              totalHitCountCollector);
       docCount = totalHitCountCollector.getTotalHits();
     }
     return docCount;
   }
 
-  private String[] tokenizeDoc(String doc) throws IOException {
+  /**
+   * tokenize a <code>String</code> on this classifier's text fields and analyzer
+   *
+   * @param doc the <code>String</code> representing an input text (to be classified)
+   * @return a <code>String</code> array of the resulting tokens
+   * @throws IOException if tokenization fails
+   */
+  protected String[] tokenizeDoc(String doc) throws IOException {
     Collection<String> result = new LinkedList<>();
     for (String textFieldName : textFieldNames) {
       try (TokenStream tokenStream = analyzer.tokenStream(textFieldName, doc)) {
@@ -123,34 +217,7 @@ public class SimpleNaiveBayesClassifier implements Classifier<BytesRef> {
     return result.toArray(new String[result.size()]);
   }
 
-  /**
-   * {@inheritDoc}
-   */
-  @Override
-  public ClassificationResult<BytesRef> assignClass(String inputDocument) throws IOException {
-    if (atomicReader == null) {
-      throw new IOException("You must first call Classifier#train");
-    }
-    double max = - Double.MAX_VALUE;
-    BytesRef foundClass = new BytesRef();
-
-    Terms terms = MultiFields.getTerms(atomicReader, classFieldName);
-    TermsEnum termsEnum = terms.iterator(null);
-    BytesRef next;
-    String[] tokenizedDoc = tokenizeDoc(inputDocument);
-    while ((next = termsEnum.next()) != null) {
-      double clVal = calculateLogPrior(next) + calculateLogLikelihood(tokenizedDoc, next);
-      if (clVal > max) {
-        max = clVal;
-        foundClass = BytesRef.deepCopyOf(next);
-      }
-    }
-    double score = 10 / Math.abs(max);
-    return new ClassificationResult<>(foundClass, score);
-  }
-
-
-  private double calculateLogLikelihood(String[] tokenizedDoc, BytesRef c) throws IOException {
+  private double calculateLogLikelihood(String[] tokenizedDoc, BytesRef c, int docsWithClassSize) throws IOException {
     // for each word
     double result = 0d;
     for (String word : tokenizedDoc) {
@@ -175,11 +242,11 @@ public class SimpleNaiveBayesClassifier implements Classifier<BytesRef> {
   private double getTextTermFreqForClass(BytesRef c) throws IOException {
     double avgNumberOfUniqueTerms = 0;
     for (String textFieldName : textFieldNames) {
-      Terms terms = MultiFields.getTerms(atomicReader, textFieldName);
+      Terms terms = MultiFields.getTerms(leafReader, textFieldName);
       long numPostings = terms.getSumDocFreq(); // number of term/doc pairs
       avgNumberOfUniqueTerms += numPostings / (double) terms.getDocCount(); // avg # of unique terms per doc
     }
-    int docsWithC = atomicReader.docFreq(new Term(classFieldName, c));
+    int docsWithC = leafReader.docFreq(new Term(classFieldName, c));
     return avgNumberOfUniqueTerms * docsWithC; // avg # of unique terms in text fields per doc * # docs with c
   }
 
@@ -187,7 +254,7 @@ public class SimpleNaiveBayesClassifier implements Classifier<BytesRef> {
     BooleanQuery booleanQuery = new BooleanQuery();
     BooleanQuery subQuery = new BooleanQuery();
     for (String textFieldName : textFieldNames) {
-     subQuery.add(new BooleanClause(new TermQuery(new Term(textFieldName, word)), BooleanClause.Occur.SHOULD));
+      subQuery.add(new BooleanClause(new TermQuery(new Term(textFieldName, word)), BooleanClause.Occur.SHOULD));
     }
     booleanQuery.add(new BooleanClause(subQuery, BooleanClause.Occur.MUST));
     booleanQuery.add(new BooleanClause(new TermQuery(new Term(classFieldName, c)), BooleanClause.Occur.MUST));
@@ -199,11 +266,11 @@ public class SimpleNaiveBayesClassifier implements Classifier<BytesRef> {
     return totalHitCountCollector.getTotalHits();
   }
 
-  private double calculateLogPrior(BytesRef currentClass) throws IOException {
+  private double calculateLogPrior(BytesRef currentClass, int docsWithClassSize) throws IOException {
     return Math.log((double) docCount(currentClass)) - Math.log(docsWithClassSize);
   }
 
   private int docCount(BytesRef countedClass) throws IOException {
-    return atomicReader.docFreq(new Term(classFieldName, countedClass));
+    return leafReader.docFreq(new Term(classFieldName, countedClass));
   }
 }

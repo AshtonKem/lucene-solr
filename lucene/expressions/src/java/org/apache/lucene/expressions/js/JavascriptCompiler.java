@@ -104,7 +104,7 @@ public class JavascriptCompiler {
     return org.objectweb.asm.commons.Method.getMethod(method);
   }
   
-  // This maximum length is theoretically 65535 bytes, but as its CESU-8 encoded we dont know how large it is in bytes, so be safe
+  // This maximum length is theoretically 65535 bytes, but as it's CESU-8 encoded we dont know how large it is in bytes, so be safe
   // rcmuir: "If your ranking function is that large you need to check yourself into a mental institution!"
   private static final int MAX_SOURCE_LENGTH = 16384;
   
@@ -235,31 +235,33 @@ public class JavascriptCompiler {
         int arguments = current.getChildCount() - 1;
         
         Method method = functions.get(call);
-        if (method == null) {
-          throw new IllegalArgumentException("Unrecognized method call (" + call + ").");
+        if (method == null && (arguments > 0 || !call.contains("."))) {
+          throw new IllegalArgumentException("Unrecognized function call (" + call + ").");
+        } else if (method != null) {
+          int arity = method.getParameterTypes().length;
+          if (arguments != arity) {
+            throw new IllegalArgumentException("Expected (" + arity + ") arguments for function call (" +
+                call + "), but found (" + arguments + ").");
+          }
+
+          for (int argument = 1; argument <= arguments; ++argument) {
+            recursiveCompile(current.getChild(argument), Type.DOUBLE_TYPE);
+          }
+
+          gen.invokeStatic(Type.getType(method.getDeclaringClass()),
+              org.objectweb.asm.commons.Method.getMethod(method));
+
+          gen.cast(Type.DOUBLE_TYPE, expected);
+          break;
+        } else {
+          text = call + "()";
+          // intentionally fall through to the variable case to allow this non-static
+          // method to be forwarded to the bindings for processing
         }
-        
-        int arity = method.getParameterTypes().length;
-        if (arguments != arity) {
-          throw new IllegalArgumentException("Expected (" + arity + ") arguments for method call (" +
-              call + "), but found (" + arguments + ").");
-        }
-        
-        for (int argument = 1; argument <= arguments; ++argument) {
-          recursiveCompile(current.getChild(argument), Type.DOUBLE_TYPE);
-        }
-        
-        gen.invokeStatic(Type.getType(method.getDeclaringClass()),
-          org.objectweb.asm.commons.Method.getMethod(method));
-        
-        gen.cast(Type.DOUBLE_TYPE, expected);
-        break;
       case JavascriptParser.VARIABLE:
         int index;
 
-        // normalize quotes
         text = normalizeQuotes(text);
-
         
         if (externalsMap.containsKey(text)) {
           index = externalsMap.get(text);
@@ -565,7 +567,7 @@ public class JavascriptCompiler {
         checkFunction(method, JavascriptCompiler.class.getClassLoader());
         map.put(call, method);
       }
-    } catch (NoSuchMethodException | ClassNotFoundException | IOException e) {
+    } catch (ReflectiveOperationException | IOException e) {
       throw new Error("Cannot resolve function", e);
     }
     DEFAULT_FUNCTIONS = Collections.unmodifiableMap(map);

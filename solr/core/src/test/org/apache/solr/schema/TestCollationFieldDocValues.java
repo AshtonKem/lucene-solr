@@ -23,9 +23,6 @@ import java.text.Collator;
 import java.text.RuleBasedCollator;
 import java.util.Locale;
 
-import org.apache.lucene.util.TestUtil;
-import org.apache.lucene.util.LuceneTestCase.SuppressCodecs;
-
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
 import org.apache.solr.SolrTestCaseJ4;
@@ -34,7 +31,6 @@ import org.junit.BeforeClass;
 /**
  * Tests {@link CollationField} with docvalues
  */
-@SuppressCodecs({"Lucene40", "Lucene41"})
 public class TestCollationFieldDocValues extends SolrTestCaseJ4 {
   
   @BeforeClass
@@ -61,13 +57,11 @@ public class TestCollationFieldDocValues extends SolrTestCaseJ4 {
    * Ugly: but what to do? We want to test custom sort, which reads rules in as a resource.
    * These are largish files, and jvm-specific (as our documentation says, you should always
    * look out for jvm differences with collation).
-   * So its preferable to create this file on-the-fly.
+   * So it's preferable to create this file on-the-fly.
    */
   public static String setupSolrHome() throws Exception {
     // make a solr home underneath the test's TEMP_DIR
-    File tmpFile = createTempDir("collation1");
-    tmpFile.delete();
-    tmpFile.mkdir();
+    File tmpFile = createTempDir("collation1").toFile();
     
     // make data and conf dirs
     new File(tmpFile, "data").mkdir();

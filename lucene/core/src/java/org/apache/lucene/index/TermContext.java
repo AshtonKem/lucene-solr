@@ -17,10 +17,11 @@ package org.apache.lucene.index;
  * limitations under the License.
  */
 
+import org.apache.lucene.codecs.BlockTermState;
+import org.apache.lucene.util.BytesRef;
+
 import java.io.IOException;
 import java.util.Arrays;
-
-import org.apache.lucene.util.BytesRef;
 
 /**
  * Maintains a {@link IndexReader} {@link TermState} view over
@@ -52,6 +53,7 @@ public final class TermContext {
     assert context != null && context.isTopLevel;
     topReaderContext = context;
     docFreq = 0;
+    totalTermFreq = 0;
     final int len;
     if (context.leaves() == null) {
       len = 1;
@@ -85,18 +87,15 @@ public final class TermContext {
     final BytesRef bytes = term.bytes();
     final TermContext perReaderTermState = new TermContext(context);
     //if (DEBUG) System.out.println("prts.build term=" + term);
-    for (final AtomicReaderContext ctx : context.leaves()) {
+    for (final LeafReaderContext ctx : context.leaves()) {
       //if (DEBUG) System.out.println("  r=" + leaves[i].reader);
-      final Fields fields = ctx.reader().fields();
-      if (fields != null) {
-        final Terms terms = fields.terms(field);
-        if (terms != null) {
-          final TermsEnum termsEnum = terms.iterator(null);
-          if (termsEnum.seekExact(bytes)) { 
-            final TermState termState = termsEnum.termState();
-            //if (DEBUG) System.out.println("    found");
-            perReaderTermState.register(termState, ctx.ord, termsEnum.docFreq(), termsEnum.totalTermFreq());
-          }
+      final Terms terms = ctx.reader().terms(field);
+      if (terms != null) {
+        final TermsEnum termsEnum = terms.iterator();
+        if (termsEnum.seekExact(bytes)) { 
+          final TermState termState = termsEnum.termState();
+          //if (DEBUG) System.out.println("    found");
+          perReaderTermState.register(termState, ctx.ord, termsEnum.docFreq(), termsEnum.totalTermFreq());
         }
       }
     }
@@ -109,6 +108,7 @@ public final class TermContext {
    */
   public void clear() {
     docFreq = 0;
+    totalTermFreq = 0;
     Arrays.fill(states, null);
   }
 
@@ -162,10 +162,30 @@ public final class TermContext {
   public long totalTermFreq() {
     return totalTermFreq;
   }
-  
-  /** expert: only available for queries that want to lie about docfreq
-   * @lucene.internal */
-  public void setDocFreq(int docFreq) {
-    this.docFreq = docFreq;
+
+  /** Returns true if all terms stored here are real (e.g., not auto-prefix terms).
+   *
+   *  @lucene.internal */
+  public boolean hasOnlyRealTerms() {
+    for(TermState termState : states) {
+      if (termState instanceof BlockTermState && ((BlockTermState) termState).isRealTerm == false) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  @Override
+  public String toString() {
+    StringBuilder sb = new StringBuilder();
+    sb.append("TermContext\n");
+    for(TermState termState : states) {
+      sb.append("  state=");
+      sb.append(termState.toString());
+      sb.append('\n');
+    }
+
+    return sb.toString();
   }
 }

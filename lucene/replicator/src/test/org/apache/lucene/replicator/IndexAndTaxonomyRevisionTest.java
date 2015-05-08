@@ -35,6 +35,7 @@ import org.apache.lucene.replicator.IndexAndTaxonomyRevision.SnapshotDirectoryTa
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
+import org.apache.lucene.store.MockDirectoryWrapper;
 import org.apache.lucene.util.IOUtils;
 import org.junit.Test;
 
@@ -76,6 +77,10 @@ public class IndexAndTaxonomyRevisionTest extends ReplicatorTestCase {
     
     Directory taxoDir = newDirectory();
     SnapshotDirectoryTaxonomyWriter taxoWriter = new SnapshotDirectoryTaxonomyWriter(taxoDir);
+    // we look to see that certain files are deleted:
+    if (indexDir instanceof MockDirectoryWrapper) {
+      ((MockDirectoryWrapper)indexDir).setEnableVirusScanner(false);
+    }
     try {
       indexWriter.addDocument(newDocument(taxoWriter));
       indexWriter.commit();
@@ -96,6 +101,10 @@ public class IndexAndTaxonomyRevisionTest extends ReplicatorTestCase {
       indexWriter.close();
     } finally {
       IOUtils.close(indexWriter, taxoWriter, taxoDir, indexDir);
+      if (indexDir instanceof MockDirectoryWrapper) {
+        // set back to on for other tests
+        ((MockDirectoryWrapper)indexDir).setEnableVirusScanner(true);
+      }
     }
   }
   
@@ -117,7 +126,7 @@ public class IndexAndTaxonomyRevisionTest extends ReplicatorTestCase {
       assertEquals(2, sourceFiles.size());
       for (List<RevisionFile> files : sourceFiles.values()) {
         String lastFile = files.get(files.size() - 1).fileName;
-        assertTrue(lastFile.startsWith(IndexFileNames.SEGMENTS) && !lastFile.equals(IndexFileNames.SEGMENTS_GEN));
+        assertTrue(lastFile.startsWith(IndexFileNames.SEGMENTS));
       }
       indexWriter.close();
     } finally {

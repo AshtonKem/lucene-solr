@@ -17,10 +17,15 @@ package org.apache.lucene.document;
  * limitations under the License.
  */
 
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+
 import org.apache.lucene.document.FieldType.NumericType;
-import org.apache.lucene.index.FieldInfo.DocValuesType;
-import org.apache.lucene.index.FieldInfo.IndexOptions;
+import org.apache.lucene.index.DocValuesType;
+import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.util.LuceneTestCase;
+
+import com.carrotsearch.randomizedtesting.generators.RandomPicks;
 
 /** simple testcases for concrete impl of IndexableFieldType */
 public class TestFieldType extends LuceneTestCase {
@@ -39,11 +44,11 @@ public class TestFieldType extends LuceneTestCase {
     assertFalse(ft3.equals(ft));
     
     FieldType ft4 = new FieldType();
-    ft4.setDocValueType(DocValuesType.BINARY);
+    ft4.setDocValuesType(DocValuesType.BINARY);
     assertFalse(ft4.equals(ft));
     
     FieldType ft5 = new FieldType();
-    ft5.setIndexed(true);
+    ft5.setIndexOptions(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS);
     assertFalse(ft5.equals(ft));
     
     FieldType ft6 = new FieldType();
@@ -65,6 +70,40 @@ public class TestFieldType extends LuceneTestCase {
     FieldType ft10 = new FieldType();
     ft10.setStoreTermVectors(true);
     assertFalse(ft10.equals(ft));
+  }
 
+  private static Object randomValue(Class<?> clazz) {
+    if (clazz.isEnum()) {
+      return RandomPicks.randomFrom(random(), clazz.getEnumConstants());
+    } else if (clazz == boolean.class) {
+      return random().nextBoolean();
+    } else if (clazz == int.class) {
+      return 1 + random().nextInt(100);
+    }
+    throw new AssertionError("Don't know how to generate a " + clazz);
+  }
+
+  private static FieldType randomFieldType() throws Exception {
+    FieldType ft = new FieldType();
+    for (Method method : FieldType.class.getMethods()) {
+      if ((method.getModifiers() & Modifier.PUBLIC) != 0 && method.getName().startsWith("set")) {
+        final Class<?>[] parameterTypes = method.getParameterTypes();
+        final Object[] args = new Object[parameterTypes.length];
+        for (int i = 0; i < args.length; ++i) {
+          args[i] = randomValue(parameterTypes[i]);
+        }
+        method.invoke(ft, args);
+      }
+    }
+    return ft;
+  }
+
+  public void testCopyConstructor() throws Exception {
+    final int iters = 10;
+      for (int iter = 0; iter < iters; ++iter) {
+      FieldType ft = randomFieldType();
+      FieldType ft2 = new FieldType(ft);
+      assertEquals(ft, ft2);
+    }
   }
 }

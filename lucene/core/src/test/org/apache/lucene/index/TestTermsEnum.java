@@ -29,12 +29,12 @@ import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.LineFileDocs;
-import org.apache.lucene.util.LuceneTestCase.SuppressCodecs;
 import org.apache.lucene.util.LuceneTestCase;
+import org.apache.lucene.util.LuceneTestCase.SuppressCodecs;
 import org.apache.lucene.util.TestUtil;
 import org.apache.lucene.util.automaton.Automata;
-import org.apache.lucene.util.automaton.CompiledAutomaton;
 import org.apache.lucene.util.automaton.Automaton;
+import org.apache.lucene.util.automaton.CompiledAutomaton;
 import org.apache.lucene.util.automaton.RegExp;
 
 @SuppressCodecs({ "SimpleText", "Memory", "Direct" })
@@ -55,7 +55,7 @@ public class TestTermsEnum extends LuceneTestCase {
     w.close();
 
     final List<BytesRef> terms = new ArrayList<>();
-    final TermsEnum termsEnum = MultiFields.getTerms(r, "body").iterator(null);
+    final TermsEnum termsEnum = MultiFields.getTerms(r, "body").iterator();
     BytesRef term;
     while((term = termsEnum.next()) != null) {
       terms.add(BytesRef.deepCopyOf(term));
@@ -182,7 +182,6 @@ public class TestTermsEnum extends LuceneTestCase {
 
   // Tests Terms.intersect
   public void testIntersectRandom() throws IOException {
-
     final Directory dir = newDirectory();
     final RandomIndexWriter w = new RandomIndexWriter(random(), dir);
 
@@ -261,7 +260,7 @@ public class TestTermsEnum extends LuceneTestCase {
         a = Automata.makeStringUnion(sortedAcceptTerms);
       }
       
-      final CompiledAutomaton c = new CompiledAutomaton(a, true, false);
+      final CompiledAutomaton c = new CompiledAutomaton(a, true, false, 1000000, false);
 
       final BytesRef[] acceptTermsArray = new BytesRef[acceptTerms.size()];
       final Set<BytesRef> acceptTermsSet = new HashSet<>();
@@ -318,7 +317,7 @@ public class TestTermsEnum extends LuceneTestCase {
           loc++;
         }
 
-        DocsEnum docsEnum = null;
+        PostingsEnum postingsEnum = null;
         while (loc < termsArray.length) {
           final BytesRef expected = termsArray[loc];
           final BytesRef actual = te.next();
@@ -327,8 +326,8 @@ public class TestTermsEnum extends LuceneTestCase {
           }
           assertEquals(expected, actual);
           assertEquals(1, te.docFreq());
-          docsEnum = TestUtil.docs(random(), te, null, docsEnum, DocsEnum.FLAG_NONE);
-          final int docID = docsEnum.nextDoc();
+          postingsEnum = TestUtil.docs(random(), te, null, postingsEnum, PostingsEnum.NONE);
+          final int docID = postingsEnum.nextDoc();
           assertTrue(docID != DocIdSetIterator.NO_MORE_DOCS);
           assertEquals(docIDToID.get(docID), termToID.get(expected).intValue());
           do {
@@ -479,7 +478,7 @@ public class TestTermsEnum extends LuceneTestCase {
     assertEquals(1, docFreq(r, "xx"));
     assertEquals(1, docFreq(r, "aa4"));
 
-    final TermsEnum te = MultiFields.getTerms(r, FIELD).iterator(null);
+    final TermsEnum te = MultiFields.getTerms(r, FIELD).iterator();
     while(te.next() != null) {
       //System.out.println("TEST: next term=" + te.term().utf8ToString());
     }
@@ -511,7 +510,7 @@ public class TestTermsEnum extends LuceneTestCase {
     assertEquals(1, r.maxDoc());
     Terms terms = MultiFields.getTerms(r, "field");
     if (terms != null) {
-      assertNull(terms.iterator(null).next());
+      assertNull(terms.iterator().next());
     }
     r.close();
     d.close();
@@ -611,7 +610,7 @@ public class TestTermsEnum extends LuceneTestCase {
         System.out.println("  " + t.utf8ToString() + " " + t);
       }
     }
-    final TermsEnum te = MultiFields.getTerms(r, FIELD).iterator(null);
+    final TermsEnum te = MultiFields.getTerms(r, FIELD).iterator();
 
     final int END_LOC = -validTerms.length-1;
     
@@ -735,31 +734,31 @@ public class TestTermsEnum extends LuceneTestCase {
     w.forceMerge(1);
     DirectoryReader r = w.getReader();
     w.close();
-    AtomicReader sub = getOnlySegmentReader(r);
+    LeafReader sub = getOnlySegmentReader(r);
     Terms terms = sub.fields().terms("field");
     Automaton automaton = new RegExp(".*", RegExp.NONE).toAutomaton();
     CompiledAutomaton ca = new CompiledAutomaton(automaton, false, false);    
     TermsEnum te = terms.intersect(ca, null);
     assertEquals("aaa", te.next().utf8ToString());
-    assertEquals(0, te.docs(null, null, DocsEnum.FLAG_NONE).nextDoc());
+    assertEquals(0, te.postings(null, null, PostingsEnum.NONE).nextDoc());
     assertEquals("bbb", te.next().utf8ToString());
-    assertEquals(1, te.docs(null, null, DocsEnum.FLAG_NONE).nextDoc());
+    assertEquals(1, te.postings(null, null, PostingsEnum.NONE).nextDoc());
     assertEquals("ccc", te.next().utf8ToString());
-    assertEquals(2, te.docs(null, null, DocsEnum.FLAG_NONE).nextDoc());
+    assertEquals(2, te.postings(null, null, PostingsEnum.NONE).nextDoc());
     assertNull(te.next());
 
     te = terms.intersect(ca, new BytesRef("abc"));
     assertEquals("bbb", te.next().utf8ToString());
-    assertEquals(1, te.docs(null, null, DocsEnum.FLAG_NONE).nextDoc());
+    assertEquals(1, te.postings(null, null, PostingsEnum.NONE).nextDoc());
     assertEquals("ccc", te.next().utf8ToString());
-    assertEquals(2, te.docs(null, null, DocsEnum.FLAG_NONE).nextDoc());
+    assertEquals(2, te.postings(null, null, PostingsEnum.NONE).nextDoc());
     assertNull(te.next());
 
     te = terms.intersect(ca, new BytesRef("aaa"));
     assertEquals("bbb", te.next().utf8ToString());
-    assertEquals(1, te.docs(null, null, DocsEnum.FLAG_NONE).nextDoc());
+    assertEquals(1, te.postings(null, null, PostingsEnum.NONE).nextDoc());
     assertEquals("ccc", te.next().utf8ToString());
-    assertEquals(2, te.docs(null, null, DocsEnum.FLAG_NONE).nextDoc());
+    assertEquals(2, te.postings(null, null, PostingsEnum.NONE).nextDoc());
     assertNull(te.next());
 
     r.close();
@@ -789,7 +788,7 @@ public class TestTermsEnum extends LuceneTestCase {
     w.forceMerge(1);
     DirectoryReader r = w.getReader();
     w.close();
-    AtomicReader sub = getOnlySegmentReader(r);
+    LeafReader sub = getOnlySegmentReader(r);
     Terms terms = sub.fields().terms("field");
 
     Automaton automaton = new RegExp(".*d", RegExp.NONE).toAutomaton();
@@ -799,17 +798,17 @@ public class TestTermsEnum extends LuceneTestCase {
     // should seek to startTerm
     te = terms.intersect(ca, new BytesRef("aad"));
     assertEquals("abd", te.next().utf8ToString());
-    assertEquals(1, te.docs(null, null, DocsEnum.FLAG_NONE).nextDoc());
+    assertEquals(1, te.postings(null, null, PostingsEnum.NONE).nextDoc());
     assertEquals("acd", te.next().utf8ToString());
-    assertEquals(2, te.docs(null, null, DocsEnum.FLAG_NONE).nextDoc());
+    assertEquals(2, te.postings(null, null, PostingsEnum.NONE).nextDoc());
     assertEquals("bcd", te.next().utf8ToString());
-    assertEquals(3, te.docs(null, null, DocsEnum.FLAG_NONE).nextDoc());
+    assertEquals(3, te.postings(null, null, PostingsEnum.NONE).nextDoc());
     assertNull(te.next());
 
     // should fail to find ceil label on second arc, rewind 
     te = terms.intersect(ca, new BytesRef("add"));
     assertEquals("bcd", te.next().utf8ToString());
-    assertEquals(3, te.docs(null, null, DocsEnum.FLAG_NONE).nextDoc());
+    assertEquals(3, te.postings(null, null, PostingsEnum.NONE).nextDoc());
     assertNull(te.next());
 
     // should reach end
@@ -843,22 +842,22 @@ public class TestTermsEnum extends LuceneTestCase {
     w.forceMerge(1);
     DirectoryReader r = w.getReader();
     w.close();
-    AtomicReader sub = getOnlySegmentReader(r);
+    LeafReader sub = getOnlySegmentReader(r);
     Terms terms = sub.fields().terms("field");
 
     Automaton automaton = new RegExp(".*", RegExp.NONE).toAutomaton();  // accept ALL
     CompiledAutomaton ca = new CompiledAutomaton(automaton, false, false);    
 
     TermsEnum te = terms.intersect(ca, null);
-    DocsEnum de;
+    PostingsEnum de;
 
     assertEquals("", te.next().utf8ToString());
-    de = te.docs(null, null, DocsEnum.FLAG_NONE);
+    de = te.postings(null, null, PostingsEnum.NONE);
     assertEquals(0, de.nextDoc());
     assertEquals(1, de.nextDoc());
 
     assertEquals("abc", te.next().utf8ToString());
-    de = te.docs(null, null, DocsEnum.FLAG_NONE);
+    de = te.postings(null, null, PostingsEnum.NONE);
     assertEquals(0, de.nextDoc());
     assertEquals(1, de.nextDoc());
 
@@ -868,7 +867,7 @@ public class TestTermsEnum extends LuceneTestCase {
     te = terms.intersect(ca, new BytesRef(""));
 
     assertEquals("abc", te.next().utf8ToString());
-    de = te.docs(null, null, DocsEnum.FLAG_NONE);
+    de = te.postings(null, null, PostingsEnum.NONE);
     assertEquals(0, de.nextDoc());
     assertEquals(1, de.nextDoc());
 
@@ -903,8 +902,8 @@ public class TestTermsEnum extends LuceneTestCase {
       System.out.println("\nTEST: reader=" + r);
     }
 
-    TermsEnum termsEnum = MultiFields.getTerms(r, "id").iterator(null);
-    DocsEnum docsEnum = null;
+    TermsEnum termsEnum = MultiFields.getTerms(r, "id").iterator();
+    PostingsEnum postingsEnum = null;
     PerThreadPKLookup pkLookup = new PerThreadPKLookup(r, "id");
 
     int iters = atLeast(numTerms*3);
@@ -930,9 +929,9 @@ public class TestTermsEnum extends LuceneTestCase {
       boolean actualResult = termsEnum.seekExact(termBytesRef);
       assertEquals(shouldExist, actualResult);
       if (shouldExist) {
-        docsEnum = termsEnum.docs(null, docsEnum, 0);
-        int docID = docsEnum.nextDoc();
-        assertTrue(docID != DocsEnum.NO_MORE_DOCS);
+        postingsEnum = termsEnum.postings(null, postingsEnum, 0);
+        int docID = postingsEnum.nextDoc();
+        assertTrue(docID != PostingsEnum.NO_MORE_DOCS);
         assertEquals(docID, pkLookup.lookup(termBytesRef));
         StoredDocument doc = r.document(docID);
         assertEquals(term, doc.get("id"));
@@ -984,7 +983,7 @@ public class TestTermsEnum extends LuceneTestCase {
       w.addDocument(doc);
       IndexReader r = w.getReader();
       assertEquals(1, r.leaves().size());
-      TermsEnum te = r.leaves().get(0).reader().fields().terms("field").iterator(null);
+      TermsEnum te = r.leaves().get(0).reader().fields().terms("field").iterator();
       for(int i=0;i<=termCount;i++) {
         assertTrue("term '" + termsList.get(i).utf8ToString() + "' should exist but doesn't", te.seekExact(termsList.get(i)));
       }

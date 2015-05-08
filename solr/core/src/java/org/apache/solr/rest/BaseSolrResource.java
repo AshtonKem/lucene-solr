@@ -16,20 +16,23 @@ package org.apache.solr.rest;
  * limitations under the License.
  */
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.UnsupportedEncodingException;
+import java.net.URLDecoder;
+
 import org.apache.solr.common.params.CommonParams;
 import org.apache.solr.common.params.ModifiableSolrParams;
-import org.apache.solr.common.util.ContentStreamBase;
 import org.apache.solr.common.util.NamedList;
 import org.apache.solr.common.util.SimpleOrderedMap;
 import org.apache.solr.core.SolrCore;
 import org.apache.solr.request.SolrQueryRequest;
 import org.apache.solr.request.SolrRequestInfo;
-import org.apache.solr.response.BinaryQueryResponseWriter;
 import org.apache.solr.response.QueryResponseWriter;
+import org.apache.solr.response.QueryResponseWriterUtil;
 import org.apache.solr.response.SolrQueryResponse;
 import org.apache.solr.schema.IndexSchema;
 import org.apache.solr.servlet.ResponseUtils;
-import org.apache.solr.util.FastWriter;
 import org.restlet.data.MediaType;
 import org.restlet.data.Method;
 import org.restlet.data.Status;
@@ -38,22 +41,14 @@ import org.restlet.resource.ResourceException;
 import org.restlet.resource.ServerResource;
 import org.slf4j.Logger;
 
-import java.io.IOException;
-import java.io.OutputStream;
-import java.io.OutputStreamWriter;
-import java.io.UnsupportedEncodingException;
-import java.io.Writer;
-import java.net.URLDecoder;
-import java.nio.charset.Charset;
-import java.nio.charset.StandardCharsets;
-
+import static org.apache.solr.common.params.CommonParams.JSON;
 
 /**
  * Base class of all Solr Restlet server resource classes.
  */
 public abstract class BaseSolrResource extends ServerResource {
-  protected static final Charset UTF8 = StandardCharsets.UTF_8;
   protected static final String SHOW_DEFAULTS = "showDefaults";
+  public static final String UPDATE_TIMEOUT_SECS = "updateTimeoutSecs";
 
   private SolrCore solrCore;
   private IndexSchema schema;
@@ -61,12 +56,14 @@ public abstract class BaseSolrResource extends ServerResource {
   private SolrQueryResponse solrResponse;
   private QueryResponseWriter responseWriter;
   private String contentType;
+  private int updateTimeoutSecs = -1;
 
   public SolrCore getSolrCore() { return solrCore; }
   public IndexSchema getSchema() { return schema; }
   public SolrQueryRequest getSolrRequest() { return solrRequest; }
   public SolrQueryResponse getSolrResponse() { return solrResponse; }
   public String getContentType() { return contentType; }
+  protected int getUpdateTimeoutSecs() { return updateTimeoutSecs; }
 
   protected BaseSolrResource() {
     super();
@@ -77,7 +74,7 @@ public abstract class BaseSolrResource extends ServerResource {
    * from the SolrRequestInfo thread local, then gets the SolrCore
    * and IndexSchema and sets up the response.
    * writer.
-   * <p/>
+   * <p>
    * If an error occurs during initialization, setExisting(false) is
    * called and an error status code and message is set; in this case,
    * Restlet will not continue servicing the request (by calling the
@@ -107,7 +104,7 @@ public abstract class BaseSolrResource extends ServerResource {
             schema = solrRequest.getSchema();
             String responseWriterName = solrRequest.getParams().get(CommonParams.WT);
             if (null == responseWriterName) {
-              responseWriterName = "json"; // Default to json writer
+              responseWriterName = JSON; // Default to json writer
             }
             String indent = solrRequest.getParams().get("indent");
             if (null == indent || ! ("off".equals(indent) || "false".equals(indent))) {
@@ -120,14 +117,21 @@ public abstract class BaseSolrResource extends ServerResource {
             responseWriter = solrCore.getQueryResponseWriter(responseWriterName);
             contentType = responseWriter.getContentType(solrRequest, solrResponse);
             final String path = getRequest().getRootRef().getPath();
-            if ( ! RestManager.SCHEMA_BASE_PATH.equals(path)
-                && ! RestManager.CONFIG_BASE_PATH.equals(path)) {
+            if ( ! RestManager.SCHEMA_BASE_PATH.equals(path)) {
               // don't set webapp property on the request when context and core/collection are excluded 
               final int cutoffPoint = path.indexOf("/", 1);
               final String firstPathElement = -1 == cutoffPoint ? path : path.substring(0, cutoffPoint);
               solrRequest.getContext().put("webapp", firstPathElement); // Context path
             }
             SolrCore.preDecorateResponse(solrRequest, solrResponse);
+
+            // client application can set a timeout for update requests
+            Object updateTimeoutSecsParam = getSolrRequest().getParams().get(UPDATE_TIMEOUT_SECS);
+            if (updateTimeoutSecsParam != null)
+              updateTimeoutSecs = (updateTimeoutSecsParam instanceof Number)
+                  ? ((Number) updateTimeoutSecsParam).intValue()
+                  : Integer.parseInt(updateTimeoutSecsParam.toString());
+
           }
         }
       } catch (Throwable t) {
@@ -157,18 +161,7 @@ public abstract class BaseSolrResource extends ServerResource {
     @Override
     public void write(OutputStream outputStream) throws IOException {
       if (getRequest().getMethod() != Method.HEAD) {
-        if (responseWriter instanceof BinaryQueryResponseWriter) {
-          BinaryQueryResponseWriter binWriter = (BinaryQueryResponseWriter)responseWriter;
-          binWriter.write(outputStream, solrRequest, solrResponse);
-        } else {
-          String charset = ContentStreamBase.getCharsetFromContentType(contentType);
-          Writer out = (charset == null)
-              ? new OutputStreamWriter(outputStream, UTF8)
-              : new OutputStreamWriter(outputStream, charset);
-          out = new FastWriter(out);
-          responseWriter.write(out, solrRequest, solrResponse);
-          out.flush();
-        }
+        QueryResponseWriterUtil.writeQueryResponse(outputStream, responseWriter, solrRequest, solrResponse, contentType);
       }
     }
   }

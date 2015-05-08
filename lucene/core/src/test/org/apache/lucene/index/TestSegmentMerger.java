@@ -19,17 +19,22 @@ package org.apache.lucene.index;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 
 import org.apache.lucene.codecs.Codec;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.store.IOContext;
+import org.apache.lucene.store.MergeInfo;
 import org.apache.lucene.util.BytesRef;
-import org.apache.lucene.util.Constants;
 import org.apache.lucene.util.FixedBitSet;
 import org.apache.lucene.util.InfoStream;
 import org.apache.lucene.util.LuceneTestCase;
+import org.apache.lucene.util.StringHelper;
 import org.apache.lucene.util.TestUtil;
+import org.apache.lucene.util.Version;
 
 public class TestSegmentMerger extends LuceneTestCase {
   //The variables for the new merged segment
@@ -78,18 +83,18 @@ public class TestSegmentMerger extends LuceneTestCase {
 
   public void testMerge() throws IOException {
     final Codec codec = Codec.getDefault();
-    final SegmentInfo si = new SegmentInfo(mergedDir, Constants.LUCENE_MAIN_VERSION, mergedSegment, -1, false, codec, null);
+    final SegmentInfo si = new SegmentInfo(mergedDir, Version.LATEST, mergedSegment, -1, false, codec, Collections.emptyMap(), StringHelper.randomId(), new HashMap<>());
 
-    SegmentMerger merger = new SegmentMerger(Arrays.<AtomicReader>asList(reader1, reader2),
-        si, InfoStream.getDefault(), mergedDir,
-        MergeState.CheckAbort.NONE, new FieldInfos.FieldNumbers(), newIOContext(random()), true);
+    SegmentMerger merger = new SegmentMerger(Arrays.<CodecReader>asList(reader1, reader2),
+                                             si, InfoStream.getDefault(), mergedDir,
+                                             new FieldInfos.FieldNumbers(),
+                                             newIOContext(random(), new IOContext(new MergeInfo(-1, -1, false, -1))));
     MergeState mergeState = merger.merge();
-    int docsMerged = mergeState.segmentInfo.getDocCount();
+    int docsMerged = mergeState.segmentInfo.maxDoc();
     assertTrue(docsMerged == 2);
     //Should be able to open a new SegmentReader against the new directory
     SegmentReader mergedReader = new SegmentReader(new SegmentCommitInfo(
-                                                         new SegmentInfo(mergedDir, Constants.LUCENE_MAIN_VERSION, mergedSegment, docsMerged,
-                                                                         false, codec, null),
+                                                         mergeState.segmentInfo,
                                                          0, -1L, -1L, -1L),
                                                    newIOContext(random()));
     assertTrue(mergedReader != null);
@@ -102,7 +107,7 @@ public class TestSegmentMerger extends LuceneTestCase {
     assertTrue(newDoc2 != null);
     assertTrue(DocHelper.numFields(newDoc2) == DocHelper.numFields(doc2) - DocHelper.unstored.size());
 
-    DocsEnum termDocs = TestUtil.docs(random(), mergedReader,
+    PostingsEnum termDocs = TestUtil.docs(random(), mergedReader,
         DocHelper.TEXT_FIELD_2_KEY,
         new BytesRef("field"),
         MultiFields.getLiveDocs(mergedReader),
@@ -124,7 +129,7 @@ public class TestSegmentMerger extends LuceneTestCase {
     Terms vector = mergedReader.getTermVectors(0).terms(DocHelper.TEXT_FIELD_2_KEY);
     assertNotNull(vector);
     assertEquals(3, vector.size());
-    TermsEnum termsEnum = vector.iterator(null);
+    TermsEnum termsEnum = vector.iterator();
 
     int i = 0;
     while (termsEnum.next() != null) {

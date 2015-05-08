@@ -50,7 +50,7 @@ public class CoreAdminCreateDiscoverTest extends SolrTestCaseJ4 {
   public static void beforeClass() throws Exception {
     useFactory(null); // I require FS-based indexes for this test.
 
-    solrHomeDirectory = createTempDir();
+    solrHomeDirectory = createTempDir().toFile();
 
     setupNoCoreTest(solrHomeDirectory, null);
 
@@ -82,7 +82,7 @@ public class CoreAdminCreateDiscoverTest extends SolrTestCaseJ4 {
     setupCore(coreSysProps, true);
 
     // create a new core (using CoreAdminHandler) w/ properties
-    // Just to be sure its NOT written to the core.properties file
+    // Just to be sure it's NOT written to the core.properties file
     File workDir = new File(solrHomeDirectory, coreSysProps);
     System.setProperty("INSTDIR_TEST", workDir.getAbsolutePath());
     System.setProperty("CONFIG_TEST", "solrconfig_ren.xml");
@@ -141,9 +141,6 @@ public class CoreAdminCreateDiscoverTest extends SolrTestCaseJ4 {
     // Should have segments in the directory pointed to by the ${DATA_TEST}.
     File test = new File(dataDir, "index");
     assertTrue("Should have found index dir at " + test.getAbsolutePath(), test.exists());
-    File gen = new File(test, "segments.gen");
-    assertTrue("Should be segments.gen in the dir at " + gen.getAbsolutePath(), gen.exists());
-
   }
 
   @Test
@@ -230,7 +227,7 @@ public class CoreAdminCreateDiscoverTest extends SolrTestCaseJ4 {
     setupCore(coreNormal, true);
 
     // create a new core (using CoreAdminHandler) w/ properties
-    // Just to be sure its NOT written to the core.properties file
+    // Just to be sure it's NOT written to the core.properties file
     File workDir = new File(solrHomeDirectory, coreNormal);
     File data = new File(workDir, "data");
 
@@ -276,9 +273,6 @@ public class CoreAdminCreateDiscoverTest extends SolrTestCaseJ4 {
     // Should have segments in the directory pointed to by the ${DATA_TEST}.
     File test = new File(data, "index");
     assertTrue("Should have found index dir at " + test.getAbsolutePath(), test.exists());
-    File gen = new File(test, "segments.gen");
-    assertTrue("Should be segments.gen in the dir at " + gen.getAbsolutePath(), gen.exists());
-
   }
 
 }

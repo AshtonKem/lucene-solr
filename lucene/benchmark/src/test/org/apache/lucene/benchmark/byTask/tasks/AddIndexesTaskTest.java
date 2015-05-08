@@ -17,7 +17,7 @@ package org.apache.lucene.benchmark.byTask.tasks;
  * limitations under the License.
  */
 
-import java.io.File;
+import java.nio.file.Path;
 import java.util.Properties;
 
 import org.apache.lucene.benchmark.BenchmarkTestCase;
@@ -30,19 +30,20 @@ import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.RAMDirectory;
+import org.apache.lucene.util.Version;
 import org.junit.BeforeClass;
 
 /** Tests the functionality of {@link AddIndexesTask}. */
 public class AddIndexesTaskTest extends BenchmarkTestCase {
 
-  private static File testDir, inputDir;
+  private static Path testDir, inputDir;
   
   @BeforeClass
   public static void beforeClassAddIndexesTaskTest() throws Exception {
     testDir = createTempDir("addIndexesTask");
     
     // create a dummy index under inputDir
-    inputDir = new File(testDir, "input");
+    inputDir = testDir.resolve("input");
     Directory tmpDir = newFSDirectory(inputDir);
     try {
       IndexWriter writer = new IndexWriter(tmpDir, new IndexWriterConfig(null));
@@ -57,10 +58,10 @@ public class AddIndexesTaskTest extends BenchmarkTestCase {
   
   private PerfRunData createPerfRunData() throws Exception {
     Properties props = new Properties();
-    props.setProperty("writer.version", TEST_VERSION_CURRENT.toString());
+    props.setProperty("writer.version", Version.LATEST.toString());
     props.setProperty("print.props", "false"); // don't print anything
     props.setProperty("directory", "RAMDirectory");
-    props.setProperty(AddIndexesTask.ADDINDEXES_INPUT_DIR, inputDir.getAbsolutePath());
+    props.setProperty(AddIndexesTask.ADDINDEXES_INPUT_DIR, inputDir.toAbsolutePath().toString());
     Config config = new Config(props);
     return new PerfRunData(config);
   }

@@ -17,18 +17,21 @@
 
 package org.apache.lucene.queries.function.valuesource;
 
-import org.apache.lucene.index.AtomicReaderContext;
+import java.io.IOException;
+import java.util.Map;
+
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.ReaderUtil;
 import org.apache.lucene.queries.function.FunctionValues;
 import org.apache.lucene.queries.function.ValueSource;
 import org.apache.lucene.queries.function.docvalues.FloatDocValues;
-import org.apache.lucene.search.*;
+import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.Query;
+import org.apache.lucene.search.Scorer;
+import org.apache.lucene.search.Weight;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.mutable.MutableValue;
 import org.apache.lucene.util.mutable.MutableValueFloat;
-
-import java.io.IOException;
-import java.util.Map;
 
 /**
  * <code>QueryValueSource</code> returns the relevance score of the query
@@ -51,7 +54,7 @@ public class QueryValueSource extends ValueSource {
   }
 
   @Override
-  public FunctionValues getValues(Map fcontext, AtomicReaderContext readerContext) throws IOException {
+  public FunctionValues getValues(Map fcontext, LeafReaderContext readerContext) throws IOException {
     return new QueryDocValues(this, readerContext, fcontext);
   }
 
@@ -69,14 +72,14 @@ public class QueryValueSource extends ValueSource {
 
   @Override
   public void createWeight(Map context, IndexSearcher searcher) throws IOException {
-    Weight w = searcher.createNormalizedWeight(q);
+    Weight w = searcher.createNormalizedWeight(q, true);
     context.put(this, w);
   }
 }
 
 
 class QueryDocValues extends FloatDocValues {
-  final AtomicReaderContext readerContext;
+  final LeafReaderContext readerContext;
   final Bits acceptDocs;
   final Weight weight;
   final float defVal;
@@ -92,7 +95,7 @@ class QueryDocValues extends FloatDocValues {
   int lastDocRequested=Integer.MAX_VALUE;
   
 
-  public QueryDocValues(QueryValueSource vs, AtomicReaderContext readerContext, Map fcontext) throws IOException {
+  public QueryDocValues(QueryValueSource vs, LeafReaderContext readerContext, Map fcontext) throws IOException {
     super(vs);
 
     this.readerContext = readerContext;

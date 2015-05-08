@@ -17,6 +17,16 @@
 
 package org.apache.solr.handler;
 
+import javax.xml.stream.XMLInputFactory;
+import javax.xml.stream.XMLStreamConstants;
+import javax.xml.stream.XMLStreamException;
+import javax.xml.stream.XMLStreamReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Collection;
+import java.util.Iterator;
+import java.util.Set;
+
 import org.apache.commons.io.IOUtils;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.util.BytesRef;
@@ -39,18 +49,12 @@ import org.apache.solr.util.EmptyEntityResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.xml.stream.XMLInputFactory;
-import javax.xml.stream.XMLStreamConstants;
-import javax.xml.stream.XMLStreamException;
-import javax.xml.stream.XMLStreamReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.*;
+import static org.apache.solr.common.params.CommonParams.NAME;
 
 /**
  * An analysis handler that provides a breakdown of the analysis process of provided documents. This handler expects a
  * (single) content stream of the following format:
- * <p/>
+ * <br>
  * <pre><code>
  *  &lt;docs&gt;
  *      &lt;doc&gt;
@@ -63,12 +67,10 @@ import java.util.*;
  *      ...
  *  &lt;/docs&gt;
  * </code></pre>
- * <p/>
+ * <br>
  * <em><b>Note: Each document must contain a field which serves as the unique key. This key is used in the returned
  * response to associate an analysis breakdown to the analyzed document.</b></em>
- * <p/>
- * <p/>
- * <p/>
+ * <p>
  * Like the {@link org.apache.solr.handler.FieldAnalysisRequestHandler}, this handler also supports query analysis by
  * sending either an "analysis.query" or "q" request parameter that holds the query text to be analyzed. It also
  * supports the "analysis.showmatch" parameter which when set to {@code true}, all field tokens that match the query
@@ -313,7 +315,7 @@ public class DocumentAnalysisRequestHandler extends AnalysisRequestHandlerBase {
 
           for (int i = 0; i < reader.getAttributeCount(); i++) {
             String attrName = reader.getAttributeLocalName(i);
-            if ("name".equals(attrName)) {
+            if (NAME.equals(attrName)) {
               fieldName = reader.getAttributeValue(i);
             }
           }

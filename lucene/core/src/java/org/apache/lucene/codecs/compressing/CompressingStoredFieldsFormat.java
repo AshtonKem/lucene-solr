@@ -23,7 +23,6 @@ import org.apache.lucene.codecs.CodecUtil;
 import org.apache.lucene.codecs.StoredFieldsFormat;
 import org.apache.lucene.codecs.StoredFieldsReader;
 import org.apache.lucene.codecs.StoredFieldsWriter;
-import org.apache.lucene.codecs.lucene40.Lucene40StoredFieldsFormat;
 import org.apache.lucene.index.FieldInfos;
 import org.apache.lucene.index.MergePolicy;
 import org.apache.lucene.index.SegmentInfo;
@@ -32,14 +31,12 @@ import org.apache.lucene.store.IOContext;
 
 
 /**
- * A {@link StoredFieldsFormat} that is very similar to
- * {@link Lucene40StoredFieldsFormat} but compresses documents in chunks in
+ * A {@link StoredFieldsFormat} that compresses documents in chunks in
  * order to improve the compression ratio.
  * <p>
  * For a chunk size of <tt>chunkSize</tt> bytes, this {@link StoredFieldsFormat}
  * does not support documents larger than (<tt>2<sup>31</sup> - chunkSize</tt>)
- * bytes. In case this is a problem, you should use another format, such as
- * {@link Lucene40StoredFieldsFormat}.
+ * bytes.
  * <p>
  * For optimal performance, you should use a {@link MergePolicy} that returns
  * segments that have the biggest byte size first.
@@ -51,15 +48,17 @@ public class CompressingStoredFieldsFormat extends StoredFieldsFormat {
   private final String segmentSuffix;
   private final CompressionMode compressionMode;
   private final int chunkSize;
+  private final int maxDocsPerChunk;
+  private final int blockSize;
 
   /**
    * Create a new {@link CompressingStoredFieldsFormat} with an empty segment 
    * suffix.
    * 
-   * @see CompressingStoredFieldsFormat#CompressingStoredFieldsFormat(String, String, CompressionMode, int)
+   * @see CompressingStoredFieldsFormat#CompressingStoredFieldsFormat(String, String, CompressionMode, int, int, int)
    */
-  public CompressingStoredFieldsFormat(String formatName, CompressionMode compressionMode, int chunkSize) {
-    this(formatName, "", compressionMode, chunkSize);
+  public CompressingStoredFieldsFormat(String formatName, CompressionMode compressionMode, int chunkSize, int maxDocsPerChunk, int blockSize) {
+    this(formatName, "", compressionMode, chunkSize, maxDocsPerChunk, blockSize);
   }
   
   /**
@@ -67,7 +66,7 @@ public class CompressingStoredFieldsFormat extends StoredFieldsFormat {
    * <p>
    * <code>formatName</code> is the name of the format. This name will be used
    * in the file formats to perform
-   * {@link CodecUtil#checkHeader(org.apache.lucene.store.DataInput, String, int, int) codec header checks}.
+   * {@link CodecUtil#checkIndexHeader codec header checks}.
    * <p>
    * <code>segmentSuffix</code> is the segment suffix. This suffix is added to 
    * the result file name only if it's not the empty string.
@@ -81,9 +80,9 @@ public class CompressingStoredFieldsFormat extends StoredFieldsFormat {
    * <p>
    * <code>chunkSize</code> is the minimum byte size of a chunk of documents.
    * A value of <code>1</code> can make sense if there is redundancy across
-   * fields. In that case, both performance and compression ratio should be
-   * better than with {@link Lucene40StoredFieldsFormat} with compressed
    * fields.
+   * <code>maxDocsPerChunk</code> is an upperbound on how many docs may be stored
+   * in a single chunk. This is to bound the cpu costs for highly compressible data.
    * <p>
    * Higher values of <code>chunkSize</code> should improve the compression
    * ratio but will require more memory at indexing time and might make document
@@ -93,10 +92,12 @@ public class CompressingStoredFieldsFormat extends StoredFieldsFormat {
    * @param formatName the name of the {@link StoredFieldsFormat}
    * @param compressionMode the {@link CompressionMode} to use
    * @param chunkSize the minimum number of bytes of a single chunk of stored documents
+   * @param maxDocsPerChunk the maximum number of documents in a single chunk
+   * @param blockSize the number of chunks to store in an index block
    * @see CompressionMode
    */
   public CompressingStoredFieldsFormat(String formatName, String segmentSuffix, 
-                                       CompressionMode compressionMode, int chunkSize) {
+                                       CompressionMode compressionMode, int chunkSize, int maxDocsPerChunk, int blockSize) {
     this.formatName = formatName;
     this.segmentSuffix = segmentSuffix;
     this.compressionMode = compressionMode;
@@ -104,7 +105,14 @@ public class CompressingStoredFieldsFormat extends StoredFieldsFormat {
       throw new IllegalArgumentException("chunkSize must be >= 1");
     }
     this.chunkSize = chunkSize;
-    
+    if (maxDocsPerChunk < 1) {
+      throw new IllegalArgumentException("maxDocsPerChunk must be >= 1");
+    }
+    this.maxDocsPerChunk = maxDocsPerChunk;
+    if (blockSize < 1) {
+      throw new IllegalArgumentException("blockSize must be >= 1");
+    }
+    this.blockSize = blockSize;
   }
 
   @Override
@@ -118,13 +126,13 @@ public class CompressingStoredFieldsFormat extends StoredFieldsFormat {
   public StoredFieldsWriter fieldsWriter(Directory directory, SegmentInfo si,
       IOContext context) throws IOException {
     return new CompressingStoredFieldsWriter(directory, si, segmentSuffix, context,
-        formatName, compressionMode, chunkSize);
+        formatName, compressionMode, chunkSize, maxDocsPerChunk, blockSize);
   }
 
   @Override
   public String toString() {
     return getClass().getSimpleName() + "(compressionMode=" + compressionMode
-        + ", chunkSize=" + chunkSize + ")";
+        + ", chunkSize=" + chunkSize + ", maxDocsPerChunk=" + maxDocsPerChunk + ", blockSize=" + blockSize + ")";
   }
 
 }

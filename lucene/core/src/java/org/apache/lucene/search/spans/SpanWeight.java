@@ -17,34 +17,40 @@ package org.apache.lucene.search.spans;
  * limitations under the License.
  */
 
-import org.apache.lucene.index.AtomicReaderContext;
-import org.apache.lucene.index.IndexReaderContext;
-import org.apache.lucene.index.Term;
-import org.apache.lucene.index.TermContext;
-import org.apache.lucene.search.*;
-import org.apache.lucene.search.similarities.Similarity;
-import org.apache.lucene.search.similarities.Similarity.SimScorer;
-import org.apache.lucene.util.Bits;
-
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeSet;
+
+import org.apache.lucene.index.IndexReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.index.TermContext;
+import org.apache.lucene.index.Terms;
+import org.apache.lucene.search.Explanation;
+import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.Scorer;
+import org.apache.lucene.search.TermStatistics;
+import org.apache.lucene.search.Weight;
+import org.apache.lucene.search.similarities.Similarity;
+import org.apache.lucene.search.similarities.Similarity.SimScorer;
+import org.apache.lucene.util.Bits;
 
 /**
  * Expert-only.  Public for use by other weight implementations
  */
 public class SpanWeight extends Weight {
-  protected Similarity similarity;
-  protected Map<Term,TermContext> termContexts;
-  protected SpanQuery query;
+  protected final Similarity similarity;
+  protected final Map<Term,TermContext> termContexts;
+  protected final SpanQuery query;
   protected Similarity.SimWeight stats;
 
-  public SpanWeight(SpanQuery query, IndexSearcher searcher)
-    throws IOException {
+  public SpanWeight(SpanQuery query, IndexSearcher searcher) throws IOException {
+    super(query);
     this.similarity = searcher.getSimilarity();
     this.query = query;
-    
+
     termContexts = new HashMap<>();
     TreeSet<Term> terms = new TreeSet<>();
     query.extractTerms(terms);
@@ -59,14 +65,16 @@ public class SpanWeight extends Weight {
     }
     final String field = query.getField();
     if (field != null) {
-      stats = similarity.computeWeight(query.getBoost(), 
-                                       searcher.collectionStatistics(query.getField()), 
+      stats = similarity.computeWeight(query.getBoost(),
+                                       searcher.collectionStatistics(query.getField()),
                                        termStats);
     }
   }
 
   @Override
-  public Query getQuery() { return query; }
+  public void extractTerms(Set<Term> terms) {
+    query.extractTerms(terms);
+  }
 
   @Override
   public float getValueForNormalization() throws IOException {
@@ -81,32 +89,34 @@ public class SpanWeight extends Weight {
   }
 
   @Override
-  public Scorer scorer(AtomicReaderContext context, Bits acceptDocs) throws IOException {
+  public Scorer scorer(LeafReaderContext context, Bits acceptDocs) throws IOException {
     if (stats == null) {
       return null;
-    } else {
-      return new SpanScorer(query.getSpans(context, acceptDocs, termContexts), this, similarity.simScorer(stats, context));
     }
+    Terms terms = context.reader().terms(query.getField());
+    if (terms != null && terms.hasPositions() == false) {
+      throw new IllegalStateException("field \"" + query.getField() + "\" was indexed without position data; cannot run SpanQuery (query=" + query + ")");
+    }
+    Spans spans = query.getSpans(context, acceptDocs, termContexts);
+    return (spans == null) ? null : new SpanScorer(spans, this, similarity.simScorer(stats, context));
   }
 
   @Override
-  public Explanation explain(AtomicReaderContext context, int doc) throws IOException {
+  public Explanation explain(LeafReaderContext context, int doc) throws IOException {
     SpanScorer scorer = (SpanScorer) scorer(context, context.reader().getLiveDocs());
     if (scorer != null) {
       int newDoc = scorer.advance(doc);
       if (newDoc == doc) {
         float freq = scorer.sloppyFreq();
         SimScorer docScorer = similarity.simScorer(stats, context);
-        ComplexExplanation result = new ComplexExplanation();
-        result.setDescription("weight("+getQuery()+" in "+doc+") [" + similarity.getClass().getSimpleName() + "], result of:");
-        Explanation scoreExplanation = docScorer.explain(doc, new Explanation(freq, "phraseFreq=" + freq));
-        result.addDetail(scoreExplanation);
-        result.setValue(scoreExplanation.getValue());
-        result.setMatch(true);          
-        return result;
+        Explanation freqExplanation = Explanation.match(freq, "phraseFreq=" + freq);
+        Explanation scoreExplanation = docScorer.explain(doc, freqExplanation);
+        return Explanation.match(scoreExplanation.getValue(),
+            "weight("+getQuery()+" in "+doc+") [" + similarity.getClass().getSimpleName() + "], result of:",
+            scoreExplanation);
       }
     }
-    
-    return new ComplexExplanation(false, 0.0f, "no matching term");
+
+    return Explanation.noMatch("no matching term");
   }
 }

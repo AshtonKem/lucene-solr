@@ -21,9 +21,11 @@ import com.spatial4j.core.context.SpatialContext;
 import com.spatial4j.core.distance.DistanceUtils;
 import com.spatial4j.core.shape.Point;
 import com.spatial4j.core.shape.Shape;
+
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.IntField;
+import org.apache.lucene.document.NumericDocValuesField;
 import org.apache.lucene.document.StoredField;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexReader;
@@ -32,6 +34,7 @@ import org.apache.lucene.index.IndexWriterConfig;
 import org.apache.lucene.index.StoredDocument;
 import org.apache.lucene.queries.function.ValueSource;
 import org.apache.lucene.search.Filter;
+import org.apache.lucene.search.FilteredQuery;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.Sort;
@@ -122,7 +125,8 @@ public class SpatialExample extends LuceneTestCase {
 
   private Document newSampleDocument(int id, Shape... shapes) {
     Document doc = new Document();
-    doc.add(new IntField("id", id, Field.Store.YES));
+    doc.add(new StoredField("id", id));
+    doc.add(new NumericDocValuesField("id", id));
     //Potentially more than one shape in this field is supported by some
     // strategies; see the javadocs of the SpatialStrategy impl to see.
     for (Shape shape : shapes) {
@@ -150,7 +154,7 @@ public class SpatialExample extends LuceneTestCase {
       SpatialArgs args = new SpatialArgs(SpatialOperation.Intersects,
           ctx.makeCircle(-80.0, 33.0, DistanceUtils.dist2Degrees(200, DistanceUtils.EARTH_MEAN_RADIUS_KM)));
       Filter filter = strategy.makeFilter(args);
-      TopDocs docs = indexSearcher.search(new MatchAllDocsQuery(), filter, 10, idSort);
+      TopDocs docs = indexSearcher.search(new FilteredQuery(new MatchAllDocsQuery(), filter), 10, idSort);
       assertDocMatchedIds(indexSearcher, docs, 2);
       //Now, lets get the distance for the 1st doc via computing from stored point value:
       // (this computation is usually not redundant)

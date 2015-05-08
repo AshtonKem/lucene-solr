@@ -18,21 +18,20 @@ package org.apache.lucene.expressions;
  */
 
 import java.io.IOException;
-import java.util.Collection;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.lucene.index.AtomicReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.ReaderUtil;
 import org.apache.lucene.queries.function.ValueSource;
 import org.apache.lucene.search.Explanation;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Rescorer;
-import org.apache.lucene.search.Scorer;
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.SortRescorer;
-import org.apache.lucene.search.Weight;
 
 /**
  * A {@link Rescorer} that uses an expression to re-score
@@ -58,63 +57,13 @@ class ExpressionRescorer extends SortRescorer {
     this.bindings = bindings;
   }
 
-  private static class FakeScorer extends Scorer {
-    float score;
-    int doc = -1;
-    int freq = 1;
-
-    public FakeScorer() {
-      super(null);
-    }
-    
-    @Override
-    public int advance(int target) {
-      throw new UnsupportedOperationException("FakeScorer doesn't support advance(int)");
-    }
-
-    @Override
-    public int docID() {
-      return doc;
-    }
-
-    @Override
-    public int freq() {
-      return freq;
-    }
-
-    @Override
-    public int nextDoc() {
-      throw new UnsupportedOperationException("FakeScorer doesn't support nextDoc()");
-    }
-    
-    @Override
-    public float score() {
-      return score;
-    }
-
-    @Override
-    public long cost() {
-      return 1;
-    }
-
-    @Override
-    public Weight getWeight() {
-      throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public Collection<ChildScorer> getChildren() {
-      throw new UnsupportedOperationException();
-    }
-  }
-
   @Override
   public Explanation explain(IndexSearcher searcher, Explanation firstPassExplanation, int docID) throws IOException {
-    Explanation result = super.explain(searcher, firstPassExplanation, docID);
+    Explanation superExpl = super.explain(searcher, firstPassExplanation, docID);
 
-    List<AtomicReaderContext> leaves = searcher.getIndexReader().leaves();
+    List<LeafReaderContext> leaves = searcher.getIndexReader().leaves();
     int subReader = ReaderUtil.subIndex(docID, leaves);
-    AtomicReaderContext readerContext = leaves.get(subReader);
+    LeafReaderContext readerContext = leaves.get(subReader);
     int docIDInSegment = docID - readerContext.docBase;
     Map<String,Object> context = new HashMap<>();
 
@@ -124,11 +73,12 @@ class ExpressionRescorer extends SortRescorer {
 
     context.put("scorer", fakeScorer);
 
+    List<Explanation> subs = new ArrayList<>(Arrays.asList(superExpl.getDetails()));
     for(String variable : expression.variables) {
-      result.addDetail(new Explanation((float) bindings.getValueSource(variable).getValues(context, readerContext).doubleVal(docIDInSegment),
+      subs.add(Explanation.match((float) bindings.getValueSource(variable).getValues(context, readerContext).doubleVal(docIDInSegment),
                                        "variable \"" + variable + "\""));
     }
 
-    return result;
+    return Explanation.match(superExpl.getValue(), superExpl.getDescription(), subs);
   }
 }

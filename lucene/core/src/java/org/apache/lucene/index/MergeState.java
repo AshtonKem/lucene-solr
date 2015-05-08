@@ -17,9 +17,14 @@ package org.apache.lucene.index;
  * limitations under the License.
  */
 
+import java.io.IOException;
 import java.util.List;
 
-import org.apache.lucene.store.Directory;
+import org.apache.lucene.codecs.DocValuesProducer;
+import org.apache.lucene.codecs.FieldsProducer;
+import org.apache.lucene.codecs.NormsProducer;
+import org.apache.lucene.codecs.StoredFieldsReader;
+import org.apache.lucene.codecs.TermVectorsReader;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.InfoStream;
 import org.apache.lucene.util.packed.PackedInts;
@@ -29,6 +34,113 @@ import org.apache.lucene.util.packed.PackedLongValues;
  *
  * @lucene.experimental */
 public class MergeState {
+
+  /** {@link SegmentInfo} of the newly merged segment. */
+  public final SegmentInfo segmentInfo;
+
+  /** {@link FieldInfos} of the newly merged segment. */
+  public FieldInfos mergeFieldInfos;
+
+  /** Stored field producers being merged */
+  public final StoredFieldsReader[] storedFieldsReaders;
+
+  /** Term vector producers being merged */
+  public final TermVectorsReader[] termVectorsReaders;
+
+  /** Norms producers being merged */
+  public final NormsProducer[] normsProducers;
+
+  /** DocValues producers being merged */
+  public final DocValuesProducer[] docValuesProducers;
+
+  /** FieldInfos being merged */
+  public final FieldInfos[] fieldInfos;
+
+  /** Live docs for each reader */
+  public final Bits[] liveDocs;
+
+  /** Maps docIDs around deletions. */
+  public final DocMap[] docMaps;
+
+  /** Postings to merge */
+  public final FieldsProducer[] fieldsProducers;
+
+  /** New docID base per reader. */
+  public final int[] docBase;
+
+  /** Max docs per reader */
+  public final int[] maxDocs;
+
+  /** InfoStream for debugging messages. */
+  public final InfoStream infoStream;
+
+  /** Sole constructor. */
+  MergeState(List<CodecReader> readers, SegmentInfo segmentInfo, InfoStream infoStream) throws IOException {
+
+    int numReaders = readers.size();
+    docMaps = new DocMap[numReaders];
+    docBase = new int[numReaders];
+    maxDocs = new int[numReaders];
+    fieldsProducers = new FieldsProducer[numReaders];
+    normsProducers = new NormsProducer[numReaders];
+    storedFieldsReaders = new StoredFieldsReader[numReaders];
+    termVectorsReaders = new TermVectorsReader[numReaders];
+    docValuesProducers = new DocValuesProducer[numReaders];
+    fieldInfos = new FieldInfos[numReaders];
+    liveDocs = new Bits[numReaders];
+
+    for(int i=0;i<numReaders;i++) {
+      final CodecReader reader = readers.get(i);
+
+      maxDocs[i] = reader.maxDoc();
+      liveDocs[i] = reader.getLiveDocs();
+      fieldInfos[i] = reader.getFieldInfos();
+
+      normsProducers[i] = reader.getNormsReader();
+      if (normsProducers[i] != null) {
+        normsProducers[i] = normsProducers[i].getMergeInstance();
+      }
+      
+      docValuesProducers[i] = reader.getDocValuesReader();
+      if (docValuesProducers[i] != null) {
+        docValuesProducers[i] = docValuesProducers[i].getMergeInstance();
+      }
+      
+      storedFieldsReaders[i] = reader.getFieldsReader();
+      if (storedFieldsReaders[i] != null) {
+        storedFieldsReaders[i] = storedFieldsReaders[i].getMergeInstance();
+      }
+      
+      termVectorsReaders[i] = reader.getTermVectorsReader();
+      if (termVectorsReaders[i] != null) {
+        termVectorsReaders[i] = termVectorsReaders[i].getMergeInstance();
+      }
+      
+      fieldsProducers[i] = reader.getPostingsReader().getMergeInstance();
+    }
+
+    this.segmentInfo = segmentInfo;
+    this.infoStream = infoStream;
+
+    setDocMaps(readers);
+  }
+
+  // NOTE: removes any "all deleted" readers from mergeState.readers
+  private void setDocMaps(List<CodecReader> readers) throws IOException {
+    final int numReaders = maxDocs.length;
+
+    // Remap docIDs
+    int docBase = 0;
+    for(int i=0;i<numReaders;i++) {
+      final CodecReader reader = readers.get(i);
+      this.docBase[i] = docBase;
+      final DocMap docMap = DocMap.build(reader);
+      docMaps[i] = docMap;
+      docBase += docMap.numDocs();
+    }
+
+    segmentInfo.setMaxDoc(docBase);
+  }
 
   /**
    * Remaps docids around deletes during merge
@@ -59,7 +171,7 @@ public class MergeState {
 
     /** Creates a {@link DocMap} instance appropriate for
      *  this reader. */
-    public static DocMap build(AtomicReader reader) {
+    public static DocMap build(CodecReader reader) {
       final int maxDoc = reader.maxDoc();
       if (!reader.hasDeletions()) {
         return new NoDelDocMap(maxDoc);
@@ -100,10 +212,8 @@ public class MergeState {
         public int numDeletedDocs() {
           return numDeletedDocs;
         }
-
       };
     }
-
   }
 
   private static final class NoDelDocMap extends DocMap {
@@ -128,90 +238,5 @@ public class MergeState {
     public int numDeletedDocs() {
       return 0;
     }
-  }
-
-  /** {@link SegmentInfo} of the newly merged segment. */
-  public final SegmentInfo segmentInfo;
-
-  /** {@link FieldInfos} of the newly merged segment. */
-  public FieldInfos fieldInfos;
-
-  /** Readers being merged. */
-  public final List<AtomicReader> readers;
-
-  /** Maps docIDs around deletions. */
-  public DocMap[] docMaps;
-
-  /** New docID base per reader. */
-  public int[] docBase;
-
-  /** Holds the CheckAbort instance, which is invoked
-   *  periodically to see if the merge has been aborted. */
-  public final CheckAbort checkAbort;
-
-  /** InfoStream for debugging messages. */
-  public final InfoStream infoStream;
-
-  /** Counter used for periodic calls to checkAbort
-   * @lucene.internal */
-  public int checkAbortCount;
-
-  // TODO: get rid of this? it tells you which segments are 'aligned' (e.g. for bulk merging)
-  // but is this really so expensive to compute again in different components, versus once in SM?
-
-  /** {@link SegmentReader}s that have identical field
-   * name/number mapping, so their stored fields and term
-   * vectors may be bulk merged. */
-  public SegmentReader[] matchingSegmentReaders;
-
-  /** How many {@link #matchingSegmentReaders} are set. */
-  public int matchedCount;
-
-  /** Sole constructor. */
-  MergeState(List<AtomicReader> readers, SegmentInfo segmentInfo, InfoStream infoStream, CheckAbort checkAbort) {
-    this.readers = readers;
-    this.segmentInfo = segmentInfo;
-    this.infoStream = infoStream;
-    this.checkAbort = checkAbort;
-  }
-
-  /**
-   * Class for recording units of work when merging segments.
-   */
-  public static class CheckAbort {
-    private double workCount;
-    private final MergePolicy.OneMerge merge;
-    private final Directory dir;
-
-    /** Creates a #CheckAbort instance. */
-    public CheckAbort(MergePolicy.OneMerge merge, Directory dir) {
-      this.merge = merge;
-      this.dir = dir;
-    }
-
-    /**
-     * Records the fact that roughly units amount of work
-     * have been done since this method was last called.
-     * When adding time-consuming code into SegmentMerger,
-     * you should test different values for units to ensure
-     * that the time in between calls to merge.checkAborted
-     * is up to ~ 1 second.
-     */
-    public void work(double units) throws MergePolicy.MergeAbortedException {
-      workCount += units;
-      if (workCount >= 10000.0) {
-        merge.checkAborted(dir);
-        workCount = 0;
-      }
-    }
-
-    /** If you use this: IW.close(false) cannot abort your merge!
-     * @lucene.internal */
-    static final MergeState.CheckAbort NONE = new MergeState.CheckAbort(null, null) {
-      @Override
-      public void work(double units) {
-        // do nothing
-      }
-    };
   }
 }

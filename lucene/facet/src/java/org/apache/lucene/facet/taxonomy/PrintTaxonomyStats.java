@@ -17,14 +17,15 @@ package org.apache.lucene.facet.taxonomy;
  * limitations under the License.
  */
 
-import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
+import java.nio.file.Paths;
 
 import org.apache.lucene.facet.taxonomy.TaxonomyReader.ChildrenIterator;
 import org.apache.lucene.facet.taxonomy.directory.DirectoryTaxonomyReader;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
+import org.apache.lucene.util.SuppressForbidden;
 
 /** Prints how many ords are under each dimension. */
 
@@ -36,6 +37,7 @@ public class PrintTaxonomyStats {
   }
 
   /** Command-line tool. */
+  @SuppressForbidden(reason = "System.out required: command line tool")
   public static void main(String[] args) throws IOException {
     boolean printTree = false;
     String path = null;
@@ -50,7 +52,7 @@ public class PrintTaxonomyStats {
       System.out.println("\nUsage: java -classpath ... org.apache.lucene.facet.util.PrintTaxonomyStats [-printTree] /path/to/taxononmy/index\n");
       System.exit(1);
     }
-    Directory dir = FSDirectory.open(new File(path));
+    Directory dir = FSDirectory.open(Paths.get(path));
     TaxonomyReader r = new DirectoryTaxonomyReader(dir);
     printStats(r, System.out, printTree);
     r.close();

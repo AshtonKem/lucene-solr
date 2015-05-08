@@ -19,17 +19,17 @@ package org.apache.lucene.util;
 
 import java.io.BufferedReader;
 import java.io.Closeable;
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.RandomAccessFile;
 import java.nio.channels.Channels;
-import java.nio.channels.FileChannel;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.GZIPInputStream;
@@ -38,9 +38,11 @@ import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
 import org.apache.lucene.document.IntField;
+import org.apache.lucene.document.NumericDocValuesField;
 import org.apache.lucene.document.SortedDocValuesField;
 import org.apache.lucene.document.StringField;
 import org.apache.lucene.document.TextField;
+import org.apache.lucene.index.IndexOptions;
 
 /** Minimal port of benchmark's LneDocSource +
  * DocMaker, so tests can enum docs from a line file created
@@ -71,10 +73,8 @@ public class LineFileDocs implements Closeable {
 
   @Override
   public synchronized void close() throws IOException {
-    if (reader != null) {
-      reader.close();
-      reader = null;
-    }
+    IOUtils.close(reader, threadDocs);
+    reader = null;
   }
   
   private long randomSeekPos(Random random, long size) {
@@ -88,16 +88,16 @@ public class LineFileDocs implements Closeable {
     boolean needSkip = true;
     long size = 0L, seekTo = 0L;
     if (is == null) {
-      // if its not in classpath, we load it as absolute filesystem path (e.g. Hudson's home dir)
-      File file = new File(path);
-      size = file.length();
+      // if it's not in classpath, we load it as absolute filesystem path (e.g. Hudson's home dir)
+      Path file = Paths.get(path);
+      size = Files.size(file);
       if (path.endsWith(".gz")) {
         // if it is a gzip file, we need to use InputStream and slowly skipTo:
-        is = new FileInputStream(file);
+        is = Files.newInputStream(file);
       } else {
-        // optimized seek using RandomAccessFile:
+        // optimized seek using SeekableByteChannel
         seekTo = randomSeekPos(random, size);
-        final FileChannel channel = new RandomAccessFile(path, "r").getChannel();
+        final SeekableByteChannel channel = Files.newByteChannel(file);
         if (LuceneTestCase.VERBOSE) {
           System.out.println("TEST: LineFileDocs: file seek to fp=" + seekTo + " on open");
         }
@@ -146,7 +146,8 @@ public class LineFileDocs implements Closeable {
   }
 
   public synchronized void reset(Random random) throws IOException {
-    close();
+    reader.close();
+    reader = null;
     open(random);
     id.set(0);
   }
@@ -161,6 +162,7 @@ public class LineFileDocs implements Closeable {
     final Field body;
     final Field id;
     final Field idNum;
+    final Field idNumDV;
     final Field date;
 
     public DocState(boolean useDocValues) {
@@ -170,6 +172,7 @@ public class LineFileDocs implements Closeable {
       doc.add(title);
 
       FieldType ft = new FieldType(TextField.TYPE_STORED);
+      ft.setIndexOptions(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS);
       ft.setStoreTermVectors(true);
       ft.setStoreTermVectorOffsets(true);
       ft.setStoreTermVectorPositions(true);
@@ -191,14 +194,17 @@ public class LineFileDocs implements Closeable {
 
       if (useDocValues) {
         titleDV = new SortedDocValuesField("titleDV", new BytesRef());
+        idNumDV = new NumericDocValuesField("docid_intDV", 0);
         doc.add(titleDV);
+        doc.add(idNumDV);
       } else {
         titleDV = null;
+        idNumDV = null;
       }
     }
   }
 
-  private final ThreadLocal<DocState> threadDocs = new ThreadLocal<>();
+  private final CloseableThreadLocal<DocState> threadDocs = new CloseableThreadLocal<>();
 
   /** Note: Document instance is re-used per-thread */
   public Document nextDoc() throws IOException {
@@ -210,7 +216,8 @@ public class LineFileDocs implements Closeable {
         if (LuceneTestCase.VERBOSE) {
           System.out.println("TEST: LineFileDocs: now rewind file...");
         }
-        close();
+        reader.close();
+        reader = null;
         open(null);
         line = reader.readLine();
       }
@@ -242,6 +249,9 @@ public class LineFileDocs implements Closeable {
     final int i = id.getAndIncrement();
     docState.id.setStringValue(Integer.toString(i));
     docState.idNum.setIntValue(i);
+    if (docState.idNumDV != null) {
+      docState.idNumDV.setLongValue(i);
+    }
     return docState.doc;
   }
 }

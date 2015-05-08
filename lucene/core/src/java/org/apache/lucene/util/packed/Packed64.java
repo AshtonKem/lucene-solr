@@ -27,7 +27,7 @@ import org.apache.lucene.util.RamUsageEstimator;
  * Space optimized random access capable array of values with a fixed number of
  * bits/value. Values are packed contiguously.
  * </p><p>
- * The implementation strives to perform af fast as possible under the
+ * The implementation strives to perform as fast as possible under the
  * constraint of contiguous bits, by avoiding expensive operations. This comes
  * at the cost of code clarity.
  * </p><p>
@@ -238,8 +238,8 @@ class Packed64 extends PackedInts.MutableImpl {
 
   @Override
   public String toString() {
-    return "Packed64(bitsPerValue=" + bitsPerValue + ", size="
-            + size() + ", elements.length=" + blocks.length + ")";
+    return "Packed64(bitsPerValue=" + bitsPerValue + ",size="
+            + size() + ",blocks=" + blocks.length + ")";
   }
 
   @Override

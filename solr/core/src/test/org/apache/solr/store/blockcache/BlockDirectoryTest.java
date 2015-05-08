@@ -22,27 +22,27 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.Random;
 
-import org.apache.commons.io.FileUtils;
+import com.github.benmanes.caffeine.cache.Caffeine;
+
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.store.IndexOutput;
 import org.apache.lucene.store.MergeInfo;
-import org.apache.lucene.util.LuceneTestCase;
-
+import org.apache.lucene.util.IOUtils;
 import org.apache.solr.SolrTestCaseJ4;
-import org.apache.solr.store.hdfs.HdfsDirectory;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
-import com.googlecode.concurrentlinkedhashmap.ConcurrentLinkedHashMap;
-
 public class BlockDirectoryTest extends SolrTestCaseJ4 {
 
   private class MapperCache implements Cache {
-    public Map<String, byte[]> map = new ConcurrentLinkedHashMap.Builder<String, byte[]>().maximumWeightedCapacity(8).build();
+    public Map<String, byte[]> map = Caffeine.newBuilder()
+        .maximumSize(8)
+        .<String, byte[]>build()
+        .asMap();
 
     @Override
     public void update(String name, long blockId, int blockOffset, byte[] buffer, int offset, int length) {
@@ -89,6 +89,9 @@ public class BlockDirectoryTest extends SolrTestCaseJ4 {
     @Override
     public void renameCacheFile(String source, String dest) {
     }
+
+    @Override
+    public void releaseResources() {}
   }
 
   private static final int MAX_NUMBER_OF_WRITES = 10000;
@@ -105,8 +108,8 @@ public class BlockDirectoryTest extends SolrTestCaseJ4 {
   @Before
   public void setUp() throws Exception {
     super.setUp();
-    file = createTempDir();
-    FSDirectory dir = FSDirectory.open(new File(file, "base"));
+    file = createTempDir().toFile();
+    FSDirectory dir = FSDirectory.open(new File(file, "base").toPath());
     mapperCache = new MapperCache();
     directory = new BlockDirectory("test", dir, mapperCache, null, true, true);
     random = random();
@@ -120,7 +123,7 @@ public class BlockDirectoryTest extends SolrTestCaseJ4 {
 
   @Test
   public void testEOF() throws IOException {
-    Directory fsDir = FSDirectory.open(new File(file, "normal"));
+    Directory fsDir = FSDirectory.open(new File(file, "normal").toPath());
     String name = "test.eof";
     createFile(name, fsDir, directory);
     long fsLength = fsDir.fileLength(name);
@@ -152,7 +155,7 @@ public class BlockDirectoryTest extends SolrTestCaseJ4 {
     int i = 0;
     try {
       for (; i < 10; i++) {
-        Directory fsDir = FSDirectory.open(new File(file, "normal"));
+        Directory fsDir = FSDirectory.open(new File(file, "normal").toPath());
         String name = getName();
         createFile(name, fsDir, directory);
         assertInputsEquals(name, fsDir, directory);
@@ -167,7 +170,10 @@ public class BlockDirectoryTest extends SolrTestCaseJ4 {
 
   @Test
   public void testRandomAccessWritesLargeCache() throws IOException {
-    mapperCache.map = new ConcurrentLinkedHashMap.Builder<String, byte[]>().maximumWeightedCapacity(10000).build();
+    mapperCache.map = Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .<String, byte[]>build()
+        .asMap();
     testRandomAccessWrites();
   }
 
@@ -233,15 +239,12 @@ public class BlockDirectoryTest extends SolrTestCaseJ4 {
   }
 
   public static void rm(File file) {
-    if (!file.exists()) {
-      return;
+    try {
+      IOUtils.rm(file.toPath());
+    } catch (Throwable ignored) {
+      // TODO: should this class care if a file couldnt be deleted?
+      // this just emulates previous behavior, where only SecurityException would be handled.
     }
-    if (file.isDirectory()) {
-      for (File f : file.listFiles()) {
-        rm(f);
-      }
-    }
-    file.delete();
   }
 
   /**

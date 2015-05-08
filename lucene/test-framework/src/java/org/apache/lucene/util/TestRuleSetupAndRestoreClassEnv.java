@@ -20,10 +20,8 @@ package org.apache.lucene.util;
 import java.io.PrintStream;
 import java.util.Arrays;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.TimeZone;
@@ -32,16 +30,12 @@ import org.apache.lucene.codecs.Codec;
 import org.apache.lucene.codecs.DocValuesFormat;
 import org.apache.lucene.codecs.PostingsFormat;
 import org.apache.lucene.codecs.asserting.AssertingCodec;
+import org.apache.lucene.codecs.asserting.AssertingDocValuesFormat;
+import org.apache.lucene.codecs.asserting.AssertingPostingsFormat;
 import org.apache.lucene.codecs.cheapbastard.CheapBastardCodec;
 import org.apache.lucene.codecs.compressing.CompressingCodec;
-import org.apache.lucene.codecs.lucene40.Lucene40RWCodec;
-import org.apache.lucene.codecs.lucene40.Lucene40RWPostingsFormat;
-import org.apache.lucene.codecs.lucene41.Lucene41RWCodec;
-import org.apache.lucene.codecs.lucene410.Lucene410Codec;
-import org.apache.lucene.codecs.lucene42.Lucene42RWCodec;
-import org.apache.lucene.codecs.lucene45.Lucene45RWCodec;
-import org.apache.lucene.codecs.lucene46.Lucene46RWCodec;
-import org.apache.lucene.codecs.lucene49.Lucene49RWCodec;
+import org.apache.lucene.codecs.lucene50.Lucene50Codec;
+import org.apache.lucene.codecs.lucene50.Lucene50StoredFieldsFormat;
 import org.apache.lucene.codecs.mockrandom.MockRandomPostingsFormat;
 import org.apache.lucene.codecs.simpletext.SimpleTextCodec;
 import org.apache.lucene.index.RandomCodec;
@@ -50,7 +44,9 @@ import org.apache.lucene.search.similarities.DefaultSimilarity;
 import org.apache.lucene.search.similarities.Similarity;
 import org.apache.lucene.util.LuceneTestCase.SuppressCodecs;
 import org.junit.internal.AssumptionViolatedException;
+
 import com.carrotsearch.randomizedtesting.RandomizedContext;
+import com.carrotsearch.randomizedtesting.generators.RandomPicks;
 
 import static org.apache.lucene.util.LuceneTestCase.INFOSTREAM;
 import static org.apache.lucene.util.LuceneTestCase.LiveIWCFlushMode;
@@ -69,11 +65,6 @@ import static org.apache.lucene.util.LuceneTestCase.randomTimeZone;
  * doesn't fit anywhere else).
  */
 final class TestRuleSetupAndRestoreClassEnv extends AbstractBeforeAfterRule {
-  /**
-   * Restore these system property values.
-   */
-  private HashMap<String, String> restoreProperties = new HashMap<>();
-
   private Codec savedCodec;
   private Locale savedLocale;
   private TimeZone savedTimeZone;
@@ -114,29 +105,18 @@ final class TestRuleSetupAndRestoreClassEnv extends AbstractBeforeAfterRule {
 
   @Override
   protected void before() throws Exception {
-    // enable this by default, for IDE consistency with ant tests (as its the default from ant)
+    // enable this by default, for IDE consistency with ant tests (as it's the default from ant)
     // TODO: really should be in solr base classes, but some extend LTC directly.
     // we do this in beforeClass, because some tests currently disable it
-    restoreProperties.put("solr.directoryFactory", System.getProperty("solr.directoryFactory"));
     if (System.getProperty("solr.directoryFactory") == null) {
       System.setProperty("solr.directoryFactory", "org.apache.solr.core.MockDirectoryFactory");
     }
 
-    // Restore more Solr properties. 
-    restoreProperties.put("solr.solr.home", System.getProperty("solr.solr.home"));
-    restoreProperties.put("solr.data.dir", System.getProperty("solr.data.dir"));
-
     // if verbose: print some debugging stuff about which codecs are loaded.
     if (VERBOSE) {
-      Set<String> codecs = Codec.availableCodecs();
-      for (String codec : codecs) {
-        System.out.println("Loaded codec: '" + codec + "': " + Codec.forName(codec).getClass().getName());
-      }
-      
-      Set<String> postingsFormats = PostingsFormat.availablePostingsFormats();
-      for (String postingsFormat : postingsFormats) {
-        System.out.println("Loaded postingsFormat: '" + postingsFormat + "': " + PostingsFormat.forName(postingsFormat).getClass().getName());
-      }
+      System.out.println("Loaded codecs: " + Codec.availableCodecs());
+      System.out.println("Loaded postingsFormats: " + PostingsFormat.availablePostingsFormats());
+
     }
 
     savedInfoStream = InfoStream.getDefault();
@@ -155,67 +135,17 @@ final class TestRuleSetupAndRestoreClassEnv extends AbstractBeforeAfterRule {
       avoidCodecs.addAll(Arrays.asList(a.value()));
     }
     
-    // set back to default
-    LuceneTestCase.OLD_FORMAT_IMPERSONATION_IS_ACTIVE = false;
-    
     savedCodec = Codec.getDefault();
     int randomVal = random.nextInt(11);
-    if ("Lucene40".equals(TEST_CODEC) || ("random".equals(TEST_CODEC) &&
-                                          "random".equals(TEST_POSTINGSFORMAT) &&
-                                          "random".equals(TEST_DOCVALUESFORMAT) &&
-                                          randomVal == 0 &&
-                                          !shouldAvoidCodec("Lucene40"))) {
-      codec = Codec.forName("Lucene40");
-      LuceneTestCase.OLD_FORMAT_IMPERSONATION_IS_ACTIVE = true;
-      assert codec instanceof Lucene40RWCodec : "fix your classpath to have tests-framework.jar before lucene-core.jar";
-      assert (PostingsFormat.forName("Lucene40") instanceof Lucene40RWPostingsFormat) : "fix your classpath to have tests-framework.jar before lucene-core.jar";
-    } else if ("Lucene41".equals(TEST_CODEC) || ("random".equals(TEST_CODEC) &&
-                                                 "random".equals(TEST_POSTINGSFORMAT) &&
-                                                 "random".equals(TEST_DOCVALUESFORMAT) &&
-                                                 randomVal == 1 &&
-                                                 !shouldAvoidCodec("Lucene41"))) { 
-      codec = Codec.forName("Lucene41");
-      LuceneTestCase.OLD_FORMAT_IMPERSONATION_IS_ACTIVE = true;
-      assert codec instanceof Lucene41RWCodec : "fix your classpath to have tests-framework.jar before lucene-core.jar";
-    } else if ("Lucene42".equals(TEST_CODEC) || ("random".equals(TEST_CODEC) &&
-                                                 "random".equals(TEST_POSTINGSFORMAT) &&
-                                                 "random".equals(TEST_DOCVALUESFORMAT) &&
-                                                  randomVal == 2 &&
-                                                  !shouldAvoidCodec("Lucene42"))) { 
-      codec = Codec.forName("Lucene42");
-      LuceneTestCase.OLD_FORMAT_IMPERSONATION_IS_ACTIVE = true;
-      assert codec instanceof Lucene42RWCodec : "fix your classpath to have tests-framework.jar before lucene-core.jar";
-    } else if ("Lucene45".equals(TEST_CODEC) || ("random".equals(TEST_CODEC) &&
-                                                 "random".equals(TEST_POSTINGSFORMAT) &&
-                                                 "random".equals(TEST_DOCVALUESFORMAT) &&
-                                                  randomVal == 3 &&
-                                                  !shouldAvoidCodec("Lucene45"))) { 
-      codec = Codec.forName("Lucene45");
-      LuceneTestCase.OLD_FORMAT_IMPERSONATION_IS_ACTIVE = true;
-      assert codec instanceof Lucene45RWCodec : "fix your classpath to have tests-framework.jar before lucene-core.jar";
-    } else if ("Lucene46".equals(TEST_CODEC) || ("random".equals(TEST_CODEC) &&
-                                                 "random".equals(TEST_POSTINGSFORMAT) &&
-                                                 "random".equals(TEST_DOCVALUESFORMAT) &&
-                                                  randomVal == 4 &&
-                                                  !shouldAvoidCodec("Lucene46"))) { 
-      codec = Codec.forName("Lucene46");
-      LuceneTestCase.OLD_FORMAT_IMPERSONATION_IS_ACTIVE = true;
-      assert codec instanceof Lucene46RWCodec : "fix your classpath to have tests-framework.jar before lucene-core.jar";
-    } else if ("Lucene49".equals(TEST_CODEC) || ("random".equals(TEST_CODEC) &&
-                                                 "random".equals(TEST_POSTINGSFORMAT) &&
-                                                 "random".equals(TEST_DOCVALUESFORMAT) &&
-                                                  randomVal == 5 &&
-                                                  !shouldAvoidCodec("Lucene49"))) { 
-      codec = Codec.forName("Lucene49");
-      LuceneTestCase.OLD_FORMAT_IMPERSONATION_IS_ACTIVE = true;
-      assert codec instanceof Lucene49RWCodec : "fix your classpath to have tests-framework.jar before lucene-core.jar";
+    if ("default".equals(TEST_CODEC)) {
+      codec = savedCodec; // just use the default, don't randomize
     } else if (("random".equals(TEST_POSTINGSFORMAT) == false) || ("random".equals(TEST_DOCVALUESFORMAT) == false)) {
       // the user wired postings or DV: this is messy
       // refactor into RandomCodec....
       
       final PostingsFormat format;
       if ("random".equals(TEST_POSTINGSFORMAT)) {
-        format = PostingsFormat.forName("Lucene41");
+        format = new AssertingPostingsFormat();
       } else if ("MockRandom".equals(TEST_POSTINGSFORMAT)) {
         format = new MockRandomPostingsFormat(new Random(random.nextLong()));
       } else {
@@ -224,13 +154,12 @@ final class TestRuleSetupAndRestoreClassEnv extends AbstractBeforeAfterRule {
       
       final DocValuesFormat dvFormat;
       if ("random".equals(TEST_DOCVALUESFORMAT)) {
-        // TODO: huh?
-        dvFormat = DocValuesFormat.forName("Lucene410");
+        dvFormat = new AssertingDocValuesFormat();
       } else {
         dvFormat = DocValuesFormat.forName(TEST_DOCVALUESFORMAT);
       }
       
-      codec = new Lucene410Codec() {       
+      codec = new AssertingCodec() {       
         @Override
         public PostingsFormat getPostingsFormatForField(String field) {
           return format;
@@ -255,6 +184,8 @@ final class TestRuleSetupAndRestoreClassEnv extends AbstractBeforeAfterRule {
       codec = new AssertingCodec();
     } else if ("Compressing".equals(TEST_CODEC) || ("random".equals(TEST_CODEC) && randomVal == 6 && !shouldAvoidCodec("Compressing"))) {
       codec = CompressingCodec.randomInstance(random);
+    } else if ("Lucene50".equals(TEST_CODEC) || ("random".equals(TEST_CODEC) && randomVal == 5 && !shouldAvoidCodec("Lucene50"))) {
+      codec = new Lucene50Codec(RandomPicks.randomFrom(random, Lucene50StoredFieldsFormat.Mode.values()));
     } else if (!"random".equals(TEST_CODEC)) {
       codec = Codec.forName(TEST_CODEC);
     } else if ("random".equals(TEST_POSTINGSFORMAT)) {
@@ -274,9 +205,6 @@ final class TestRuleSetupAndRestoreClassEnv extends AbstractBeforeAfterRule {
     locale = testLocale.equals("random") ? randomLocale : localeForName(testLocale);
     Locale.setDefault(locale);
 
-    // TimeZone.getDefault will set user.timezone to the default timezone of the user's locale.
-    // So store the original property value and restore it at end.
-    restoreProperties.put("user.timezone", System.getProperty("user.timezone"));
     savedTimeZone = TimeZone.getDefault();
     TimeZone randomTimeZone = randomTimeZone(random());
     timeZone = testTimeZone.equals("random") ? randomTimeZone : TimeZone.getTimeZone(testTimeZone);
@@ -341,15 +269,6 @@ final class TestRuleSetupAndRestoreClassEnv extends AbstractBeforeAfterRule {
    */
   @Override
   protected void after() throws Exception {
-    for (Map.Entry<String,String> e : restoreProperties.entrySet()) {
-      if (e.getValue() == null) {
-        System.clearProperty(e.getKey());
-      } else {
-        System.setProperty(e.getKey(), e.getValue());
-      }
-    }
-    restoreProperties.clear();
-
     Codec.setDefault(savedCodec);
     InfoStream.setDefault(savedInfoStream);
     if (savedLocale != null) Locale.setDefault(savedLocale);

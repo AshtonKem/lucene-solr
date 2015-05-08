@@ -147,7 +147,7 @@ public class TestPayloadTermQuery extends LuceneTestCase {
   public void test() throws IOException {
     PayloadTermQuery query = new PayloadTermQuery(new Term("field", "seventy"),
             new MaxPayloadFunction());
-    TopDocs hits = searcher.search(query, null, 100);
+    TopDocs hits = searcher.search(query, 100);
     assertTrue("hits is null and it shouldn't be", hits != null);
     assertTrue("hits Size: " + hits.totalHits + " is not: " + 100, hits.totalHits == 100);
 
@@ -160,7 +160,7 @@ public class TestPayloadTermQuery extends LuceneTestCase {
       assertTrue(doc.score + " does not equal: " + 1, doc.score == 1);
     }
     CheckHits.checkExplanations(query, PayloadHelper.FIELD, searcher, true);
-    Spans spans = MultiSpansWrapper.wrap(searcher.getTopReaderContext(), query);
+    Spans spans = MultiSpansWrapper.wrap(searcher.getIndexReader(), query);
     assertTrue("spans is null and it shouldn't be", spans != null);
     /*float score = hits.score(0);
     for (int i =1; i < hits.length(); i++)
@@ -188,7 +188,7 @@ public class TestPayloadTermQuery extends LuceneTestCase {
   public void testMultipleMatchesPerDoc() throws Exception {
     PayloadTermQuery query = new PayloadTermQuery(new Term(PayloadHelper.MULTI_FIELD, "seventy"),
             new MaxPayloadFunction());
-    TopDocs hits = searcher.search(query, null, 100);
+    TopDocs hits = searcher.search(query, 100);
     assertTrue("hits is null and it shouldn't be", hits != null);
     assertTrue("hits Size: " + hits.totalHits + " is not: " + 100, hits.totalHits == 100);
 
@@ -211,13 +211,15 @@ public class TestPayloadTermQuery extends LuceneTestCase {
     }
     assertTrue(numTens + " does not equal: " + 10, numTens == 10);
     CheckHits.checkExplanations(query, "field", searcher, true);
-    Spans spans = MultiSpansWrapper.wrap(searcher.getTopReaderContext(), query);
+    Spans spans = MultiSpansWrapper.wrap(searcher.getIndexReader(), query);
     assertTrue("spans is null and it shouldn't be", spans != null);
     //should be two matches per document
     int count = 0;
     //100 hits times 2 matches per hit, we should have 200 in count
-    while (spans.next()) {
-      count++;
+    while (spans.nextDoc() != Spans.NO_MORE_DOCS) {
+      while (spans.nextStartPosition() != Spans.NO_MORE_POSITIONS) {
+        count++;
+      }
     }
     assertTrue(count + " does not equal: " + 200, count == 200);
   }
@@ -230,7 +232,7 @@ public class TestPayloadTermQuery extends LuceneTestCase {
     IndexReader reader = DirectoryReader.open(directory);
     IndexSearcher theSearcher = newSearcher(reader);
     theSearcher.setSimilarity(new FullSimilarity());
-    TopDocs hits = searcher.search(query, null, 100);
+    TopDocs hits = searcher.search(query, 100);
     assertTrue("hits is null and it shouldn't be", hits != null);
     assertTrue("hits Size: " + hits.totalHits + " is not: " + 100, hits.totalHits == 100);
 
@@ -253,13 +255,15 @@ public class TestPayloadTermQuery extends LuceneTestCase {
     }
     assertTrue(numTens + " does not equal: " + 10, numTens == 10);
     CheckHits.checkExplanations(query, "field", searcher, true);
-    Spans spans = MultiSpansWrapper.wrap(searcher.getTopReaderContext(), query);
+    Spans spans = MultiSpansWrapper.wrap(searcher.getIndexReader(), query);
     assertTrue("spans is null and it shouldn't be", spans != null);
     //should be two matches per document
     int count = 0;
     //100 hits times 2 matches per hit, we should have 200 in count
-    while (spans.next()) {
-      count++;
+    while (spans.nextDoc() != Spans.NO_MORE_DOCS) {
+      while (spans.nextStartPosition() != Spans.NO_MORE_POSITIONS) {
+        count++;
+      }
     }
     reader.close();
   }
@@ -267,7 +271,7 @@ public class TestPayloadTermQuery extends LuceneTestCase {
   public void testNoMatch() throws Exception {
     PayloadTermQuery query = new PayloadTermQuery(new Term(PayloadHelper.FIELD, "junk"),
             new MaxPayloadFunction());
-    TopDocs hits = searcher.search(query, null, 100);
+    TopDocs hits = searcher.search(query, 100);
     assertTrue("hits is null and it shouldn't be", hits != null);
     assertTrue("hits Size: " + hits.totalHits + " is not: " + 0, hits.totalHits == 0);
 
@@ -283,7 +287,7 @@ public class TestPayloadTermQuery extends LuceneTestCase {
     BooleanQuery query = new BooleanQuery();
     query.add(c1);
     query.add(c2);
-    TopDocs hits = searcher.search(query, null, 100);
+    TopDocs hits = searcher.search(query, 100);
     assertTrue("hits is null and it shouldn't be", hits != null);
     assertTrue("hits Size: " + hits.totalHits + " is not: " + 1, hits.totalHits == 1);
     int[] results = new int[1];

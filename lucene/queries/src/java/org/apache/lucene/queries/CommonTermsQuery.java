@@ -16,7 +16,7 @@ package org.apache.lucene.queries;
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import org.apache.lucene.index.AtomicReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.Fields;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.Term;
@@ -34,7 +34,6 @@ import org.apache.lucene.util.ToStringUtils;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 
 /**
  * A query that executes high-frequency terms in a optional sub-query to prevent
@@ -85,7 +84,7 @@ public class CommonTermsQuery extends Query {
    * @param lowFreqOccur
    *          {@link Occur} used for low frequency terms
    * @param maxTermFrequency
-   *          a value in [0..1) (or absolute number >=1) representing the
+   *          a value in [0..1) (or absolute number &gt;=1) representing the
    *          maximum threshold of a terms document frequency to be considered a
    *          low frequency term.
    * @throws IllegalArgumentException
@@ -105,7 +104,7 @@ public class CommonTermsQuery extends Query {
    * @param lowFreqOccur
    *          {@link Occur} used for low frequency terms
    * @param maxTermFrequency
-   *          a value in [0..1) (or absolute number >=1) representing the
+   *          a value in [0..1) (or absolute number &gt;=1) representing the
    *          maximum threshold of a terms document frequency to be considered a
    *          low frequency term.
    * @param disableCoord
@@ -153,7 +152,7 @@ public class CommonTermsQuery extends Query {
       tq.setBoost(getBoost());
       return tq;
     }
-    final List<AtomicReaderContext> leaves = reader.leaves();
+    final List<LeafReaderContext> leaves = reader.leaves();
     final int maxDoc = reader.maxDoc();
     final TermContext[] contextArray = new TermContext[terms.size()];
     final Term[] queryTerms = this.terms.toArray(new Term[0]);
@@ -234,15 +233,11 @@ public class CommonTermsQuery extends Query {
   }
   
   public void collectTermContext(IndexReader reader,
-      List<AtomicReaderContext> leaves, TermContext[] contextArray,
+      List<LeafReaderContext> leaves, TermContext[] contextArray,
       Term[] queryTerms) throws IOException {
     TermsEnum termsEnum = null;
-    for (AtomicReaderContext context : leaves) {
+    for (LeafReaderContext context : leaves) {
       final Fields fields = context.reader().fields();
-      if (fields == null) {
-        // reader has no fields
-        continue;
-      }
       for (int i = 0; i < queryTerms.length; i++) {
         Term term = queryTerms[i];
         TermContext termContext = contextArray[i];
@@ -251,7 +246,7 @@ public class CommonTermsQuery extends Query {
           // field does not exist
           continue;
         }
-        termsEnum = terms.iterator(termsEnum);
+        termsEnum = terms.iterator();
         assert termsEnum != null;
         
         if (termsEnum == TermsEnum.EMPTY) continue;
@@ -334,11 +329,6 @@ public class CommonTermsQuery extends Query {
    */
   public float getHighFreqMinimumNumberShouldMatch() {
     return highFreqMinNrShouldMatch;
-  }
-  
-  @Override
-  public void extractTerms(Set<Term> terms) {
-    terms.addAll(this.terms);
   }
   
   @Override

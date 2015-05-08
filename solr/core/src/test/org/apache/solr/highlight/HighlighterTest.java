@@ -17,21 +17,31 @@
 
 package org.apache.solr.highlight;
 
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.core.WhitespaceAnalyzer;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.search.Query;
+import org.apache.lucene.search.spans.SpanPayloadCheckQuery;
+import org.apache.lucene.search.spans.SpanTermQuery;
 import org.apache.solr.SolrTestCaseJ4;
 import org.apache.solr.common.params.HighlightParams;
 import org.apache.solr.handler.component.HighlightComponent;
+import org.apache.solr.handler.component.ResponseBuilder;
+import org.apache.solr.handler.component.SearchComponent;
 import org.apache.solr.request.SolrQueryRequest;
+import org.apache.solr.response.SolrQueryResponse;
+import org.apache.solr.search.DocSet;
 import org.apache.solr.util.TestHarness;
 import org.junit.After;
 import org.junit.BeforeClass;
 import org.junit.Test;
-
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
 
 /**
  * Tests some basic functionality of Solr while demonstrating good
@@ -76,8 +86,8 @@ public class HighlighterTest extends SolrTestCaseJ4 {
     SolrFragmenter regex = highlighter.fragmenters.get( "regex" );
     SolrFragmenter frag = highlighter.fragmenters.get( null );
     assertSame( gap, frag );
-    assertTrue( gap instanceof GapFragmenter );
-    assertTrue( regex instanceof RegexFragmenter );
+    assertTrue(gap instanceof GapFragmenter);
+    assertTrue(regex instanceof RegexFragmenter);
   }
 
   @Test
@@ -118,13 +128,13 @@ public class HighlighterTest extends SolrTestCaseJ4 {
     sumLRF = h.getRequestFactory(
       "standard", 0, 200, args);
     assertQ("Merge Contiguous",
-            sumLRF.makeRequest("t_text:long"),
-            "//lst[@name='highlighting']/lst[@name='1']",
-            "//lst[@name='1']/arr[@name='t_text']/str[.='this is some <em>long</em> text.  It has']",
-            "//lst[@name='1']/arr[@name='t_text']/str[.=' the word <em>long</em> in many places.  In fact, it has']",
-            "//lst[@name='1']/arr[@name='t_text']/str[.=' <em>long</em> on some different fragments.  Let us']",
-            "//lst[@name='1']/arr[@name='t_text']/str[.=' see what happens to <em>long</em> in this case.']"
-            );
+        sumLRF.makeRequest("t_text:long"),
+        "//lst[@name='highlighting']/lst[@name='1']",
+        "//lst[@name='1']/arr[@name='t_text']/str[.='this is some <em>long</em> text.  It has']",
+        "//lst[@name='1']/arr[@name='t_text']/str[.=' the word <em>long</em> in many places.  In fact, it has']",
+        "//lst[@name='1']/arr[@name='t_text']/str[.=' <em>long</em> on some different fragments.  Let us']",
+        "//lst[@name='1']/arr[@name='t_text']/str[.=' see what happens to <em>long</em> in this case.']"
+    );
   }
 
   @Test
@@ -170,16 +180,15 @@ public class HighlighterTest extends SolrTestCaseJ4 {
   }
   
   @Test
-  public void testTermOffsetsTokenStream() throws Exception {
+  public void testOffsetWindowTokenFilter() throws Exception {
     String[] multivalued = { "a b c d", "e f g", "h", "i j k l m n" };
     Analyzer a1 = new WhitespaceAnalyzer();
     TokenStream tokenStream = a1.tokenStream("", "a b c d e f g h i j k l m n");
-    tokenStream.reset();
 
-    TermOffsetsTokenStream tots = new TermOffsetsTokenStream(
-        tokenStream);
+    OffsetWindowTokenFilter tots = new OffsetWindowTokenFilter(tokenStream);
     for( String v : multivalued ){
-      TokenStream ts1 = tots.getMultiValuedTokenStream( v.length() );
+      TokenStream ts1 = tots.advanceToNextWindowOfLength(v.length());
+      ts1.reset();
       Analyzer a2 = new WhitespaceAnalyzer();
       TokenStream ts2 = a2.tokenStream("", v);
       ts2.reset();
@@ -260,10 +269,10 @@ public class HighlighterTest extends SolrTestCaseJ4 {
     assertU(commit());
     assertU(optimize());
     assertQ("Basic summarization",
-            sumLRF.makeRequest("long"),
-            "//lst[@name='highlighting']/lst[@name='1']",
-            "//lst[@name='1']/arr[@name='tv_text']/str"
-            );
+        sumLRF.makeRequest("long"),
+        "//lst[@name='highlighting']/lst[@name='1']",
+        "//lst[@name='1']/arr[@name='tv_text']/str"
+    );
     
     // try the same thing without a q param
     assertQ("Should not explode...", // q.alt should return everything
@@ -283,9 +292,9 @@ public class HighlighterTest extends SolrTestCaseJ4 {
     TestHarness.LocalRequestFactory sumLRF = h.getRequestFactory(
       "standard", 0, 200, args);
     
-    assertU(adoc("textgap", "first entry hasnt queryword", 
-                 "textgap", "second entry has queryword long",
-                 "id", "1"));
+    assertU(adoc("textgap", "first entry hasnt queryword",
+        "textgap", "second entry has queryword long",
+        "id", "1"));
     assertU(commit());
     assertU(optimize());
     assertQ("Basic summarization",
@@ -348,10 +357,10 @@ public class HighlighterTest extends SolrTestCaseJ4 {
     assertU(commit());
     assertU(optimize());
     assertQ("Basic summarization",
-            sumLRF.makeRequest("long"),
-            "//lst[@name='highlighting']/lst[@name='1']",
-            "//lst[@name='1']/arr[@name='t_text']/str"
-            );
+        sumLRF.makeRequest("long"),
+        "//lst[@name='highlighting']/lst[@name='1']",
+        "//lst[@name='1']/arr[@name='t_text']/str"
+    );
 
   }
 
@@ -423,15 +432,15 @@ public class HighlighterTest extends SolrTestCaseJ4 {
      sumLRF = h.getRequestFactory(
            "standard", 0, 200, args);
      assertQ("Test RequireFieldMatch",
-           sumLRF.makeRequest("t_text1:random OR t_text2:words"),
-           "//lst[@name='highlighting']/lst[@name='1']",
-           "//lst[@name='1']/arr[@name='t_text1']/str[.='<em>random</em> words for highlighting tests']",
-           "//lst[@name='1']/arr[@name='t_text2']/str[.='more random <em>words</em> for second field']"
-           );
+         sumLRF.makeRequest("t_text1:random OR t_text2:words"),
+         "//lst[@name='highlighting']/lst[@name='1']",
+         "//lst[@name='1']/arr[@name='t_text1']/str[.='<em>random</em> words for highlighting tests']",
+         "//lst[@name='1']/arr[@name='t_text2']/str[.='more random <em>words</em> for second field']"
+     );
 
      // test case for un-optimized index
      assertU(adoc("t_text1", "random words for highlighting tests", "id", "2",
-             "t_text2", "more random words for second field"));
+         "t_text2", "more random words for second field"));
      assertU(delI("1"));
      assertU(commit());
      sumLRF = h.getRequestFactory(
@@ -452,7 +461,7 @@ public class HighlighterTest extends SolrTestCaseJ4 {
     args.put("hl", "true");
     args.put("hl.fl", "t_text");
     args.put("hl.simple.pre","<B>");
-    args.put("hl.simple.post","</B>");
+    args.put("hl.simple.post", "</B>");
     TestHarness.LocalRequestFactory sumLRF = h.getRequestFactory(
       "standard", 0, 200, args);
     
@@ -460,14 +469,14 @@ public class HighlighterTest extends SolrTestCaseJ4 {
     assertU(commit());
     assertU(optimize());
     assertQ("Basic summarization",
-            sumLRF.makeRequest("t_text:long"),
-            "//lst[@name='highlighting']/lst[@name='1']",
-            "//lst[@name='1']/arr[@name='t_text']/str[.='a <B>long</B> days night']"
-            );
+        sumLRF.makeRequest("t_text:long"),
+        "//lst[@name='highlighting']/lst[@name='1']",
+        "//lst[@name='1']/arr[@name='t_text']/str[.='a <B>long</B> days night']"
+    );
     
     // test a per-field override
-    args.put("f.t_text.hl.simple.pre","<I>");
-    args.put("f.t_text.hl.simple.post","</I>");
+    args.put("f.t_text.hl.simple.pre", "<I>");
+    args.put("f.t_text.hl.simple.post", "</I>");
     sumLRF = h.getRequestFactory(
           "standard", 0, 200, args);
     assertQ("Basic summarization",
@@ -506,35 +515,59 @@ public class HighlighterTest extends SolrTestCaseJ4 {
     args.put("fl", "id score");
     args.put("hl", "true");
     args.put("hl.snippets", "10");
-    args.put("hl.fl", "t_text");
+    final String field = random().nextBoolean() ? "t_text" : "tv_text";
+    args.put("hl.fl", field);
     TestHarness.LocalRequestFactory sumLRF = h.getRequestFactory(
       "standard", 0, 200, args);
     
 
-    assertU(adoc("t_text", LONG_TEXT, "id", "1"));
+    assertU(adoc(field, LONG_TEXT, "id", "1"));
     assertU(commit());
-    assertU(optimize());
+
     assertQ("token at start of text",
-            sumLRF.makeRequest("t_text:disjoint"),
+            sumLRF.makeRequest(field + ":disjoint"),
             "//lst[@name='highlighting']/lst[@name='1']",
             "//lst[@name='1']/arr[count(str)=1]"
             );
     args.put("hl.maxAnalyzedChars", "20");
     sumLRF = h.getRequestFactory("standard", 0, 200, args);
     assertQ("token at end of text",
-            sumLRF.makeRequest("t_text:disjoint"),
-            "//lst[@name='highlighting']/lst[@name='1']",
-            "//lst[@name='1'][not(*)]"
-            );
+        sumLRF.makeRequest(field + ":disjoint"),
+        "//lst[@name='highlighting']/lst[@name='1']",
+        "//lst[@name='1'][not(*)]"
+    );
     args.put("hl.maxAnalyzedChars", "-1");
     sumLRF = h.getRequestFactory("standard", 0, 200, args);
     assertQ("token at start of text",
-        sumLRF.makeRequest("t_text:disjoint"),
+        sumLRF.makeRequest(field + ":disjoint"),
         "//lst[@name='highlighting']/lst[@name='1']",
         "//lst[@name='1']/arr[count(str)=1]"
     );
+
   }
-  
+
+  // Test multi-valued together with hl.maxAnalyzedChars
+  @Test
+  public void testMultiValuedMaxAnalyzedChars() throws Exception {
+    String shortText = "some short blah blah blah blah";
+    final String field = random().nextBoolean() ? "tv_mv_text" : "textgap"; // term vecs or not
+    assertU(adoc(field, shortText,
+        field, LONG_TEXT,
+        "id", "1"));
+    assertU(commit());
+
+    assertQ(req("q", field + ":(short OR long)",
+            "indent", "on",
+            "hl", "true",
+            "hl.fl", field,
+            "hl.snippets", "2",
+            "hl.maxAnalyzedChars", "8"),
+        "//lst[@name='highlighting']/lst[@name='1']/arr[count(*)=1]",
+        "//lst[@name='1']/arr/str[1][.='some <em>short</em>']"
+        //"//lst[@name='1']/arr/str[2][.='a <em>long</em> days']"
+    );
+  }
+
   @Test
   public void testRegexFragmenter() {
     HashMap<String,String> args = new HashMap<>();
@@ -896,11 +929,11 @@ public class HighlighterTest extends SolrTestCaseJ4 {
         "lower", "gap7 nothing",
         "lower", "gap8 nothing",
         "lower", "gap9 target",
-        "lower", "gap10 target" ));
+        "lower", "gap10 target"));
 
     assertU(commit());
 
-    // First insure we can count all six
+    // First ensure we can count all six
     assertQ("Counting all MV pairs failed",
         req(
             "q", "id:1000",
@@ -913,6 +946,7 @@ public class HighlighterTest extends SolrTestCaseJ4 {
     );
 
     // NOTE: These tests seem repeated, but we're testing for off-by-one errors
+
     // Now we should see exactly 2 by limiting the number of values searched to 4
     assertQ("Off by one by going too far",
         req(
@@ -925,7 +959,6 @@ public class HighlighterTest extends SolrTestCaseJ4 {
         ),
         "//lst[@name='highlighting']/lst[@name='1000']/arr[@name='lower' and count(*)=2]"
     );
-
 
     // Does 0 work?
     assertQ("Off by one by going too far",
@@ -940,7 +973,6 @@ public class HighlighterTest extends SolrTestCaseJ4 {
         "//lst[@name='highlighting']/lst[@name='1000' and count(child::*) = 0]"
     );
 
-
     // Now we should see exactly 2 by limiting the number of values searched to 2
     assertQ("Off by one by not going far enough",
         req(
@@ -953,7 +985,6 @@ public class HighlighterTest extends SolrTestCaseJ4 {
         ),
         "//lst[@name='highlighting']/lst[@name='1000']/arr[@name='lower' and count(*)=2]"
     );
-
 
     // Now we should see exactly 1 by limiting the number of values searched to 1
     assertQ("Not counting exactly 1",
@@ -968,7 +999,6 @@ public class HighlighterTest extends SolrTestCaseJ4 {
         "//lst[@name='highlighting']/lst[@name='1000']/arr[@name='lower' and count(*)=1]"
     );
 
-
     // Now we should see exactly 4 by limiting the number of values found to 4
     assertQ("Matching 4 should exactly match 4",
         req(
@@ -982,6 +1012,19 @@ public class HighlighterTest extends SolrTestCaseJ4 {
         "//lst[@name='highlighting']/lst[@name='1000']/arr[@name='lower' and count(*)=4]"
     );
 
+    // But if hl.preserveMulti=true then we should see 6 snippets even though 2 didn't match
+    assertQ("hl.preserveMulti",
+        req(
+            "q", "id:1000",
+            HighlightParams.HIGHLIGHT, "true",
+            HighlightParams.FIELDS, "lower",
+            HighlightParams.Q, "target",
+            HighlightParams.SNIPPETS, "100",
+            HighlightParams.MAX_MULTIVALUED_TO_MATCH, "4",
+            HighlightParams.PRESERVE_MULTI, "true"
+        ),
+        "//lst[@name='highlighting']/lst[@name='1000']/arr[@name='lower' and count(*)=6]"
+    );
 
     // Now we should see exactly 2 by limiting the number of values found to 2
     assertQ("Matching 6 should exactly search them all",
@@ -995,7 +1038,6 @@ public class HighlighterTest extends SolrTestCaseJ4 {
         ),
         "//lst[@name='highlighting']/lst[@name='1000']/arr[@name='lower' and count(*)=6]"
     );
-
 
     // Now we should see exactly 1 by limiting the number of values found to 1
     assertQ("Matching 6 should exactly match them all",
@@ -1022,7 +1064,6 @@ public class HighlighterTest extends SolrTestCaseJ4 {
         ),
         "//lst[@name='highlighting']/lst[@name='1000' and count(child::*) = 0]"
     );
-
 
 
     // Should bail at the first parameter matched.
@@ -1053,5 +1094,38 @@ public class HighlighterTest extends SolrTestCaseJ4 {
         "//lst[@name='highlighting']/lst[@name='1000']/arr[@name='lower' and count(*)=2]"
     );
 
+  }
+
+  @Test
+  public void payloadFilteringSpanQuery() throws IOException {
+    clearIndex();
+
+    String FIELD_NAME = "payloadDelimited";
+    assertU(adoc("id", "0", FIELD_NAME, "word|7 word|2"));
+    assertU(commit());
+
+    //We search at a lower level than typical Solr tests because there's no QParser for payloads
+
+    //Create query matching this payload
+    Query query = new SpanPayloadCheckQuery(new SpanTermQuery(new Term(FIELD_NAME, "word")),
+        Collections.singleton(new byte[]{0,0,0,7}));//bytes for integer 7
+
+    //invoke highlight component... the hard way
+    final SearchComponent hlComp = h.getCore().getSearchComponent("highlight");
+    SolrQueryRequest req = req("hl", "true", "hl.fl", FIELD_NAME, HighlightParams.USE_PHRASE_HIGHLIGHTER, "true");
+    try {
+      SolrQueryResponse resp = new SolrQueryResponse();
+      ResponseBuilder rb = new ResponseBuilder(req, resp, Collections.singletonList(hlComp));
+      rb.setHighlightQuery(query);
+      rb.setResults(req.getSearcher().getDocListAndSet(query, (DocSet) null, null, 0, 1));
+      //highlight:
+      hlComp.prepare(rb);
+      hlComp.process(rb);
+      //inspect response
+      final String[] snippets = (String[]) resp.getValues().findRecursive("highlighting", "0", FIELD_NAME);
+      assertEquals("<em>word|7</em> word|2", snippets[0]);
+    } finally {
+      req.close();
+    }
   }
 }

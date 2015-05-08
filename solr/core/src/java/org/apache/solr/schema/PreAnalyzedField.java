@@ -28,12 +28,11 @@ import java.util.Map;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.Tokenizer;
 import org.apache.lucene.document.Field;
+import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.StorableField;
-import org.apache.lucene.index.FieldInfo.IndexOptions;
 import org.apache.lucene.queries.function.ValueSource;
 import org.apache.lucene.queries.function.valuesource.SortedSetFieldSource;
 import org.apache.lucene.search.SortField;
-import org.apache.lucene.search.SortedSetSortField;
 import org.apache.lucene.uninverting.UninvertingReader.Type;
 import org.apache.lucene.util.AttributeFactory;
 import org.apache.lucene.util.AttributeSource;
@@ -44,6 +43,8 @@ import org.apache.solr.search.QParser;
 import org.apache.solr.search.Sorting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import static org.apache.solr.common.params.CommonParams.JSON;
 
 /**
  * Pre-analyzed field type provides a way to index a serialized token stream,
@@ -71,7 +72,7 @@ public class PreAnalyzedField extends FieldType {
       parser = new JsonPreAnalyzedParser();
     } else {
       // short name
-      if ("json".equalsIgnoreCase(implName)) {
+      if (JSON.equalsIgnoreCase(implName)) {
         parser = new JsonPreAnalyzedParser();
       } else if ("simple".equalsIgnoreCase(implName)) {
         parser = new SimplePreAnalyzedParser();
@@ -163,13 +164,12 @@ public class PreAnalyzedField extends FieldType {
       return null;
     }
     org.apache.lucene.document.FieldType newType = new org.apache.lucene.document.FieldType();
-    newType.setIndexed(field.indexed());
     newType.setTokenized(field.isTokenized());
     newType.setStored(field.stored());
     newType.setOmitNorms(field.omitNorms());
     IndexOptions options = IndexOptions.DOCS_AND_FREQS_AND_POSITIONS;
     if (field.omitTermFreqAndPositions()) {
-      options = IndexOptions.DOCS_ONLY;
+      options = IndexOptions.DOCS;
     } else if (field.omitPositions()) {
       options = IndexOptions.DOCS_AND_FREQS;
     } else if (field.storeOffsetsWithPositions()) {
@@ -179,6 +179,7 @@ public class PreAnalyzedField extends FieldType {
     newType.setStoreTermVectors(field.storeTermVector());
     newType.setStoreTermVectorOffsets(field.storeTermOffsets());
     newType.setStoreTermVectorPositions(field.storeTermPositions());
+    newType.setStoreTermVectorPayloads(field.storeTermPayloads());
     return newType;
   }
   
@@ -243,7 +244,6 @@ public class PreAnalyzedField extends FieldType {
     
     if (parse.hasTokenStream()) {
       if (field.indexed()) {
-        type.setIndexed(true);
         type.setTokenized(true);
         if (f != null) {
           f.setTokenStream(parse);
@@ -252,7 +252,7 @@ public class PreAnalyzedField extends FieldType {
         }
       } else {
         if (f != null) {
-          f.fieldType().setIndexed(false);
+          f.fieldType().setIndexOptions(IndexOptions.NONE);
           f.fieldType().setTokenized(false);
         }
       }

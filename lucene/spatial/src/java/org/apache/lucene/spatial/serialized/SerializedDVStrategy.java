@@ -24,7 +24,7 @@ import com.spatial4j.core.shape.Shape;
 
 import org.apache.lucene.document.BinaryDocValuesField;
 import org.apache.lucene.document.Field;
-import org.apache.lucene.index.AtomicReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.BinaryDocValues;
 import org.apache.lucene.queries.function.FunctionValues;
 import org.apache.lucene.queries.function.ValueSource;
@@ -143,7 +143,7 @@ public class SerializedDVStrategy extends SpatialStrategy {
     }
 
     @Override
-    public DocIdSet getDocIdSet(final AtomicReaderContext context, final Bits acceptDocs) throws IOException {
+    public DocIdSet getDocIdSet(final LeafReaderContext context, final Bits acceptDocs) throws IOException {
       return new DocIdSet() {
         @Override
         public DocIdSetIterator iterator() throws IOException {
@@ -183,7 +183,7 @@ public class SerializedDVStrategy extends SpatialStrategy {
     @Override
     public boolean equals(Object o) {
       if (this == o) return true;
-      if (o == null || getClass() != o.getClass()) return false;
+      if (super.equals(o) == false) return false;
 
       PredicateValueSourceFilter that = (PredicateValueSourceFilter) o;
 
@@ -194,7 +194,14 @@ public class SerializedDVStrategy extends SpatialStrategy {
 
     @Override
     public int hashCode() {
-      return predicateValueSource.hashCode();
+      return super.hashCode() + 31 * predicateValueSource.hashCode();
+    }
+    
+    @Override
+    public String toString(String field) {
+      return "PredicateValueSourceFilter(" +
+               predicateValueSource.toString() +
+             ")";
     }
   }//PredicateValueSourceFilter
 
@@ -213,7 +220,7 @@ public class SerializedDVStrategy extends SpatialStrategy {
     }
 
     @Override
-    public FunctionValues getValues(Map context, AtomicReaderContext readerContext) throws IOException {
+    public FunctionValues getValues(Map context, LeafReaderContext readerContext) throws IOException {
       final BinaryDocValues docValues = readerContext.reader().getBinaryDocValues(fieldName);
 
       return new FunctionValues() {
@@ -259,7 +266,7 @@ public class SerializedDVStrategy extends SpatialStrategy {
 
         @Override
         public Explanation explain(int doc) {
-          return new Explanation(Float.NaN, toString(doc));
+          return Explanation.match(Float.NaN, toString(doc));
         }
 
         @Override

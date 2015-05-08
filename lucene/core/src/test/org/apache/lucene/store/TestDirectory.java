@@ -17,36 +17,21 @@ package org.apache.lucene.store;
  * limitations under the License.
  */
 
-import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.nio.file.NoSuchFileException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
-import java.util.Collections;
+import java.util.List;
 
-import org.apache.lucene.util.TestUtil;
+import org.apache.lucene.util.IOUtils;
+import org.apache.lucene.util.LuceneTestCase;
 
-public class TestDirectory extends BaseDirectoryTestCase {
-
-  @Override
-  protected Directory getDirectory(File path) throws IOException {
-    if (random().nextBoolean()) {
-      return newDirectory();
-    } else {
-      return newFSDirectory(path);
-    }
-  }
-
-  // we wrap the directory in slow stuff, so only run nightly
-  @Override @Nightly
-  public void testThreadSafety() throws Exception {
-    super.testThreadSafety();
-  }
+public class TestDirectory extends LuceneTestCase {
 
   // Test that different instances of FSDirectory can coexist on the same
   // path, can read, write, and lock files.
   public void testDirectInstantiation() throws Exception {
-    final File path = createTempDir("testDirectInstantiation");
+    final Path path = createTempDir("testDirectInstantiation");
     
     final byte[] largeBuffer = new byte[random().nextInt(256*1024)], largeReadBuffer = new byte[largeBuffer.length];
     for (int i = 0; i < largeBuffer.length; i++) {
@@ -54,9 +39,9 @@ public class TestDirectory extends BaseDirectoryTestCase {
     }
 
     final FSDirectory[] dirs = new FSDirectory[] {
-      new SimpleFSDirectory(path, null),
-      new NIOFSDirectory(path, null),
-      new MMapDirectory(path, null)
+      new SimpleFSDirectory(path),
+      new NIOFSDirectory(path),
+      new MMapDirectory(path)
     };
 
     for (int i=0; i<dirs.length; i++) {
@@ -129,39 +114,41 @@ public class TestDirectory extends BaseDirectoryTestCase {
       assertFalse(dir.isOpen);
     }
     
-    TestUtil.rm(path);
+    IOUtils.rm(path);
   }
 
   // LUCENE-1468
+  @SuppressWarnings("resource")
   public void testCopySubdir() throws Throwable {
-    File path = createTempDir("testsubdir");
+    Path path = createTempDir("testsubdir");
     try {
-      path.mkdirs();
-      new File(path, "subdir").mkdirs();
-      Directory fsDir = new SimpleFSDirectory(path, null);
-      assertEquals(0, new RAMDirectory(fsDir, newIOContext(random())).listAll().length);
+      Files.createDirectory(path.resolve("subdir"));
+      FSDirectory fsDir = new SimpleFSDirectory(path);
+      RAMDirectory ramDir = new RAMDirectory(fsDir, newIOContext(random()));
+      List<String> files = Arrays.asList(ramDir.listAll());
+      assertFalse(files.contains("subdir"));
     } finally {
-      TestUtil.rm(path);
+      IOUtils.rm(path);
     }
   }
 
   // LUCENE-1468
   public void testNotDirectory() throws Throwable {
-    File path = createTempDir("testnotdir");
-    Directory fsDir = new SimpleFSDirectory(path, null);
+    Path path = createTempDir("testnotdir");
+    Directory fsDir = new SimpleFSDirectory(path);
     try {
       IndexOutput out = fsDir.createOutput("afile", newIOContext(random()));
       out.close();
       assertTrue(slowFileExists(fsDir, "afile"));
       try {
-        new SimpleFSDirectory(new File(path, "afile"), null);
+        new SimpleFSDirectory(path.resolve("afile"));
         fail("did not hit expected exception");
-      } catch (NoSuchDirectoryException nsde) {
+      } catch (IOException nsde) {
         // Expected
       }
     } finally {
       fsDir.close();
-      TestUtil.rm(path);
+      IOUtils.rm(path);
     }
   }
 }

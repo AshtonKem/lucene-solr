@@ -24,7 +24,7 @@
     https://issues.apache.org/jira/browse/SOLR-1167
   -->
 <config xmlns:xi="http://www.w3.org/2001/XInclude">
-  <luceneMatchVersion>${tests.luceneMatchVersion:LUCENE_CURRENT}</luceneMatchVersion>
+  <luceneMatchVersion>${tests.luceneMatchVersion:LATEST}</luceneMatchVersion>
   <indexConfig>
     <useCompoundFile>${useCompoundFile:false}</useCompoundFile>
   </indexConfig>
@@ -397,7 +397,7 @@
 
   <!--
     DisMaxRequestHandler allows easy searching across multiple fields
-    for simple user-entered phrases. It's implementation is now just the
+    for simple user-entered phrases. Its implementation is now just the
     standard SearchHandler with a default query parser of "dismax". see
     http://wiki.apache.org/solr/DisMaxRequestHandler
   -->

@@ -21,38 +21,85 @@ package org.apache.lucene.search.highlight;
  */
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Comparator;
 
 import org.apache.lucene.analysis.Analyzer;
-import org.apache.lucene.analysis.Token;
 import org.apache.lucene.analysis.TokenStream;
-import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
-import org.apache.lucene.analysis.tokenattributes.OffsetAttribute;
-import org.apache.lucene.analysis.tokenattributes.PayloadAttribute;
-import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute;
-import org.apache.lucene.index.DocsAndPositionsEnum;
+import org.apache.lucene.analysis.miscellaneous.LimitTokenOffsetFilter;
 import org.apache.lucene.index.Fields;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.StoredDocument;
 import org.apache.lucene.index.Terms;
-import org.apache.lucene.index.TermsEnum;
-import org.apache.lucene.util.ArrayUtil;
-import org.apache.lucene.util.BytesRef;
 
 /**
- * Hides implementation issues associated with obtaining a TokenStream for use
- * with the higlighter - can obtain from TermFreqVectors with offsets and
- * (optionally) positions or from Analyzer class reparsing the stored content.
+ * Convenience methods for obtaining a {@link TokenStream} for use with the {@link Highlighter} - can obtain from
+ * term vectors with offsets and positions or from an Analyzer re-parsing the stored content.
+ *
+ * @see TokenStreamFromTermVector
  */
 public class TokenSources {
+
+  private TokenSources() {}
+
   /**
-   * A convenience method that tries to first get a TermPositionVector for the
+   * Get a token stream from either un-inverting a term vector if possible, or by analyzing the text.
+   *
+   * WARNING: Don't call this if there is more than one value for this field.  If there are, and if there are term
+   * vectors, then there is a single tokenstream with offsets suggesting all the field values were concatenated.
+   *
+   * @param field The field to either get term vectors from or to analyze the text from.
+   * @param tvFields from {@link IndexReader#getTermVectors(int)}. Possibly null. For performance, this instance should
+   *                 be re-used for the same document (e.g. when highlighting multiple fields).
+   * @param text the text to analyze, failing term vector un-inversion
+   * @param analyzer the analyzer to analyze {@code text} with, failing term vector un-inversion
+   * @param maxStartOffset Terms with a startOffset greater than this aren't returned.  Use -1 for no limit.
+   *                       Suggest using {@link Highlighter#getMaxDocCharsToAnalyze()} - 1.
+   *
+   * @return a token stream from either term vectors, or from analyzing the text. Never null.
+   */
+  public static TokenStream getTokenStream(String field, Fields tvFields, String text, Analyzer analyzer,
+                                           int maxStartOffset) throws IOException {
+    TokenStream tokenStream = getTermVectorTokenStreamOrNull(field, tvFields, maxStartOffset);
+    if (tokenStream != null) {
+      return tokenStream;
+    }
+    tokenStream = analyzer.tokenStream(field, text);
+    if (maxStartOffset >= 0 && maxStartOffset < text.length() - 1) {
+      tokenStream = new LimitTokenOffsetFilter(tokenStream, maxStartOffset);
+    }
+    return tokenStream;
+  }
+
+  /**
+   * Get a token stream by un-inverting the term vector. This method returns null if {@code tvFields} is null
+   * or if the field has no term vector, or if the term vector doesn't have offsets.  Positions are recommended on the
+   * term vector but it isn't strictly required.
+   *
+   * @param field The field to get term vectors from.
+   * @param tvFields from {@link IndexReader#getTermVectors(int)}. Possibly null. For performance, this instance should
+   *                 be re-used for the same document (e.g. when highlighting multiple fields).
+   * @param maxStartOffset Terms with a startOffset greater than this aren't returned.  Use -1 for no limit.
+   *                       Suggest using {@link Highlighter#getMaxDocCharsToAnalyze()} - 1
+   * @return a token stream from term vectors. Null if no term vectors with the right options.
+   */
+  public static TokenStream getTermVectorTokenStreamOrNull(String field, Fields tvFields, int maxStartOffset)
+      throws IOException {
+    if (tvFields == null) {
+      return null;
+    }
+    final Terms tvTerms = tvFields.terms(field);
+    if (tvTerms == null || !tvTerms.hasOffsets()) {
+      return null;
+    }
+    return new TokenStreamFromTermVector(tvTerms, maxStartOffset);
+  }
+
+  /**
+   * A convenience method that tries to first get a {@link TokenStreamFromTermVector} for the
    * specified docId, then, falls back to using the passed in
    * {@link org.apache.lucene.document.Document} to retrieve the TokenStream.
    * This is useful when you already have the document, but would prefer to use
    * the vector first.
-   * 
+   *
    * @param reader The {@link org.apache.lucene.index.IndexReader} to use to try
    *        and get the vector from
    * @param docId The docId to retrieve.
@@ -65,7 +112,7 @@ public class TokenSources {
    *         {@link org.apache.lucene.document.Document}
    * @throws IOException if there was an error loading
    */
-
+  @Deprecated // maintenance reasons LUCENE-6445
   public static TokenStream getAnyTokenStream(IndexReader reader, int docId,
       String field, StoredDocument document, Analyzer analyzer) throws IOException {
     TokenStream ts = null;
@@ -94,6 +141,7 @@ public class TokenSources {
    * @return null if field not stored correctly
    * @throws IOException If there is a low-level I/O error
    */
+  @Deprecated // maintenance reasons LUCENE-6445
   public static TokenStream getAnyTokenStream(IndexReader reader, int docId,
       String field, Analyzer analyzer) throws IOException {
     TokenStream ts = null;
@@ -113,185 +161,50 @@ public class TokenSources {
     return ts;
   }
 
-  public static TokenStream getTokenStream(Terms vector) throws IOException {
-    // assumes the worst and makes no assumptions about token position
-    // sequences.
-    return getTokenStream(vector, false);
+  /** Simply calls {@link #getTokenStream(org.apache.lucene.index.Terms)} now. */
+  @Deprecated // maintenance reasons LUCENE-6445
+  public static TokenStream getTokenStream(Terms vector,
+                                           boolean tokenPositionsGuaranteedContiguous) throws IOException {
+    return getTokenStream(vector);
   }
 
   /**
-   * Low level api. Returns a token stream generated from a {@link Terms}. This
+   * Returns a token stream generated from a {@link Terms}. This
    * can be used to feed the highlighter with a pre-parsed token
-   * stream.  The {@link Terms} must have offsets available.
-   * 
-   * In my tests the speeds to recreate 1000 token streams using this method
-   * are: - with TermVector offset only data stored - 420 milliseconds - with
-   * TermVector offset AND position data stored - 271 milliseconds (nb timings
-   * for TermVector with position data are based on a tokenizer with contiguous
-   * positions - no overlaps or gaps) The cost of not using TermPositionVector
-   * to store pre-parsed content and using an analyzer to re-parse the original
-   * content: - reanalyzing the original content - 980 milliseconds
-   * 
-   * The re-analyze timings will typically vary depending on - 1) The complexity
-   * of the analyzer code (timings above were using a
-   * stemmer/lowercaser/stopword combo) 2) The number of other fields (Lucene
-   * reads ALL fields off the disk when accessing just one document field - can
-   * cost dear!) 3) Use of compression on field storage - could be faster due to
-   * compression (less disk IO) or slower (more CPU burn) depending on the
-   * content.
-   * 
-   * @param tokenPositionsGuaranteedContiguous true if the token position
-   *        numbers have no overlaps or gaps. If looking to eek out the last
-   *        drops of performance, set to true. If in doubt, set to false.
+   * stream.  The {@link Terms} must have offsets available. If there are no positions available,
+   * all tokens will have position increments reflecting adjacent tokens, or coincident when terms
+   * share a start offset. If there are stopwords filtered from the index, you probably want to ensure
+   * term vectors have positions so that phrase queries won't match across stopwords.
    *
    * @throws IllegalArgumentException if no offsets are available
    */
-  public static TokenStream getTokenStream(Terms tpv,
-      boolean tokenPositionsGuaranteedContiguous) 
-  throws IOException {
+  @Deprecated // maintenance reasons LUCENE-6445
+  public static TokenStream getTokenStream(final Terms tpv) throws IOException {
 
     if (!tpv.hasOffsets()) {
-      throw new IllegalArgumentException("Cannot create TokenStream from Terms without offsets");
+      throw new IllegalArgumentException("Highlighting requires offsets from the TokenStream.");
+      //TokenStreamFromTermVector can handle a lack of offsets if there are positions. But
+      // highlighters require offsets, so we insist here.
     }
 
-    if (!tokenPositionsGuaranteedContiguous && tpv.hasPositions()) {
-      return new TokenStreamFromTermPositionVector(tpv);
-    }
-
-    // an object used to iterate across an array of tokens
-    final class StoredTokenStream extends TokenStream {
-      Token tokens[];
-
-      int currentToken = 0;
-
-      CharTermAttribute termAtt;
-
-      OffsetAttribute offsetAtt;
-
-      PositionIncrementAttribute posincAtt;
-
-      PayloadAttribute payloadAtt;
-
-      StoredTokenStream(Token tokens[]) {
-        this.tokens = tokens;
-        termAtt = addAttribute(CharTermAttribute.class);
-        offsetAtt = addAttribute(OffsetAttribute.class);
-        posincAtt = addAttribute(PositionIncrementAttribute.class);
-        payloadAtt = addAttribute(PayloadAttribute.class);
-      }
-
-      @Override
-      public boolean incrementToken() {
-        if (currentToken >= tokens.length) {
-          return false;
-        }
-        Token token = tokens[currentToken++];
-        clearAttributes();
-        termAtt.setEmpty().append(token);
-        offsetAtt.setOffset(token.startOffset(), token.endOffset());
-        BytesRef payload = token.getPayload();
-        if (payload != null) {
-          payloadAtt.setPayload(payload);
-        }
-        posincAtt
-            .setPositionIncrement(currentToken <= 1
-                || tokens[currentToken - 1].startOffset() > tokens[currentToken - 2]
-                    .startOffset() ? 1 : 0);
-        return true;
-      }
-    }
-
-    boolean hasPayloads = tpv.hasPayloads();
-
-    // code to reconstruct the original sequence of Tokens
-    TermsEnum termsEnum = tpv.iterator(null);
-    int totalTokens = 0;
-    while(termsEnum.next() != null) {
-      totalTokens += (int) termsEnum.totalTermFreq();
-    }
-    Token tokensInOriginalOrder[] = new Token[totalTokens];
-    ArrayList<Token> unsortedTokens = null;
-    termsEnum = tpv.iterator(null);
-    BytesRef text;
-    DocsAndPositionsEnum dpEnum = null;
-    while ((text = termsEnum.next()) != null) {
-
-      dpEnum = termsEnum.docsAndPositions(null, dpEnum);
-      if (dpEnum == null) {
-        throw new IllegalArgumentException(
-            "Required TermVector Offset information was not found");
-      }
-      final String term = text.utf8ToString();
-
-      dpEnum.nextDoc();
-      final int freq = dpEnum.freq();
-      for(int posUpto=0;posUpto<freq;posUpto++) {
-        final int pos = dpEnum.nextPosition();
-        if (dpEnum.startOffset() < 0) {
-          throw new IllegalArgumentException(
-              "Required TermVector Offset information was not found");
-        }
-        final Token token = new Token(term,
-                                      dpEnum.startOffset(),
-                                      dpEnum.endOffset());
-        if (hasPayloads) {
-          // Must make a deep copy of the returned payload,
-          // since D&PEnum API is allowed to re-use on every
-          // call:
-          token.setPayload(BytesRef.deepCopyOf(dpEnum.getPayload()));
-        }
-
-        if (tokenPositionsGuaranteedContiguous && pos != -1) {
-          // We have positions stored and a guarantee that the token position
-          // information is contiguous
-
-          // This may be fast BUT wont work if Tokenizers used which create >1
-          // token in same position or
-          // creates jumps in position numbers - this code would fail under those
-          // circumstances
-
-          // tokens stored with positions - can use this to index straight into
-          // sorted array
-          tokensInOriginalOrder[pos] = token;
-        } else {
-          // tokens NOT stored with positions or not guaranteed contiguous - must
-          // add to list and sort later
-          if (unsortedTokens == null) {
-            unsortedTokens = new ArrayList<>();
-          }
-          unsortedTokens.add(token);
-        }
-      }
-    }
-
-    // If the field has been stored without position data we must perform a sort
-    if (unsortedTokens != null) {
-      tokensInOriginalOrder = unsortedTokens.toArray(new Token[unsortedTokens
-          .size()]);
-      ArrayUtil.timSort(tokensInOriginalOrder, new Comparator<Token>() {
-        @Override
-        public int compare(Token t1, Token t2) {
-          if (t1.startOffset() == t2.startOffset()) {
-            return t1.endOffset() - t2.endOffset();
-          } else {
-            return t1.startOffset() - t2.startOffset();
-          }
-        }
-      });
-    }
-    return new StoredTokenStream(tokensInOriginalOrder);
+    return new TokenStreamFromTermVector(tpv, -1); // TODO propagate maxStartOffset; see LUCENE-6445
   }
 
   /**
    * Returns a {@link TokenStream} with positions and offsets constructed from
-   * field termvectors.  If the field has no termvectors, or positions or offsets
-   * are not included in the termvector, return null.
+   * field termvectors.  If the field has no termvectors or offsets
+   * are not included in the termvector, return null.  See {@link #getTokenStream(org.apache.lucene.index.Terms)}
+   * for an explanation of what happens when positions aren't present.
+   *
    * @param reader the {@link IndexReader} to retrieve term vectors from
    * @param docId the document to retrieve termvectors for
    * @param field the field to retrieve termvectors for
-   * @return a {@link TokenStream}, or null if positions and offsets are not available
+   * @return a {@link TokenStream}, or null if offsets are not available
    * @throws IOException If there is a low-level I/O error
+   *
+   * @see #getTokenStream(org.apache.lucene.index.Terms)
    */
+  @Deprecated // maintenance reasons LUCENE-6445
   public static TokenStream getTokenStreamWithOffsets(IndexReader reader, int docId,
                                                       String field) throws IOException {
 
@@ -305,20 +218,21 @@ public class TokenSources {
       return null;
     }
 
-    if (!vector.hasPositions() || !vector.hasOffsets()) {
+    if (!vector.hasOffsets()) {
       return null;
     }
     
     return getTokenStream(vector);
   }
 
-  // convenience method
+  @Deprecated // maintenance reasons LUCENE-6445
   public static TokenStream getTokenStream(IndexReader reader, int docId,
       String field, Analyzer analyzer) throws IOException {
     StoredDocument doc = reader.document(docId);
     return getTokenStream(doc, field, analyzer);
   }
-  
+
+  @Deprecated // maintenance reasons LUCENE-6445
   public static TokenStream getTokenStream(StoredDocument doc, String field,
       Analyzer analyzer) {
     String contents = doc.get(field);
@@ -329,7 +243,7 @@ public class TokenSources {
     return getTokenStream(field, contents, analyzer);
   }
 
-  // convenience method
+  @Deprecated // maintenance reasons LUCENE-6445
   public static TokenStream getTokenStream(String field, String contents,
       Analyzer analyzer) {
     try {

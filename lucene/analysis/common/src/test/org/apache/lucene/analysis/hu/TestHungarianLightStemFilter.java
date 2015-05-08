@@ -18,7 +18,6 @@ package org.apache.lucene.analysis.hu;
  */
 
 import java.io.IOException;
-import java.io.Reader;
 
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.BaseTokenStreamTestCase;
@@ -35,17 +34,29 @@ import static org.apache.lucene.analysis.VocabularyAssert.*;
  * Simple tests for {@link HungarianLightStemFilter}
  */
 public class TestHungarianLightStemFilter extends BaseTokenStreamTestCase {
-  private Analyzer analyzer = new Analyzer() {
-    @Override
-    protected TokenStreamComponents createComponents(String fieldName) {
-      Tokenizer source = new MockTokenizer(MockTokenizer.WHITESPACE, false);
-      return new TokenStreamComponents(source, new HungarianLightStemFilter(source));
-    }
-  };
+  private Analyzer analyzer;
+  
+  @Override
+  public void setUp() throws Exception {
+    super.setUp();
+    analyzer = new Analyzer() {
+      @Override
+      protected TokenStreamComponents createComponents(String fieldName) {
+        Tokenizer source = new MockTokenizer(MockTokenizer.WHITESPACE, false);
+        return new TokenStreamComponents(source, new HungarianLightStemFilter(source));
+      }
+    };
+  }
+  
+  @Override
+  public void tearDown() throws Exception {
+    analyzer.close();
+    super.tearDown();
+  }
   
   /** Test against a vocabulary from the reference impl */
   public void testVocabulary() throws IOException {
-    assertVocabulary(analyzer, getDataFile("hulighttestdata.zip"), "hulight.txt");
+    assertVocabulary(analyzer, getDataPath("hulighttestdata.zip"), "hulight.txt");
   }
   
   public void testKeyword() throws IOException {
@@ -59,6 +70,7 @@ public class TestHungarianLightStemFilter extends BaseTokenStreamTestCase {
       }
     };
     checkOneTerm(a, "babakocsi", "babakocsi");
+    a.close();
   }
   
   public void testEmptyTerm() throws IOException {
@@ -70,5 +82,6 @@ public class TestHungarianLightStemFilter extends BaseTokenStreamTestCase {
       }
     };
     checkOneTerm(a, "", "");
+    a.close();
   }
 }

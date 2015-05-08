@@ -47,11 +47,6 @@ final class Packed16ThreeBlocks extends PackedInts.MutableImpl {
     for (int i = 0; i < 3 * valueCount; ++i) {
       blocks[i] = in.readShort();
     }
-    // because packed ints have not always been byte-aligned
-    final int remaining = (int) (PackedInts.Format.PACKED.byteCount(packedIntsVersion, valueCount, 48) - 3L * valueCount * 2);
-    for (int i = 0; i < remaining; ++i) {
-       in.readByte();
-    }
   }
 
   @Override
@@ -126,6 +121,6 @@ final class Packed16ThreeBlocks extends PackedInts.MutableImpl {
   @Override
   public String toString() {
     return getClass().getSimpleName() + "(bitsPerValue=" + bitsPerValue
-        + ", size=" + size() + ", elements.length=" + blocks.length + ")";
+        + ",size=" + size() + ",blocks=" + blocks.length + ")";
   }
 }

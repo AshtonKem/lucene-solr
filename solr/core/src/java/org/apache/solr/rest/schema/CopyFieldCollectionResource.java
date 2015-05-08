@@ -43,7 +43,7 @@ import static org.apache.solr.common.SolrException.ErrorCode;
 
 /**
  * This class responds to requests at /solr/(corename)/schema/copyfields
- * <p/>
+ * <p>
  *
  * To restrict the set of copyFields in the response, specify one or both
  * of the following as query parameters, with values as space and/or comma
@@ -168,11 +168,12 @@ public class CopyFieldCollectionResource extends BaseFieldResource implements GE
               log.error(message.toString().trim());
               throw new SolrException(ErrorCode.BAD_REQUEST, message.toString().trim());
             }
+            IndexSchema newSchema = null;
             boolean success = false;
             while (!success) {
               try {
                 synchronized (oldSchema.getSchemaUpdateLock()) {
-                  IndexSchema newSchema = oldSchema.addCopyFields(fieldsToCopy);
+                  newSchema = oldSchema.addCopyFields(fieldsToCopy,true);
                   if (null != newSchema) {
                     getSolrCore().setLatestSchema(newSchema);
                     success = true;
@@ -185,6 +186,7 @@ public class CopyFieldCollectionResource extends BaseFieldResource implements GE
                   oldSchema = (ManagedIndexSchema)getSolrCore().getLatestSchema();
               }
             }
+            waitForSchemaUpdateToPropagate(newSchema);
           }
         }
       }

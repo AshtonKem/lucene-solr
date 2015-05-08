@@ -1,39 +1,5 @@
 package org.apache.solr.update;
 
-import org.apache.commons.io.output.ByteArrayOutputStream;
-import org.apache.lucene.index.Term;
-import org.apache.lucene.search.TermQuery;
-import org.apache.lucene.search.TermRangeFilter;
-import org.apache.lucene.search.TopDocs;
-import org.apache.lucene.search.join.ScoreMode;
-import org.apache.lucene.search.join.ToParentBlockJoinQuery;
-import org.apache.solr.SolrTestCaseJ4;
-import org.apache.solr.client.solrj.request.RequestWriter;
-import org.apache.solr.client.solrj.request.UpdateRequest;
-import org.apache.solr.common.SolrInputDocument;
-import org.apache.solr.common.util.JavaBinCodec;
-import org.apache.solr.handler.loader.XMLLoader;
-import org.apache.solr.search.SolrIndexSearcher;
-import org.apache.solr.util.DefaultSolrThreadFactory;
-import org.apache.solr.util.RefCounted;
-import org.dom4j.Document;
-import org.dom4j.DocumentHelper;
-import org.dom4j.Element;
-import org.junit.After;
-import org.junit.AfterClass;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
-import org.xml.sax.SAXException;
-
-import javax.xml.stream.XMLInputFactory;
-import javax.xml.stream.XMLStreamException;
-import javax.xml.stream.XMLStreamReader;
-
-
-
-
-
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -50,8 +16,38 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import javax.xml.stream.XMLInputFactory;
 import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.XMLStreamReader;
+
+import org.apache.commons.io.output.ByteArrayOutputStream;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.search.QueryWrapperFilter;
+import org.apache.lucene.search.TermQuery;
+import org.apache.lucene.search.TermRangeQuery;
+import org.apache.lucene.search.TopDocs;
+import org.apache.lucene.search.join.BitDocIdSetCachingWrapperFilter;
+import org.apache.lucene.search.join.ScoreMode;
+import org.apache.lucene.search.join.ToParentBlockJoinQuery;
+import org.apache.solr.SolrTestCaseJ4;
+import org.apache.solr.client.solrj.request.RequestWriter;
+import org.apache.solr.client.solrj.request.UpdateRequest;
+import org.apache.solr.common.SolrInputDocument;
+import org.apache.solr.common.util.ExecutorUtil;
+import org.apache.solr.common.util.JavaBinCodec;
+import org.apache.solr.handler.loader.XMLLoader;
+import org.apache.solr.search.SolrIndexSearcher;
+import org.apache.solr.util.DefaultSolrThreadFactory;
+import org.apache.solr.util.RefCounted;
+import org.dom4j.Document;
+import org.dom4j.DocumentHelper;
+import org.dom4j.Element;
+import org.junit.After;
+import org.junit.AfterClass;
+import org.junit.Before;
+import org.junit.BeforeClass;
+import org.junit.Test;
+import org.xml.sax.SAXException;
 
 /**
  * Licensed to the Apache Software Foundation (ASF) under one or more
@@ -97,8 +93,8 @@ public class AddBlockUpdateTest extends SolrTestCaseJ4 {
     inputFactory = XMLInputFactory.newInstance();
     
     exe = // Executors.newSingleThreadExecutor();
-    rarely() ? Executors.newFixedThreadPool(atLeast(2), new DefaultSolrThreadFactory("AddBlockUpdateTest")) : Executors
-        .newCachedThreadPool(new DefaultSolrThreadFactory("AddBlockUpdateTest"));
+    rarely() ? ExecutorUtil.newMDCAwareFixedThreadPool(atLeast(2), new DefaultSolrThreadFactory("AddBlockUpdateTest")) : ExecutorUtil
+        .newMDCAwareCachedThreadPool(new DefaultSolrThreadFactory("AddBlockUpdateTest"));
 
 
     initCore("solrconfig.xml", "schema15.xml");
@@ -196,7 +192,7 @@ public class AddBlockUpdateTest extends SolrTestCaseJ4 {
         block("Y"),
         block("Z")));
     
-    Collections.shuffle(blocks);
+    Collections.shuffle(blocks, random());
     
     log.trace("{}", blocks);
     
@@ -566,8 +562,8 @@ public class AddBlockUpdateTest extends SolrTestCaseJ4 {
   
   protected ToParentBlockJoinQuery join(final String childTerm) {
     return new ToParentBlockJoinQuery(
-        new TermQuery(new Term(child, childTerm)), new TermRangeFilter(parent,
-            null, null, false, false), ScoreMode.None);
+        new TermQuery(new Term(child, childTerm)), new BitDocIdSetCachingWrapperFilter(new QueryWrapperFilter(
+            new TermRangeQuery(parent, null, null, false, false))), ScoreMode.None);
   }
   
   private Collection<? extends Callable<Void>> callables(List<Document> blocks) {

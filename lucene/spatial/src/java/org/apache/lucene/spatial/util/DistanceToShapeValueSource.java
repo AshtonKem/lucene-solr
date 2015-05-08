@@ -17,19 +17,23 @@ package org.apache.lucene.spatial.util;
  * limitations under the License.
  */
 
-import com.spatial4j.core.context.SpatialContext;
-import com.spatial4j.core.distance.DistanceCalculator;
-import com.spatial4j.core.shape.Point;
-import com.spatial4j.core.shape.Shape;
-import org.apache.lucene.index.AtomicReaderContext;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.queries.function.FunctionValues;
 import org.apache.lucene.queries.function.ValueSource;
 import org.apache.lucene.queries.function.docvalues.DoubleDocValues;
 import org.apache.lucene.search.Explanation;
 import org.apache.lucene.search.IndexSearcher;
 
-import java.io.IOException;
-import java.util.Map;
+import com.spatial4j.core.context.SpatialContext;
+import com.spatial4j.core.distance.DistanceCalculator;
+import com.spatial4j.core.shape.Point;
+import com.spatial4j.core.shape.Shape;
 
 /**
  * The distance from a provided Point to a Point retrieved from a ValueSource via
@@ -68,7 +72,7 @@ public class DistanceToShapeValueSource extends ValueSource {
   }
 
   @Override
-  public FunctionValues getValues(Map context, AtomicReaderContext readerContext) throws IOException {
+  public FunctionValues getValues(Map context, LeafReaderContext readerContext) throws IOException {
     final FunctionValues shapeValues = shapeValueSource.getValues(context, readerContext);
 
     return new DoubleDocValues(this) {
@@ -84,8 +88,9 @@ public class DistanceToShapeValueSource extends ValueSource {
       @Override
       public Explanation explain(int doc) {
         Explanation exp = super.explain(doc);
-        exp.addDetail(shapeValues.explain(doc));
-        return exp;
+        List<Explanation> details = new ArrayList<>(Arrays.asList(exp.getDetails()));
+        details.add(shapeValues.explain(doc));
+        return Explanation.match(exp.getValue(), exp.getDescription(), details);
       }
     };
   }

@@ -19,7 +19,7 @@ package org.apache.solr.update;
 
 import org.apache.lucene.document.Document;
 import org.apache.lucene.index.IndexableField;
-import org.apache.lucene.index.AtomicReader;
+import org.apache.lucene.index.LeafReader;
 import org.apache.lucene.index.NumericDocValues;
 import org.apache.lucene.index.SlowCompositeReaderWrapper;
 import org.apache.lucene.search.similarities.DefaultSimilarity;
@@ -210,7 +210,7 @@ public class DocumentBuilderTest extends SolrTestCaseJ4 {
   }
   
   /**
-   * Its ok to boost a field if it has norms
+   * It's ok to boost a field if it has norms
    */
   public void testBoost() throws Exception {
     XmlDoc xml = new XmlDoc();
@@ -306,7 +306,7 @@ public class DocumentBuilderTest extends SolrTestCaseJ4 {
     assertEquals(1.0F,                    outText[3].boost(), 0.0F);
     assertEquals(1.0F,                    outText[4].boost(), 0.0F);
     
-    // copyField dest with no norms should not have recieved any boost
+    // copyField dest with no norms should not have received any boost
     assertEquals(1.0F, outNoNorms[0].boost(), 0.0F);
     assertEquals(1.0F, outNoNorms[1].boost(), 0.0F);
     
@@ -327,7 +327,7 @@ public class DocumentBuilderTest extends SolrTestCaseJ4 {
       int docid = dl.iterator().nextDoc();
 
       SolrIndexSearcher searcher = req.getSearcher();
-      AtomicReader reader = SlowCompositeReaderWrapper.wrap(searcher.getTopReaderContext().reader());
+      LeafReader reader = SlowCompositeReaderWrapper.wrap(searcher.getTopReaderContext().reader());
 
       assertTrue("similarity doesn't extend DefaultSimilarity, " + 
                  "config or defaults have changed since test was written",
@@ -385,7 +385,7 @@ public class DocumentBuilderTest extends SolrTestCaseJ4 {
   }
   
   /**
-   * Its ok to supply a document boost even if a field omits norms
+   * It's ok to supply a document boost even if a field omits norms
    */
   public void testDocumentBoostOmitNorms() throws Exception {
     XmlDoc xml = new XmlDoc();

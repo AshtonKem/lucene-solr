@@ -21,6 +21,17 @@ package org.apache.lucene.search.suggest.analyzing;
 //   - test w/ syns
 //   - add pruning of low-freq ngrams?
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.AnalyzerWrapper;
 import org.apache.lucene.analysis.TokenStream;
@@ -35,7 +46,7 @@ import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.DirectoryReader;
-import org.apache.lucene.index.FieldInfo.IndexOptions;
+import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
@@ -49,16 +60,14 @@ import org.apache.lucene.store.DataInput;
 import org.apache.lucene.store.DataOutput;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
+import org.apache.lucene.util.Accountable;
+import org.apache.lucene.util.Accountables;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.BytesRefBuilder;
-import org.apache.lucene.util.CharsRef;
 import org.apache.lucene.util.CharsRefBuilder;
 import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.IntsRef;
 import org.apache.lucene.util.IntsRefBuilder;
-import org.apache.lucene.util.OfflineSorter;
-import org.apache.lucene.util.UnicodeUtil;
-import org.apache.lucene.util.Version;
 import org.apache.lucene.util.fst.Builder;
 import org.apache.lucene.util.fst.FST;
 import org.apache.lucene.util.fst.FST.Arc;
@@ -68,16 +77,6 @@ import org.apache.lucene.util.fst.PositiveIntOutputs;
 import org.apache.lucene.util.fst.Util;
 import org.apache.lucene.util.fst.Util.Result;
 import org.apache.lucene.util.fst.Util.TopResults;
-
-import java.io.File;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Random;
-import java.util.Set;
 
 //import java.io.PrintWriter;
 
@@ -111,7 +110,8 @@ import java.util.Set;
  *
  * @lucene.experimental
  */
-public class FreeTextSuggester extends Lookup {
+// redundant 'implements Accountable' to workaround javadocs bugs
+public class FreeTextSuggester extends Lookup implements Accountable {
 
   /** Codec name used in the header for the saved model. */
   public final static String CODEC_NAME = "freetextsuggest";
@@ -213,6 +213,15 @@ public class FreeTextSuggester extends Lookup {
     return fst.ramBytesUsed();
   }
 
+  @Override
+  public Collection<Accountable> getChildResources() {
+    if (fst == null) {
+      return Collections.emptyList();
+    } else {
+      return Collections.singletonList(Accountables.namedAccountable("fst", fst));
+    }
+  }
+
   private static class AnalyzingComparator implements Comparator<BytesRef> {
 
     private final ByteArrayDataInput readerA = new ByteArrayDataInput();
@@ -296,17 +305,7 @@ public class FreeTextSuggester extends Lookup {
     }
 
     String prefix = getClass().getSimpleName();
-    File directory = OfflineSorter.defaultTempDir();
-    // TODO: messy ... java7 has Files.createTempDirectory
-    // ... but 4.x is java6:
-    File tempIndexPath = null;
-    Random random = new Random();
-    while (true) {
-      tempIndexPath = new File(directory, prefix + ".index." + random.nextInt(Integer.MAX_VALUE));
-      if (tempIndexPath.mkdir()) {
-        break;
-      }
-    }
+    Path tempIndexPath = Files.createTempDirectory(prefix + ".index.");
 
     Directory dir = FSDirectory.open(tempIndexPath);
 
@@ -348,7 +347,7 @@ public class FreeTextSuggester extends Lookup {
       }
 
       // Move all ngrams into an FST:
-      TermsEnum termsEnum = terms.iterator(null);
+      TermsEnum termsEnum = terms.iterator();
 
       Outputs<Long> outputs = PositiveIntOutputs.getSingleton();
       Builder<Long> builder = new Builder<>(FST.INPUT_TYPE.BYTE1, outputs);
@@ -390,23 +389,12 @@ public class FreeTextSuggester extends Lookup {
     } finally {
       try {
         if (success) {
-          IOUtils.close(reader);
+          IOUtils.close(reader, dir);
         } else {
-          IOUtils.closeWhileHandlingException(reader, writer);
+          IOUtils.closeWhileHandlingException(reader, writer, dir);
         }
       } finally {
-        for(String file : dir.listAll()) {
-          File path = new File(tempIndexPath, file);
-          if (path.delete() == false) {
-            throw new IllegalStateException("failed to remove " + path);
-          }
-        }
-
-        if (tempIndexPath.delete() == false) {
-          throw new IllegalStateException("failed to remove " + tempIndexPath);
-        }
-
-        dir.close();
+        IOUtils.rm(tempIndexPath);
       }
     }
   }
@@ -481,6 +469,9 @@ public class FreeTextSuggester extends Lookup {
   public List<LookupResult> lookup(final CharSequence key, Set<BytesRef> contexts, int num) throws IOException {
     if (contexts != null) {
       throw new IllegalArgumentException("this suggester doesn't support contexts");
+    }
+    if (fst == null) {
+      throw new IllegalStateException("Lookup not supported at this time");
     }
 
     try (TokenStream ts = queryAnalyzer.tokenStream("", key.toString())) {
@@ -747,12 +738,12 @@ public class FreeTextSuggester extends Lookup {
     }
   }
 
-  /** weight -> cost */
+  /** weight -&gt; cost */
   private long encodeWeight(long ngramCount) {
     return Long.MAX_VALUE - ngramCount;
   }
 
-  /** cost -> weight */
+  /** cost -&gt; weight */
   //private long decodeWeight(Pair<Long,BytesRef> output) {
   private long decodeWeight(Long output) {
     assert output != null;

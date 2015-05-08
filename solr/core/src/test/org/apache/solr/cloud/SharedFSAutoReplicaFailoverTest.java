@@ -17,8 +17,11 @@ package org.apache.solr.cloud;
  * limitations under the License.
  */
 
+import static org.apache.solr.common.cloud.ZkNodeProps.makeMap;
+
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletionService;
 import java.util.concurrent.ExecutorCompletionService;
@@ -28,34 +31,41 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.hadoop.hdfs.MiniDFSCluster;
-import org.apache.lucene.util.LuceneTestCase.Slow;
 import org.apache.lucene.util.LuceneTestCase.Nightly;
+import org.apache.lucene.util.LuceneTestCase.Slow;
 import org.apache.solr.SolrTestCaseJ4.SuppressSSL;
-import org.apache.solr.client.solrj.request.CollectionAdminRequest;
+import org.apache.solr.client.solrj.SolrRequest;
+import org.apache.solr.client.solrj.request.CollectionAdminRequest.Create;
+import org.apache.solr.client.solrj.request.QueryRequest;
 import org.apache.solr.client.solrj.response.CollectionAdminResponse;
 import org.apache.solr.cloud.hdfs.HdfsTestUtil;
 import org.apache.solr.common.cloud.ClusterStateUtil;
-import org.apache.solr.common.cloud.Replica;
 import org.apache.solr.common.cloud.Slice;
 import org.apache.solr.common.cloud.ZkStateReader;
+import org.apache.solr.common.params.CollectionParams;
+import org.apache.solr.common.params.MapSolrParams;
+import org.apache.solr.common.util.ExecutorUtil;
 import org.apache.solr.util.DefaultSolrThreadFactory;
+import org.apache.solr.util.BadHdfsThreadsFilter;
 import org.junit.AfterClass;
-import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.Test;
 
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope.Scope;
+import com.carrotsearch.randomizedtesting.annotations.ThreadLeakFilters;
+
 
 @Nightly
 @Slow
 @SuppressSSL
-@ThreadLeakScope(Scope.NONE) // hdfs client currently leaks thread(s)
+@ThreadLeakFilters(defaultFilters = true, filters = {
+    BadHdfsThreadsFilter.class // hdfs currently leaks thread(s)
+})
 public class SharedFSAutoReplicaFailoverTest extends AbstractFullDistribZkTestBase {
   
   private static final boolean DEBUG = true;
   private static MiniDFSCluster dfsCluster;
 
-  ThreadPoolExecutor executor = new ThreadPoolExecutor(0,
+  ThreadPoolExecutor executor = new ExecutorUtil.MDCAwareThreadPoolExecutor(0,
       Integer.MAX_VALUE, 5, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(),
       new DefaultSolrThreadFactory("testExecutor"));
   
@@ -65,7 +75,7 @@ public class SharedFSAutoReplicaFailoverTest extends AbstractFullDistribZkTestBa
   
   @BeforeClass
   public static void hdfsFailoverBeforeClass() throws Exception {
-    dfsCluster = HdfsTestUtil.setupClass(createTempDir().getAbsolutePath());
+    dfsCluster = HdfsTestUtil.setupClass(createTempDir().toFile().getAbsolutePath());
   }
   
   @AfterClass
@@ -74,10 +84,9 @@ public class SharedFSAutoReplicaFailoverTest extends AbstractFullDistribZkTestBa
     dfsCluster = null;
   }
   
-  @Before
   @Override
-  public void setUp() throws Exception {
-    super.setUp();
+  public void distribSetUp() throws Exception {
+    super.distribSetUp();
     useJettyDataDir = false;
     System.setProperty("solr.xml.persist", "true");
   }
@@ -88,18 +97,16 @@ public class SharedFSAutoReplicaFailoverTest extends AbstractFullDistribZkTestBa
 
   
   public SharedFSAutoReplicaFailoverTest() {
-    fixShardCount = true;
-    
     sliceCount = 2;
-    shardCount = 4;
     completionService = new ExecutorCompletionService<>(executor);
     pending = new HashSet<>();
     checkCreatedVsState = false;
     
   }
-  
-  @Override
-  public void doTest() throws Exception {
+
+  @Test
+  @ShardsFixed(num = 4)
+  public void test() throws Exception {
     try {
       testBasics();
     } finally {
@@ -108,73 +115,140 @@ public class SharedFSAutoReplicaFailoverTest extends AbstractFullDistribZkTestBa
       }
     }
   }
-  
+
   // very slow tests, especially since jetty is started and stopped
   // serially
   private void testBasics() throws Exception {
     String collection1 = "solrj_collection";
-    CollectionAdminResponse response = CollectionAdminRequest.createCollection(collection1, 2,
-        2, 2, null, "conf1", "myOwnField", true, cloudClient);
+    Create createCollectionRequest = new Create();
+    createCollectionRequest.setCollectionName(collection1);
+    createCollectionRequest.setNumShards(2);
+    createCollectionRequest.setReplicationFactor(2);
+    createCollectionRequest.setMaxShardsPerNode(2);
+    createCollectionRequest.setConfigName("conf1");
+    createCollectionRequest.setRouterField("myOwnField");
+    createCollectionRequest.setAutoAddReplicas(true);
+    CollectionAdminResponse response = createCollectionRequest.process(cloudClient);
+
     assertEquals(0, response.getStatus());
     assertTrue(response.isSuccess());
     waitForRecoveriesToFinish(collection1, false);
     
     String collection2 = "solrj_collection2";
-    CollectionAdminResponse response2 = CollectionAdminRequest.createCollection(collection2, 2,
-        2, 2, null, "conf1", "myOwnField", false, cloudClient);
+    createCollectionRequest = new Create();
+    createCollectionRequest.setCollectionName(collection2);
+    createCollectionRequest.setNumShards(2);
+    createCollectionRequest.setReplicationFactor(2);
+    createCollectionRequest.setMaxShardsPerNode(2);
+    createCollectionRequest.setConfigName("conf1");
+    createCollectionRequest.setRouterField("myOwnField");
+    createCollectionRequest.setAutoAddReplicas(false);
+    CollectionAdminResponse response2 = createCollectionRequest.process(getCommonCloudSolrClient());
+
     assertEquals(0, response2.getStatus());
     assertTrue(response2.isSuccess());
     
     waitForRecoveriesToFinish(collection2, false);
     
+    String collection3 = "solrj_collection3";
+    createCollectionRequest = new Create();
+    createCollectionRequest.setCollectionName(collection3);
+    createCollectionRequest.setNumShards(5);
+    createCollectionRequest.setReplicationFactor(1);
+    createCollectionRequest.setMaxShardsPerNode(1);
+    createCollectionRequest.setConfigName("conf1");
+    createCollectionRequest.setRouterField("myOwnField");
+    createCollectionRequest.setAutoAddReplicas(true);
+    CollectionAdminResponse response3 = createCollectionRequest.process(getCommonCloudSolrClient());
+
+    assertEquals(0, response3.getStatus());
+    assertTrue(response3.isSuccess());
+    
+    waitForRecoveriesToFinish(collection3, false);
+
     ChaosMonkey.stop(jettys.get(1));
     ChaosMonkey.stop(jettys.get(2));
-    
-    Thread.sleep(3000);
-    
-    assertTrue("Timeout waiting for all live and active", ClusterStateUtil.waitForAllActiveAndLive(cloudClient.getZkStateReader(), collection1, 120000));
-    
+
+    Thread.sleep(5000);
+
+    assertTrue("Timeout waiting for all live and active", ClusterStateUtil.waitForAllActiveAndLiveReplicas(cloudClient.getZkStateReader(), collection1, 120000));
+
     assertSliceAndReplicaCount(collection1);
+
+    assertEquals(4, ClusterStateUtil.getLiveAndActiveReplicaCount(cloudClient.getZkStateReader(), collection1));
+    assertTrue(ClusterStateUtil.getLiveAndActiveReplicaCount(cloudClient.getZkStateReader(), collection2) < 4);
+
+    // collection3 has maxShardsPerNode=1, there are 4 standard jetties and one control jetty and 2 nodes stopped
+    ClusterStateUtil.waitForLiveAndActiveReplicaCount(cloudClient.getZkStateReader(), collection3, 3, 30000);
     
-    assertEquals(4, getLiveAndActiveCount(collection1));
-    assertTrue(getLiveAndActiveCount(collection2) < 4);
+    // collection1 should still be at 4
+    assertEquals(4, ClusterStateUtil.getLiveAndActiveReplicaCount(cloudClient.getZkStateReader(), collection1));
+    // and collection2 less than 4
+    assertTrue(ClusterStateUtil.getLiveAndActiveReplicaCount(cloudClient.getZkStateReader(), collection2) < 4);
     
     ChaosMonkey.stop(jettys);
     ChaosMonkey.stop(controlJetty);
 
-    assertTrue("Timeout waiting for all not live", ClusterStateUtil.waitForAllNotLive(cloudClient.getZkStateReader(), 45000));
+    assertTrue("Timeout waiting for all not live", ClusterStateUtil.waitForAllReplicasNotLive(cloudClient.getZkStateReader(), 45000));
 
     ChaosMonkey.start(jettys);
     ChaosMonkey.start(controlJetty);
-    
-    assertTrue("Timeout waiting for all live and active", ClusterStateUtil.waitForAllActiveAndLive(cloudClient.getZkStateReader(), collection1, 120000));
+
+    assertTrue("Timeout waiting for all live and active", ClusterStateUtil.waitForAllActiveAndLiveReplicas(cloudClient.getZkStateReader(), collection1, 120000));
 
     assertSliceAndReplicaCount(collection1);
-    
+    assertSingleReplicationAndShardSize(collection3, 5);
     
     int jettyIndex = random().nextInt(jettys.size());
     ChaosMonkey.stop(jettys.get(jettyIndex));
     ChaosMonkey.start(jettys.get(jettyIndex));
     
-    assertTrue("Timeout waiting for all live and active", ClusterStateUtil.waitForAllActiveAndLive(cloudClient.getZkStateReader(), collection1, 60000));
+    assertTrue("Timeout waiting for all live and active", ClusterStateUtil.waitForAllActiveAndLiveReplicas(cloudClient.getZkStateReader(), collection1, 60000));
     
     assertSliceAndReplicaCount(collection1);
-  }
+    
+    assertSingleReplicationAndShardSize(collection3, 5);
+    ClusterStateUtil.waitForLiveAndActiveReplicaCount(cloudClient.getZkStateReader(), collection3, 5, 30000);
+    //disable autoAddReplicas
+    Map m = makeMap(
+        "action", CollectionParams.CollectionAction.CLUSTERPROP.toLower(),
+        "name", ZkStateReader.AUTO_ADD_REPLICAS,
+        "val", "false");
 
-  private int getLiveAndActiveCount(String collection1) {
+    SolrRequest request = new QueryRequest(new MapSolrParams(m));
+    request.setPath("/admin/collections");
+    cloudClient.request(request);
+
+    int currentCount = ClusterStateUtil.getLiveAndActiveReplicaCount(cloudClient.getZkStateReader(), collection1);
+
+    ChaosMonkey.stop(jettys.get(3));
+
+    //solr-no-core.xml has defined workLoopDelay=10s and waitAfterExpiration=10s
+    //Hence waiting for 30 seconds to be on the safe side.
+    Thread.sleep(30000);
+    //Ensures that autoAddReplicas has not kicked in.
+    assertTrue(currentCount > ClusterStateUtil.getLiveAndActiveReplicaCount(cloudClient.getZkStateReader(), collection1));
+
+    //enable autoAddReplicas
+    m = makeMap(
+        "action", CollectionParams.CollectionAction.CLUSTERPROP.toLower(),
+        "name", ZkStateReader.AUTO_ADD_REPLICAS);
+
+    request = new QueryRequest(new MapSolrParams(m));
+    request.setPath("/admin/collections");
+    cloudClient.request(request);
+
+    assertTrue("Timeout waiting for all live and active", ClusterStateUtil.waitForAllActiveAndLiveReplicas(cloudClient.getZkStateReader(), collection1, 60000));
+    assertSliceAndReplicaCount(collection1);
+  }
+  
+  private void assertSingleReplicationAndShardSize(String collection, int numSlices) {
     Collection<Slice> slices;
-    slices = cloudClient.getZkStateReader().getClusterState().getActiveSlices(collection1);
-    int liveAndActive = 0;
+    slices = cloudClient.getZkStateReader().getClusterState().getActiveSlices(collection);
+    assertEquals(numSlices, slices.size());
     for (Slice slice : slices) {
-      for (Replica replica : slice.getReplicas()) {
-        boolean live = cloudClient.getZkStateReader().getClusterState().liveNodesContain(replica.getNodeName());
-        boolean active = replica.getStr(ZkStateReader.STATE_PROP).equals(ZkStateReader.ACTIVE);
-        if (live && active) {
-          liveAndActive++;
-        }
-      }
+      assertEquals(1, slice.getReplicas().size());
     }
-    return liveAndActive;
   }
 
   private void assertSliceAndReplicaCount(String collection) {
@@ -187,8 +261,8 @@ public class SharedFSAutoReplicaFailoverTest extends AbstractFullDistribZkTestBa
   }
   
   @Override
-  public void tearDown() throws Exception {
-    super.tearDown();
+  public void distribTearDown() throws Exception {
+    super.distribTearDown();
     System.clearProperty("solr.xml.persist");
   }
 }

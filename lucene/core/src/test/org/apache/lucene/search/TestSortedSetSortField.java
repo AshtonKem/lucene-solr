@@ -27,10 +27,8 @@ import org.apache.lucene.index.Term;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.LuceneTestCase;
-import org.apache.lucene.util.LuceneTestCase.SuppressCodecs;
 
 /** Simple tests for SortedSetSortField, indexing the sortedset up front */
-@SuppressCodecs({"Lucene40", "Lucene41"}) // avoid codecs that don't support sortedset
 public class TestSortedSetSortField extends LuceneTestCase {
   
   public void testEmptyIndex() throws Exception {
@@ -39,13 +37,13 @@ public class TestSortedSetSortField extends LuceneTestCase {
   
     Sort sort = new Sort();
     sort.setSort(new SortedSetSortField("sortedset", false));
-    TopDocs td = empty.search(query, null, 10, sort, true, true);
+    TopDocs td = empty.search(query, 10, sort, true, true);
     assertEquals(0, td.totalHits);
     
     // for an empty index, any selector should work
     for (SortedSetSelector.Type v : SortedSetSelector.Type.values()) {
       sort.setSort(new SortedSetSortField("sortedset", false, v));
-      td = empty.search(query, null, 10, sort, true, true);
+      td = empty.search(query, 10, sort, true, true);
       assertEquals(0, td.totalHits);
     }
   }

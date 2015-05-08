@@ -17,11 +17,8 @@ package org.apache.lucene.search.similarities;
  * limitations under the License.
  */
 
-import java.io.IOException;
-
-import org.apache.lucene.index.AtomicReader; // javadoc
-import org.apache.lucene.index.AtomicReaderContext;
 import org.apache.lucene.index.FieldInvertState;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.CollectionStatistics;
 import org.apache.lucene.search.Explanation;
@@ -29,9 +26,12 @@ import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.PhraseQuery;
 import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TermStatistics;
-import org.apache.lucene.search.spans.SpanQuery; // javadoc
+import org.apache.lucene.search.spans.SpanQuery;
 import org.apache.lucene.util.BytesRef;
-import org.apache.lucene.util.SmallFloat; // javadoc
+import org.apache.lucene.util.SmallFloat;
+
+import java.io.IOException;
+import java.util.Collections;
 
 /** 
  * Similarity defines the components of Lucene scoring.
@@ -48,10 +48,10 @@ import org.apache.lucene.util.SmallFloat; // javadoc
  * this class at both <a href="#indextime">index-time</a> and 
  * <a href="#querytime">query-time</a>.
  * <p>
- * <a name="indextime"/>
+ * <a name="indextime">Indexing Time</a>
  * At indexing time, the indexer calls {@link #computeNorm(FieldInvertState)}, allowing
  * the Similarity implementation to set a per-document value for the field that will 
- * be later accessible via {@link AtomicReader#getNormValues(String)}.  Lucene makes no assumption
+ * be later accessible via {@link org.apache.lucene.index.LeafReader#getNormValues(String)}.  Lucene makes no assumption
  * about what is in this norm, but it is most useful for encoding length normalization 
  * information.
  * <p>
@@ -67,7 +67,7 @@ import org.apache.lucene.util.SmallFloat; // javadoc
  * <p>
  * Additional scoring factors can be stored in named
  * <code>NumericDocValuesField</code>s and accessed
- * at query-time with {@link AtomicReader#getNumericDocValues(String)}.
+ * at query-time with {@link org.apache.lucene.index.LeafReader#getNumericDocValues(String)}.
  * <p>
  * Finally, using index-time boosts (either via folding into the normalization byte or
  * via DocValues), is an inefficient way to boost the scores of different fields if the
@@ -75,7 +75,7 @@ import org.apache.lucene.util.SmallFloat; // javadoc
  * boost parameter <i>C</i>, and {@link PerFieldSimilarityWrapper} can return different 
  * instances with different boosts depending upon field name.
  * <p>
- * <a name="querytime"/>
+ * <a name="querytime">Query time</a>
  * At query-time, Queries interact with the Similarity via these steps:
  * <ol>
  *   <li>The {@link #computeWeight(float, CollectionStatistics, TermStatistics...)} method is called a single time,
@@ -88,11 +88,11 @@ import org.apache.lucene.util.SmallFloat; // javadoc
  *       is called for each query leaf node, {@link Similarity#queryNorm(float)} is called for the top-level
  *       query, and finally {@link Similarity.SimWeight#normalize(float, float)} passes down the normalization value
  *       and any top-level boosts (e.g. from enclosing {@link BooleanQuery}s).
- *   <li>For each segment in the index, the Query creates a {@link #simScorer(SimWeight, AtomicReaderContext)}
+ *   <li>For each segment in the index, the Query creates a {@link #simScorer(SimWeight, org.apache.lucene.index.LeafReaderContext)}
  *       The score() method is called for each matching document.
  * </ol>
  * <p>
- * <a name="explaintime"/>
+ * <a name="explaintime">Explanations</a>
  * When {@link IndexSearcher#explain(org.apache.lucene.search.Query, int)} is called, queries consult the Similarity's DocScorer for an 
  * explanation of how it computed its score. The query passes in a the document id and an explanation of how the frequency
  * was computed.
@@ -172,7 +172,7 @@ public abstract class Similarity {
    * @return SloppySimScorer for scoring documents across <code>context</code>
    * @throws IOException if there is a low-level I/O error
    */
-  public abstract SimScorer simScorer(SimWeight weight, AtomicReaderContext context) throws IOException;
+  public abstract SimScorer simScorer(SimWeight weight, LeafReaderContext context) throws IOException;
   
   /**
    * API for scoring "sloppy" queries such as {@link TermQuery},
@@ -211,10 +211,10 @@ public abstract class Similarity {
      * @return document's score
      */
     public Explanation explain(int doc, Explanation freq) {
-      Explanation result = new Explanation(score(doc, freq.getValue()), 
-          "score(doc=" + doc + ",freq=" + freq.getValue() +"), with freq of:");
-      result.addDetail(freq);
-      return result;
+      return Explanation.match(
+          score(doc, freq.getValue()),
+          "score(doc=" + doc + ",freq=" + freq.getValue() +"), with freq of:",
+          Collections.singleton(freq));
     }
   }
   
@@ -234,7 +234,7 @@ public abstract class Similarity {
     /** The value for normalization of contained query clauses (e.g. sum of squared weights).
      * <p>
      * NOTE: a Similarity implementation might not use any query normalization at all,
-     * its not required. However, if it wants to participate in query normalization,
+     * it's not required. However, if it wants to participate in query normalization,
      * it can return a value here.
      */
     public abstract float getValueForNormalization();
@@ -242,7 +242,7 @@ public abstract class Similarity {
     /** Assigns the query normalization factor and boost from parent queries to this.
      * <p>
      * NOTE: a Similarity implementation might not use this normalized value at all,
-     * its not required. However, its usually a good idea to at least incorporate 
+     * it's not required. However, it's usually a good idea to at least incorporate 
      * the topLevelBoost (e.g. from an outer BooleanQuery) into its score.
      */
     public abstract void normalize(float queryNorm, float topLevelBoost);

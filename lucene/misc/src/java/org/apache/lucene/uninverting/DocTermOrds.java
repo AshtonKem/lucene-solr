@@ -23,12 +23,11 @@ import java.util.Arrays;
 import java.util.List;
 
 import org.apache.lucene.codecs.PostingsFormat; // javadocs
-import org.apache.lucene.index.AtomicReader;
 import org.apache.lucene.index.DocValues;
-import org.apache.lucene.index.DocsAndPositionsEnum;
-import org.apache.lucene.index.DocsEnum;
+import org.apache.lucene.index.DocValuesType;
+import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.FieldInfo;
-import org.apache.lucene.index.Fields;
+import org.apache.lucene.index.LeafReader;
 import org.apache.lucene.index.SortedSetDocValues;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
@@ -96,7 +95,7 @@ import org.apache.lucene.util.StringHelper;
  *
  *   There are actually 256 byte arrays, to compensate for the fact that the pointers
  *   into the byte arrays are only 3 bytes long.  The correct byte array for a document
- *   is a function of it's id.
+ *   is a function of its id.
  *
  *   To save space and speed up faceting, any term that matches enough documents will
  *   not be un-inverted... it will be skipped while building the un-inverted field structure,
@@ -105,7 +104,7 @@ import org.apache.lucene.util.StringHelper;
  *   To further save memory, the terms (the actual string values) are not all stored in
  *   memory, but a TermIndex is used to convert term numbers to term values only
  *   for the terms needed after faceting has completed.  Only every 128th term value
- *   is stored, along with it's corresponding term number, and this is used as an
+ *   is stored, along with its corresponding term number, and this is used as an
  *   index to find the closest term and iterate until the desired number is hit (very
  *   much like Lucene's own internal term index).
  *
@@ -165,7 +164,7 @@ public class DocTermOrds implements Accountable {
   protected int ordBase;
 
   /** Used while uninverting. */
-  protected DocsEnum docsEnum;
+  protected PostingsEnum postingsEnum;
 
   /** Returns total bytes used. */
   public long ramBytesUsed() {
@@ -182,29 +181,29 @@ public class DocTermOrds implements Accountable {
   }
 
   /** Inverts all terms */
-  public DocTermOrds(AtomicReader reader, Bits liveDocs, String field) throws IOException {
+  public DocTermOrds(LeafReader reader, Bits liveDocs, String field) throws IOException {
     this(reader, liveDocs, field, null, Integer.MAX_VALUE);
   }
   
   // TODO: instead of all these ctors and options, take termsenum!
 
   /** Inverts only terms starting w/ prefix */
-  public DocTermOrds(AtomicReader reader, Bits liveDocs, String field, BytesRef termPrefix) throws IOException {
+  public DocTermOrds(LeafReader reader, Bits liveDocs, String field, BytesRef termPrefix) throws IOException {
     this(reader, liveDocs, field, termPrefix, Integer.MAX_VALUE);
   }
 
   /** Inverts only terms starting w/ prefix, and only terms
    *  whose docFreq (not taking deletions into account) is
-   *  <=  maxTermDocFreq */
-  public DocTermOrds(AtomicReader reader, Bits liveDocs, String field, BytesRef termPrefix, int maxTermDocFreq) throws IOException {
+   *  &lt;=  maxTermDocFreq */
+  public DocTermOrds(LeafReader reader, Bits liveDocs, String field, BytesRef termPrefix, int maxTermDocFreq) throws IOException {
     this(reader, liveDocs, field, termPrefix, maxTermDocFreq, DEFAULT_INDEX_INTERVAL_BITS);
   }
 
   /** Inverts only terms starting w/ prefix, and only terms
    *  whose docFreq (not taking deletions into account) is
-   *  <=  maxTermDocFreq, with a custom indexing interval
+   *  &lt;=  maxTermDocFreq, with a custom indexing interval
    *  (default is every 128nd term). */
-  public DocTermOrds(AtomicReader reader, Bits liveDocs, String field, BytesRef termPrefix, int maxTermDocFreq, int indexIntervalBits) throws IOException {
+  public DocTermOrds(LeafReader reader, Bits liveDocs, String field, BytesRef termPrefix, int maxTermDocFreq, int indexIntervalBits) throws IOException {
     this(field, maxTermDocFreq, indexIntervalBits);
     uninvert(reader, liveDocs, termPrefix);
   }
@@ -230,18 +229,14 @@ public class DocTermOrds implements Accountable {
    *
    *  <p><b>NOTE</b>: you must pass the same reader that was
    *  used when creating this class */
-  public TermsEnum getOrdTermsEnum(AtomicReader reader) throws IOException {
+  public TermsEnum getOrdTermsEnum(LeafReader reader) throws IOException {
     if (indexedTermsArray == null) {
       //System.out.println("GET normal enum");
-      final Fields fields = reader.fields();
-      if (fields == null) {
-        return null;
-      }
-      final Terms terms = fields.terms(field);
+      final Terms terms = reader.terms(field);
       if (terms == null) {
         return null;
       } else {
-        return terms.iterator(null);
+        return terms.iterator();
       }
     } else {
       //System.out.println("GET wrapped enum ordBase=" + ordBase);
@@ -267,16 +262,16 @@ public class DocTermOrds implements Accountable {
   protected void visitTerm(TermsEnum te, int termNum) throws IOException {
   }
 
-  /** Invoked during {@link #uninvert(AtomicReader,Bits,BytesRef)}
+  /** Invoked during {@link #uninvert(org.apache.lucene.index.LeafReader,Bits,BytesRef)}
    *  to record the document frequency for each uninverted
    *  term. */
   protected void setActualDocFreq(int termNum, int df) throws IOException {
   }
 
   /** Call this only once (if you subclass!) */
-  protected void uninvert(final AtomicReader reader, Bits liveDocs, final BytesRef termPrefix) throws IOException {
+  protected void uninvert(final LeafReader reader, Bits liveDocs, final BytesRef termPrefix) throws IOException {
     final FieldInfo info = reader.getFieldInfos().fieldInfo(field);
-    if (info != null && info.hasDocValues()) {
+    if (info != null && info.getDocValuesType() != DocValuesType.NONE) {
       throw new IllegalStateException("Type mismatch: " + field + " was indexed as " + info.getDocValuesType());
     }
     //System.out.println("DTO uninvert field=" + field + " prefix=" + termPrefix);
@@ -288,18 +283,13 @@ public class DocTermOrds implements Accountable {
     final int[] lastTerm = new int[maxDoc];    // last term we saw for this document
     final byte[][] bytes = new byte[maxDoc][]; // list of term numbers for the doc (delta encoded vInts)
 
-    final Fields fields = reader.fields();
-    if (fields == null) {
-      // No terms
-      return;
-    }
-    final Terms terms = fields.terms(field);
+    final Terms terms = reader.terms(field);
     if (terms == null) {
       // No terms
       return;
     }
 
-    final TermsEnum te = terms.iterator(null);
+    final TermsEnum te = terms.iterator();
     final BytesRef seekStart = termPrefix != null ? termPrefix : new BytesRef();
     //System.out.println("seekStart=" + seekStart.utf8ToString());
     if (te.seekCeil(seekStart) == TermsEnum.SeekStatus.END) {
@@ -323,7 +313,7 @@ public class DocTermOrds implements Accountable {
     //
     // During this intermediate form, every document has a (potential) byte[]
     // and the int[maxDoc()] array either contains the termNumber list directly
-    // or the *end* offset of the termNumber list in it's byte array (for faster
+    // or the *end* offset of the termNumber list in its byte array (for faster
     // appending and faster creation of the final form).
     //
     // idea... if things are too large while building, we could do a range of docs
@@ -335,7 +325,7 @@ public class DocTermOrds implements Accountable {
     // frequent terms ahead of time.
 
     int termNum = 0;
-    docsEnum = null;
+    postingsEnum = null;
 
     // Loop begins with te positioned to first term (we call
     // seek above):
@@ -375,13 +365,13 @@ public class DocTermOrds implements Accountable {
       final int df = te.docFreq();
       if (df <= maxTermDocFreq) {
 
-        docsEnum = te.docs(liveDocs, docsEnum, DocsEnum.FLAG_NONE);
+        postingsEnum = te.postings(liveDocs, postingsEnum, PostingsEnum.NONE);
 
         // dF, but takes deletions into account
         int actualDF = 0;
 
         for (;;) {
-          int doc = docsEnum.nextDoc();
+          int doc = postingsEnum.nextDoc();
           if (doc == DocIdSetIterator.NO_MORE_DOCS) {
             break;
           }
@@ -616,19 +606,14 @@ public class DocTermOrds implements Accountable {
     private BytesRef term;
     private long ord = -indexInterval-1;          // force "real" seek
     
-    public OrdWrappedTermsEnum(AtomicReader reader) throws IOException {
+    public OrdWrappedTermsEnum(LeafReader reader) throws IOException {
       assert indexedTermsArray != null;
-      termsEnum = reader.fields().terms(field).iterator(null);
+      termsEnum = reader.fields().terms(field).iterator();
     }
 
     @Override    
-    public DocsEnum docs(Bits liveDocs, DocsEnum reuse, int flags) throws IOException {
-      return termsEnum.docs(liveDocs, reuse, flags);
-    }
-
-    @Override    
-    public DocsAndPositionsEnum docsAndPositions(Bits liveDocs, DocsAndPositionsEnum reuse, int flags) throws IOException {
-      return termsEnum.docsAndPositions(liveDocs, reuse, flags);
+    public PostingsEnum postings(Bits liveDocs, PostingsEnum reuse, int flags) throws IOException {
+      return termsEnum.postings(liveDocs, reuse, flags);
     }
 
     @Override
@@ -771,7 +756,7 @@ public class DocTermOrds implements Accountable {
   }
   
   /** Returns a SortedSetDocValues view of this instance */
-  public SortedSetDocValues iterator(AtomicReader reader) throws IOException {
+  public SortedSetDocValues iterator(LeafReader reader) throws IOException {
     if (isEmpty()) {
       return DocValues.emptySortedSet();
     } else {
@@ -780,7 +765,7 @@ public class DocTermOrds implements Accountable {
   }
   
   private class Iterator extends SortedSetDocValues {
-    final AtomicReader reader;
+    final LeafReader reader;
     final TermsEnum te;  // used internally for lookupOrd() and lookupTerm()
     // currently we read 5 at a time (using the logic of the old iterator)
     final int buffer[] = new int[5];
@@ -791,7 +776,7 @@ public class DocTermOrds implements Accountable {
     private int upto;
     private byte[] arr;
     
-    Iterator(AtomicReader reader) throws IOException {
+    Iterator(LeafReader reader) throws IOException {
       this.reader = reader;
       this.te = termsEnum();
     }
@@ -910,7 +895,7 @@ public class DocTermOrds implements Accountable {
       try {
         return getOrdTermsEnum(reader);
       } catch (IOException e) {
-        throw new RuntimeException();
+        throw new RuntimeException(e);
       }
     }
   }

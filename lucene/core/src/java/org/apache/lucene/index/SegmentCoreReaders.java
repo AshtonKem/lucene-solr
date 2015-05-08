@@ -19,33 +19,26 @@ package org.apache.lucene.index;
 
 import java.io.IOException;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedHashSet;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.lucene.codecs.Codec;
-import org.apache.lucene.codecs.DocValuesProducer;
 import org.apache.lucene.codecs.FieldsProducer;
+import org.apache.lucene.codecs.NormsProducer;
 import org.apache.lucene.codecs.PostingsFormat;
 import org.apache.lucene.codecs.StoredFieldsReader;
 import org.apache.lucene.codecs.TermVectorsReader;
-import org.apache.lucene.index.AtomicReader.CoreClosedListener;
+import org.apache.lucene.index.LeafReader.CoreClosedListener;
 import org.apache.lucene.store.AlreadyClosedException;
-import org.apache.lucene.store.CompoundFileDirectory;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.IOContext;
-import org.apache.lucene.util.Accountable;
 import org.apache.lucene.util.CloseableThreadLocal;
 import org.apache.lucene.util.IOUtils;
-import org.apache.lucene.util.RamUsageEstimator;
 
 /** Holds core readers that are shared (unchanged) when
  * SegmentReader is cloned or reopened */
-final class SegmentCoreReaders implements Accountable {
-
-  private static final long BASE_RAM_BYTES_USED = RamUsageEstimator.shallowSizeOfInstance(SegmentCoreReaders.class);
+final class SegmentCoreReaders {
 
   // Counts how many other readers share the core objects
   // (freqStream, proxStream, tis, etc.) of this reader;
@@ -56,11 +49,16 @@ final class SegmentCoreReaders implements Accountable {
   private final AtomicInteger ref = new AtomicInteger(1);
   
   final FieldsProducer fields;
-  final DocValuesProducer normsProducer;
+  final NormsProducer normsProducer;
 
   final StoredFieldsReader fieldsReaderOrig;
   final TermVectorsReader termVectorsReaderOrig;
-  final CompoundFileDirectory cfsReader;
+  final Directory cfsReader;
+  /** 
+   * fieldinfos for this core: means gen=-1.
+   * this is the exact fieldinfos these codec components saw at write.
+   * in the case of DV updates, SR may hold a newer version. */
+  final FieldInfos coreFieldInfos;
 
   // TODO: make a single thread local w/ a
   // Thingy class holding fieldsReader, termVectorsReader,
@@ -80,34 +78,27 @@ final class SegmentCoreReaders implements Accountable {
     }
   };
 
-  final CloseableThreadLocal<Map<String,Object>> normsLocal = new CloseableThreadLocal<Map<String,Object>>() {
-    @Override
-    protected Map<String,Object> initialValue() {
-      return new HashMap<>();
-    }
-  };
-
   private final Set<CoreClosedListener> coreClosedListeners = 
       Collections.synchronizedSet(new LinkedHashSet<CoreClosedListener>());
   
   SegmentCoreReaders(SegmentReader owner, Directory dir, SegmentCommitInfo si, IOContext context) throws IOException {
 
     final Codec codec = si.info.getCodec();
-    final Directory cfsDir; // confusing name: if (cfs) its the cfsdir, otherwise its the segment's directory.
+    final Directory cfsDir; // confusing name: if (cfs) it's the cfsdir, otherwise it's the segment's directory.
 
     boolean success = false;
     
     try {
       if (si.info.getUseCompoundFile()) {
-        cfsDir = cfsReader = new CompoundFileDirectory(dir, IndexFileNames.segmentFileName(si.info.name, "", IndexFileNames.COMPOUND_FILE_EXTENSION), context, false);
+        cfsDir = cfsReader = codec.compoundFormat().getCompoundReader(dir, si.info, context);
       } else {
         cfsReader = null;
         cfsDir = dir;
       }
 
-      final FieldInfos fieldInfos = owner.fieldInfos;
+      coreFieldInfos = codec.fieldInfosFormat().read(cfsDir, si.info, "", context);
       
-      final SegmentReadState segmentReadState = new SegmentReadState(cfsDir, si.info, fieldInfos, context);
+      final SegmentReadState segmentReadState = new SegmentReadState(cfsDir, si.info, coreFieldInfos, context);
       final PostingsFormat format = codec.postingsFormat();
       // Ask codec for its Fields
       fields = format.fieldsProducer(segmentReadState);
@@ -116,17 +107,17 @@ final class SegmentCoreReaders implements Accountable {
       // TODO: since we don't write any norms file if there are no norms,
       // kinda jaky to assume the codec handles the case of no norms file at all gracefully?!
 
-      if (fieldInfos.hasNorms()) {
+      if (coreFieldInfos.hasNorms()) {
         normsProducer = codec.normsFormat().normsProducer(segmentReadState);
         assert normsProducer != null;
       } else {
         normsProducer = null;
       }
   
-      fieldsReaderOrig = si.info.getCodec().storedFieldsFormat().fieldsReader(cfsDir, si.info, fieldInfos, context);
+      fieldsReaderOrig = si.info.getCodec().storedFieldsFormat().fieldsReader(cfsDir, si.info, coreFieldInfos, context);
 
-      if (fieldInfos.hasVectors()) { // open term vector files only as needed
-        termVectorsReaderOrig = si.info.getCodec().termVectorsFormat().vectorsReader(cfsDir, si.info, fieldInfos, context);
+      if (coreFieldInfos.hasVectors()) { // open term vector files only as needed
+        termVectorsReaderOrig = si.info.getCodec().termVectorsFormat().vectorsReader(cfsDir, si.info, coreFieldInfos, context);
       } else {
         termVectorsReaderOrig = null;
       }
@@ -153,31 +144,12 @@ final class SegmentCoreReaders implements Accountable {
     throw new AlreadyClosedException("SegmentCoreReaders is already closed");
   }
 
-  NumericDocValues getNormValues(FieldInfos infos, String field) throws IOException {
-    Map<String,Object> normFields = normsLocal.get();
-
-    NumericDocValues norms = (NumericDocValues) normFields.get(field);
-    if (norms != null) {
-      return norms;
-    } else {
-      FieldInfo fi = infos.fieldInfo(field);
-      if (fi == null || !fi.hasNorms()) {
-        // Field does not exist or does not index norms
-        return null;
-      }
-      assert normsProducer != null;
-      norms = normsProducer.getNumeric(fi);
-      normFields.put(field, norms);
-      return norms;
-    }
-  }
-
   void decRef() throws IOException {
     if (ref.decrementAndGet() == 0) {
 //      System.err.println("--- closing core readers");
       Throwable th = null;
       try {
-        IOUtils.close(termVectorsLocal, fieldsReaderLocal, normsLocal, fields, termVectorsReaderOrig, fieldsReaderOrig,
+        IOUtils.close(termVectorsLocal, fieldsReaderLocal, fields, termVectorsReaderOrig, fieldsReaderOrig,
             cfsReader, normsProducer);
       } catch (Throwable throwable) {
         th = throwable;
@@ -212,14 +184,5 @@ final class SegmentCoreReaders implements Accountable {
   
   void removeCoreClosedListener(CoreClosedListener listener) {
     coreClosedListeners.remove(listener);
-  }
-
-  @Override
-  public long ramBytesUsed() {
-    return BASE_RAM_BYTES_USED +
-        ((normsProducer!=null) ? normsProducer.ramBytesUsed() : 0) +
-        ((fields!=null) ? fields.ramBytesUsed() : 0) + 
-        ((fieldsReaderOrig!=null)? fieldsReaderOrig.ramBytesUsed() : 0) + 
-        ((termVectorsReaderOrig!=null) ? termVectorsReaderOrig.ramBytesUsed() : 0);
   }
 }

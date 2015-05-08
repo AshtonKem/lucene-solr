@@ -57,6 +57,15 @@ public class ModifiableSolrParams extends SolrParams
     }
   }
 
+  public int size() {
+    return vals == null ? 0 : vals.size();
+  }
+
+  public Map<String,String[]> getMap() {
+    return vals;
+  }
+
+
   //----------------------------------------------------------------
   //----------------------------------------------------------------
 

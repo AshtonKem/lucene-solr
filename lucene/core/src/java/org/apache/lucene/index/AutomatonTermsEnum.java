@@ -43,9 +43,9 @@ import org.apache.lucene.util.automaton.Transition;
  * completely accepted. This is not possible when the language accepted by the
  * FSM is not finite (i.e. * operator).
  * </p>
- * @lucene.experimental
+ * @lucene.internal
  */
-class AutomatonTermsEnum extends FilteredTermsEnum {
+public class AutomatonTermsEnum extends FilteredTermsEnum {
   // a tableized array-based form of the DFA
   private final ByteRunAutomaton runAutomaton;
   // common suffix of the automaton
@@ -70,9 +70,8 @@ class AutomatonTermsEnum extends FilteredTermsEnum {
   /**
    * Construct an enumerator based upon an automaton, enumerating the specified
    * field, working on a supplied TermsEnum
-   * <p>
+   *
    * @lucene.experimental 
-   * <p>
    * @param compiled CompiledAutomaton
    */
   public AutomatonTermsEnum(TermsEnum tenum, CompiledAutomaton compiled) {
@@ -110,7 +109,7 @@ class AutomatonTermsEnum extends FilteredTermsEnum {
     //System.out.println("ATE.nextSeekTerm term=" + term);
     if (term == null) {
       assert seekBytesRef.length() == 0;
-      // return the empty term, as its valid
+      // return the empty term, as it's valid
       if (runAutomaton.isAccept(runAutomaton.getInitialState())) {   
         return seekBytesRef.get();
       }
@@ -305,12 +304,12 @@ class AutomatonTermsEnum extends FilteredTermsEnum {
    * can match.
    * 
    * @param position current position in the input String
-   * @return position >=0 if more possible solutions exist for the DFA
+   * @return {@code position >= 0} if more possible solutions exist for the DFA
    */
   private int backtrack(int position) {
     while (position-- > 0) {
       int nextChar = seekBytesRef.byteAt(position) & 0xff;
-      // if a character is 0xff its a dead-end too,
+      // if a character is 0xff it's a dead-end too,
       // because there is no higher character in binary sort order.
       if (nextChar++ != 0xff) {
         seekBytesRef.setByteAt(position, (byte) nextChar);

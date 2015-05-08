@@ -114,7 +114,7 @@ public class TestRegexpRandom2 extends LuceneTestCase {
     
     @Override
     protected TermsEnum getTermsEnum(Terms terms, AttributeSource atts) throws IOException {
-      return new SimpleAutomatonTermsEnum(terms.iterator(null));
+      return new SimpleAutomatonTermsEnum(terms.iterator());
     }
 
     private class SimpleAutomatonTermsEnum extends FilteredTermsEnum {
@@ -138,6 +138,15 @@ public class TestRegexpRandom2 extends LuceneTestCase {
     public String toString(String field) {
       return field.toString() + automaton.toString();
     }
+
+    @Override
+    public boolean equals(Object obj) {
+      if (super.equals(obj) == false) {
+        return false;
+      }
+      final DumbRegexpQuery that = (DumbRegexpQuery) obj;
+      return automaton.equals(that.automaton);
+    }
   }
   
   /** test a bunch of random regular expressions */
@@ -146,7 +155,7 @@ public class TestRegexpRandom2 extends LuceneTestCase {
     for (int i = 0; i < num; i++) {
       String reg = AutomatonTestUtil.randomRegexp(random());
       if (VERBOSE) {
-        System.out.println("TEST: regexp=" + reg);
+        System.out.println("TEST: regexp='" + reg + "'");
       }
       assertSame(reg);
     }

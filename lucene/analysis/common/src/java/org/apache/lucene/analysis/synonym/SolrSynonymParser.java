@@ -32,11 +32,11 @@ import org.apache.lucene.util.CharsRefBuilder;
  * Parser for the Solr synonyms format.
  * <ol>
  *   <li> Blank lines and lines starting with '#' are comments.
- *   <li> Explicit mappings match any token sequence on the LHS of "=>"
+ *   <li> Explicit mappings match any token sequence on the LHS of "=&gt;"
  *        and replace with all alternatives on the RHS.  These types of mappings
  *        ignore the expand parameter in the constructor.
  *        Example:
- *        <blockquote>i-pod, i pod => ipod</blockquote>
+ *        <blockquote>i-pod, i pod =&gt; ipod</blockquote>
  *   <li> Equivalent synonyms may be separated with commas and give
  *        no explicit mapping.  In this case the mapping behavior will
  *        be taken from the expand parameter in the constructor.  This allows
@@ -47,10 +47,10 @@ import org.apache.lucene.util.CharsRefBuilder;
  *   <li> Multiple synonym mapping entries are merged.
  *        Example:
  *        <blockquote>
- *         foo => foo bar<br>
- *         foo => baz<br><br>
+ *         foo =&gt; foo bar<br>
+ *         foo =&gt; baz<br><br>
  *         is equivalent to<br><br>
- *         foo => foo bar, baz
+ *         foo =&gt; foo bar, baz
  *        </blockquote>
  *  </ol>
  * @lucene.experimental
@@ -84,9 +84,6 @@ public class SolrSynonymParser extends SynonymMap.Parser {
         continue; // ignore empty lines and comments
       }
       
-      CharsRef inputs[];
-      CharsRef outputs[];
-      
       // TODO: we could process this more efficiently.
       String sides[] = split(line, "=>");
       if (sides.length > 1) { // explicit mapping
@@ -94,37 +91,45 @@ public class SolrSynonymParser extends SynonymMap.Parser {
           throw new IllegalArgumentException("more than one explicit mapping specified on the same line");
         }
         String inputStrings[] = split(sides[0], ",");
-        inputs = new CharsRef[inputStrings.length];
+        CharsRef[] inputs = new CharsRef[inputStrings.length];
         for (int i = 0; i < inputs.length; i++) {
           inputs[i] = analyze(unescape(inputStrings[i]).trim(), new CharsRefBuilder());
         }
         
         String outputStrings[] = split(sides[1], ",");
-        outputs = new CharsRef[outputStrings.length];
+        CharsRef[] outputs = new CharsRef[outputStrings.length];
         for (int i = 0; i < outputs.length; i++) {
           outputs[i] = analyze(unescape(outputStrings[i]).trim(), new CharsRefBuilder());
         }
+        // these mappings are explicit and never preserve original
+        for (int i = 0; i < inputs.length; i++) {
+          for (int j = 0; j < outputs.length; j++) {
+            add(inputs[i], outputs[j], false);
+          }
+        }
       } else {
         String inputStrings[] = split(line, ",");
-        inputs = new CharsRef[inputStrings.length];
+        CharsRef[] inputs = new CharsRef[inputStrings.length];
         for (int i = 0; i < inputs.length; i++) {
           inputs[i] = analyze(unescape(inputStrings[i]).trim(), new CharsRefBuilder());
         }
         if (expand) {
-          outputs = inputs;
+          // all pairs
+          for (int i = 0; i < inputs.length; i++) {
+            for (int j = 0; j < inputs.length; j++) {
+              if (i != j) {
+                add(inputs[i], inputs[j], true);
+              }
+            }
+          }
         } else {
-          outputs = new CharsRef[1];
-          outputs[0] = inputs[0];
-        }
-      }
-      
-      // currently we include the term itself in the map,
-      // and use includeOrig = false always.
-      // this is how the existing filter does it, but its actually a bug,
-      // especially if combined with ignoreCase = true
-      for (int i = 0; i < inputs.length; i++) {
-        for (int j = 0; j < outputs.length; j++) {
-          add(inputs[i], outputs[j], false);
+          // all subsequent inputs map to first one; we also add inputs[0] here
+          // so that we "effectively" (because we remove the original input and
+          // add back a synonym with the same text) change that token's type to
+          // SYNONYM (matching legacy behavior):
+          for (int i = 0; i < inputs.length; i++) {
+            add(inputs[i], inputs[0], false);
+          }
         }
       }
     }

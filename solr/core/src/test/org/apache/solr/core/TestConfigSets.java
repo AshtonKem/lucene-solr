@@ -41,12 +41,12 @@ public class TestConfigSets extends SolrTestCaseJ4 {
   public static String solrxml = "<solr><str name=\"configSetBaseDir\">${configsets:configsets}</str></solr>";
 
   public CoreContainer setupContainer(String configSetsBaseDir) {
-    File testDirectory = createTempDir();
+    File testDirectory = createTempDir().toFile();
 
     System.setProperty("configsets", configSetsBaseDir);
 
     SolrResourceLoader loader = new SolrResourceLoader(testDirectory.getAbsolutePath());
-    CoreContainer container = new CoreContainer(loader, ConfigSolr.fromString(loader, solrxml));
+    CoreContainer container = new CoreContainer(SolrXmlConfig.fromString(loader, solrxml));
     container.load();
 
     return container;
@@ -115,13 +115,13 @@ public class TestConfigSets extends SolrTestCaseJ4 {
     System.setProperty("configsets", csd);
 
     SolrResourceLoader loader = new SolrResourceLoader(testDirectory.getAbsolutePath());
-    CoreContainer container = new CoreContainer(loader, ConfigSolr.fromString(loader, solrxml));
+    CoreContainer container = new CoreContainer(SolrXmlConfig.fromString(loader, solrxml));
     container.load();
 
     // We initially don't have a /get handler defined
     SolrCore core = container.create(new CoreDescriptor(container, "core1", testDirectory + "/core", "configSet", "configset-2"));
-    assertThat("No /get handler should be defined in the initial configuration",
-        core.getRequestHandler("/get"), is(nullValue()));
+    assertThat("No /dump handler should be defined in the initial configuration",
+        core.getRequestHandler("/dump"), is(nullValue()));
 
     // Now copy in a config with a /get handler and reload
     FileUtils.copyFile(getFile("solr/collection1/conf/solrconfig-withgethandler.xml"),
@@ -129,8 +129,8 @@ public class TestConfigSets extends SolrTestCaseJ4 {
     container.reload("core1");
 
     core = container.getCore("core1");
-    assertThat("A /get handler should be defined in the reloaded configuration",
-        core.getRequestHandler("/get"), is(notNullValue()));
+    assertThat("A /dump handler should be defined in the reloaded configuration",
+        core.getRequestHandler("/dump"), is(notNullValue()));
     core.close();
 
     container.shutdown();

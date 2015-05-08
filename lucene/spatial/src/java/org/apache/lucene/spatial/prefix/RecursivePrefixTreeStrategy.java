@@ -17,9 +17,12 @@ package org.apache.lucene.spatial.prefix;
  * limitations under the License.
  */
 
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+
 import com.spatial4j.core.shape.Point;
 import com.spatial4j.core.shape.Shape;
-import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.search.Filter;
 import org.apache.lucene.spatial.prefix.tree.Cell;
 import org.apache.lucene.spatial.prefix.tree.CellIterator;
@@ -28,9 +31,6 @@ import org.apache.lucene.spatial.prefix.tree.SpatialPrefixTree;
 import org.apache.lucene.spatial.query.SpatialArgs;
 import org.apache.lucene.spatial.query.SpatialOperation;
 import org.apache.lucene.spatial.query.UnsupportedSpatialOperation;
-
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * A {@link PrefixTreeStrategy} which uses {@link AbstractVisitingPrefixTreeFilter}.
@@ -56,13 +56,15 @@ public class RecursivePrefixTreeStrategy extends PrefixTreeStrategy {
   // and a LegacyPrefixTree.
   protected boolean pruneLeafyBranches = true;
 
-  protected boolean pointsOnly = false;//if true, there are no leaves
-
   protected boolean multiOverlappingIndexedShapes = true;
 
   public RecursivePrefixTreeStrategy(SpatialPrefixTree grid, String fieldName) {
     super(grid, fieldName);
     prefixGridScanLevel = grid.getMaxLevels() - 4;//TODO this default constant is dependent on the prefix grid size
+  }
+
+  public int getPrefixGridScanLevel() {
+    return prefixGridScanLevel;
   }
 
   /**
@@ -77,10 +79,8 @@ public class RecursivePrefixTreeStrategy extends PrefixTreeStrategy {
     this.prefixGridScanLevel = prefixGridScanLevel;
   }
 
-  /** True if only indexed points shall be supported. There are no "leafs" in such a case.  See
-   *  {@link IntersectsPrefixTreeFilter#hasIndexedLeaves}. */
-  public void setPointsOnly(boolean pointsOnly) {
-    this.pointsOnly = pointsOnly;
+  public boolean isMultiOverlappingIndexedShapes() {
+    return multiOverlappingIndexedShapes;
   }
 
   /** See {@link ContainsPrefixTreeFilter#multiOverlappingIndexedShapes}. */
@@ -88,9 +88,18 @@ public class RecursivePrefixTreeStrategy extends PrefixTreeStrategy {
     this.multiOverlappingIndexedShapes = multiOverlappingIndexedShapes;
   }
 
-  /** An optional hint affecting non-point shapes: it will
-   * simplify/aggregate sets of complete leaves in a cell to its parent, resulting in ~20-25%
-   * fewer indexed cells. However, it will likely be removed in the future. (default=true)
+  public boolean isPruneLeafyBranches() {
+    return pruneLeafyBranches;
+  }
+
+  /**
+   * An optional hint affecting non-point shapes: it will
+   * prune away a complete set sibling leaves to their parent (recursively), resulting in ~20-50%
+   * fewer indexed cells, and consequently that much less disk and that much faster indexing.
+   * So if it's a quad tree and all 4 sub-cells are there marked as a leaf, then they will be
+   * removed (pruned) and the parent is marked as a leaf instead.  This occurs recursively on up.  Unfortunately, the
+   * current implementation will buffer all cells to do this, so consider disabling for high precision (low distErrPct)
+   * shapes. (default=true)
    */
   public void setPruneLeafyBranches(boolean pruneLeafyBranches) {
     this.pruneLeafyBranches = pruneLeafyBranches;
@@ -112,13 +121,13 @@ public class RecursivePrefixTreeStrategy extends PrefixTreeStrategy {
   }
 
   @Override
-  protected TokenStream createTokenStream(Shape shape, int detailLevel) {
+  protected Iterator<Cell> createCellIteratorToIndex(Shape shape, int detailLevel, Iterator<Cell> reuse) {
     if (shape instanceof Point || !pruneLeafyBranches)
-      return super.createTokenStream(shape, detailLevel);
+      return super.createCellIteratorToIndex(shape, detailLevel, reuse);
 
     List<Cell> cells = new ArrayList<>(4096);
     recursiveTraverseAndPrune(grid.getWorldCell(), shape, detailLevel, cells);
-    return new CellTokenStream().setCells(cells.iterator());
+    return cells.iterator();
   }
 
   /** Returns true if cell was added as a leaf. If it wasn't it recursively descends. */
@@ -168,9 +177,9 @@ public class RecursivePrefixTreeStrategy extends PrefixTreeStrategy {
     Shape shape = args.getShape();
     int detailLevel = grid.getLevelForDistance(args.resolveDistErr(ctx, distErrPct));
 
-    if (pointsOnly || op == SpatialOperation.Intersects) {
+    if (op == SpatialOperation.Intersects) {
       return new IntersectsPrefixTreeFilter(
-          shape, getFieldName(), grid, detailLevel, prefixGridScanLevel, !pointsOnly);
+          shape, getFieldName(), grid, detailLevel, prefixGridScanLevel);
     } else if (op == SpatialOperation.IsWithin) {
       return new WithinPrefixTreeFilter(
           shape, getFieldName(), grid, detailLevel, prefixGridScanLevel,

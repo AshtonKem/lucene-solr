@@ -1,4 +1,3 @@
-/**
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -75,6 +74,9 @@ public abstract class CoreAdminParams
   /** The collection name in solr cloud */
   public final static String COLLECTION = "collection";
 
+  /** The replica name in solr cloud */
+  public final static String REPLICA = "replica";
+  
   /** The shard id in solr cloud */
   public final static String SHARD = "shard";
   
@@ -135,8 +137,10 @@ public abstract class CoreAdminParams
     LOAD_ON_STARTUP,
     TRANSIENT,
     OVERSEEROP,
-    REQUESTSTATUS;
-    
+    REQUESTSTATUS,
+    REJOINLEADERELECTION,
+    INVOKE;
+
     public static CoreAdminAction get( String p )
     {
       if( p != null ) {

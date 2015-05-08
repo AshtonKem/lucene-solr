@@ -30,13 +30,13 @@ to check if the results are what we expect):</p>
 <!-- =   Java2Html Converter 5.0 [2006-03-04] by Markus Gebhard  markus@jave.de   = -->
 <!-- =     Further information: http://www.java2html.de     = -->
 <pre class="prettyprint">
-    Analyzer analyzer = new StandardAnalyzer(Version.LUCENE_CURRENT);
+    Analyzer analyzer = new StandardAnalyzer();
 
     // Store the index in memory:
     Directory directory = new RAMDirectory();
     // To store an index on disk, use this instead:
     //Directory directory = FSDirectory.open("/tmp/testindex");
-    IndexWriterConfig config = new IndexWriterConfig(Version.LUCENE_CURRENT, analyzer);
+    IndexWriterConfig config = new IndexWriterConfig(analyzer);
     IndexWriter iwriter = new IndexWriter(directory, config);
     Document doc = new Document();
     String text = "This is the text to be indexed.";
@@ -48,7 +48,7 @@ to check if the results are what we expect):</p>
     DirectoryReader ireader = DirectoryReader.open(directory);
     IndexSearcher isearcher = new IndexSearcher(ireader);
     // Parse a simple query that searches for "text":
-    QueryParser parser = new QueryParser(Version.LUCENE_CURRENT, "fieldname", analyzer);
+    QueryParser parser = new QueryParser("fieldname", analyzer);
     Query query = parser.parse("text");
     ScoreDoc[] hits = isearcher.search(query, null, 1000).scoreDocs;
     assertEquals(1, hits.length);
@@ -118,7 +118,7 @@ which implements files as memory-resident data structures.</li>
 
 <li>
 <b>{@link org.apache.lucene.util}</b>
-contains a few handy data structures and util classes, ie {@link org.apache.lucene.util.OpenBitSet OpenBitSet}
+contains a few handy data structures and util classes, ie {@link org.apache.lucene.util.FixedBitSet FixedBitSet}
 and {@link org.apache.lucene.util.PriorityQueue PriorityQueue}.</li>
 </ul>
 To use Lucene, an application should:

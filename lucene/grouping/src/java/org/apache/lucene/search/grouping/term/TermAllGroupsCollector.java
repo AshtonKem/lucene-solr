@@ -17,7 +17,7 @@ package org.apache.lucene.search.grouping.term;
  * limitations under the License.
  */
 
-import org.apache.lucene.index.AtomicReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.DocValues;
 import org.apache.lucene.index.SortedDocValues;
 import org.apache.lucene.search.grouping.AbstractAllGroupsCollector;
@@ -34,8 +34,7 @@ import java.util.List;
  * query. Only the group value is collected, and the order
  * is undefined.  This collector does not determine
  * the most relevant document of a group.
- *
- * <p/>
+ * <p>
  * Implementation detail: an int hash set (SentinelIntSet)
  * is used to detect if a group is already added to the
  * total count.  For each segment the int set is cleared and filled
@@ -102,7 +101,7 @@ public class TermAllGroupsCollector extends AbstractAllGroupsCollector<BytesRef>
   }
 
   @Override
-  protected void doSetNextReader(AtomicReaderContext context) throws IOException {
+  protected void doSetNextReader(LeafReaderContext context) throws IOException {
     index = DocValues.getSorted(context.reader(), groupField);
 
     // Clear ordSet and fill it with previous encountered groups that can occur in the current segment.
@@ -117,5 +116,10 @@ public class TermAllGroupsCollector extends AbstractAllGroupsCollector<BytesRef>
         }
       }
     }
+  }
+  
+  @Override
+  public boolean needsScores() {
+    return true; // TODO, maybe we don't?
   }
 }

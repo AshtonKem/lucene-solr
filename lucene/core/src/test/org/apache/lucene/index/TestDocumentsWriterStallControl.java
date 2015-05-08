@@ -33,7 +33,7 @@ import org.apache.lucene.util.ThreadInterruptedException;
 public class TestDocumentsWriterStallControl extends LuceneTestCase {
   
   public void testSimpleStall() throws InterruptedException {
-    DocumentsWriterStallControl ctrl = new DocumentsWriterStallControl();
+    DocumentsWriterStallControl ctrl = new DocumentsWriterStallControl(newIndexWriterConfig());
    
     ctrl.updateStalled(false);
     Thread[] waitThreads = waitThreads(atLeast(1), ctrl);
@@ -46,7 +46,7 @@ public class TestDocumentsWriterStallControl extends LuceneTestCase {
     ctrl.updateStalled(true);
     waitThreads = waitThreads(atLeast(1), ctrl);
     start(waitThreads);
-    awaitState(Thread.State.WAITING, waitThreads);
+    awaitState(Thread.State.TIMED_WAITING, waitThreads);
     assertTrue(ctrl.hasBlocked());
     assertTrue(ctrl.anyStalledThreads());
     ctrl.updateStalled(false);
@@ -55,7 +55,7 @@ public class TestDocumentsWriterStallControl extends LuceneTestCase {
   }
   
   public void testRandom() throws InterruptedException {
-    final DocumentsWriterStallControl ctrl = new DocumentsWriterStallControl();
+    final DocumentsWriterStallControl ctrl = new DocumentsWriterStallControl(newIndexWriterConfig());
     ctrl.updateStalled(false);
     
     Thread[] stallThreads = new Thread[atLeast(3)];
@@ -96,7 +96,7 @@ public class TestDocumentsWriterStallControl extends LuceneTestCase {
   }
   
   public void testAccquireReleaseRace() throws InterruptedException {
-    final DocumentsWriterStallControl ctrl = new DocumentsWriterStallControl();
+    final DocumentsWriterStallControl ctrl = new DocumentsWriterStallControl(newIndexWriterConfig());
     ctrl.updateStalled(false);
     final AtomicBoolean stop = new AtomicBoolean(false);
     final AtomicBoolean checkPoint = new AtomicBoolean(true);

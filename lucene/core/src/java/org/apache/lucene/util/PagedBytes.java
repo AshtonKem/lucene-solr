@@ -134,6 +134,11 @@ public final class PagedBytes implements Accountable {
       }
       return size;
     }
+
+    @Override
+    public String toString() {
+      return "PagedBytes(blocksize=" + blockSize + ")";
+    }
   }
 
   /** 1&lt;&lt;blockBits must be bigger than biggest single
@@ -181,7 +186,7 @@ public final class PagedBytes implements Accountable {
 
   /** Copy BytesRef in, setting BytesRef out to the result.
    * Do not use this if you will use freeze(true).
-   * This only supports bytes.length <= blockSize */
+   * This only supports bytes.length &lt;= blockSize */
   public void copy(BytesRef bytes, BytesRef out) {
     int left = blockSize - upto;
     if (bytes.length > left || currentBlock==null) {

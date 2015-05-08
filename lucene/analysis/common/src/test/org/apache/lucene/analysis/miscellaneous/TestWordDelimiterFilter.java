@@ -24,6 +24,7 @@ import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 import org.apache.lucene.analysis.util.CharArraySet;
+import org.apache.lucene.util.IOUtils;
 import org.junit.Test;
 
 import java.io.IOException;
@@ -39,7 +40,7 @@ import static org.apache.lucene.analysis.miscellaneous.WordDelimiterIterator.DEF
  */
 public class TestWordDelimiterFilter extends BaseTokenStreamTestCase {
 
-  /***
+  /*
   public void testPerformance() throws IOException {
     String s = "now is the time-for all good men to come to-the aid of their country.";
     Token tok = new Token();
@@ -62,14 +63,14 @@ public class TestWordDelimiterFilter extends BaseTokenStreamTestCase {
     int flags = GENERATE_WORD_PARTS | GENERATE_NUMBER_PARTS | CATENATE_ALL | SPLIT_ON_CASE_CHANGE | SPLIT_ON_NUMERICS | STEM_ENGLISH_POSSESSIVE;
     // test that subwords and catenated subwords have
     // the correct offsets.
-    WordDelimiterFilter wdf = new WordDelimiterFilter(new SingleTokenTokenStream(new Token("foo-bar", 5, 12)), DEFAULT_WORD_DELIM_TABLE, flags, null);
+    WordDelimiterFilter wdf = new WordDelimiterFilter(new CannedTokenStream(new Token("foo-bar", 5, 12)), DEFAULT_WORD_DELIM_TABLE, flags, null);
 
     assertTokenStreamContents(wdf, 
         new String[] { "foo", "foobar", "bar" },
         new int[] { 5, 5, 9 }, 
         new int[] { 8, 12, 12 });
 
-    wdf = new WordDelimiterFilter(new SingleTokenTokenStream(new Token("foo-bar", 5, 6)), DEFAULT_WORD_DELIM_TABLE, flags, null);
+    wdf = new WordDelimiterFilter(new CannedTokenStream(new Token("foo-bar", 5, 6)), DEFAULT_WORD_DELIM_TABLE, flags, null);
     
     assertTokenStreamContents(wdf,
         new String[] { "foo", "bar", "foobar" },
@@ -80,7 +81,7 @@ public class TestWordDelimiterFilter extends BaseTokenStreamTestCase {
   @Test
   public void testOffsetChange() throws Exception {
     int flags = GENERATE_WORD_PARTS | GENERATE_NUMBER_PARTS | CATENATE_ALL | SPLIT_ON_CASE_CHANGE | SPLIT_ON_NUMERICS | STEM_ENGLISH_POSSESSIVE;
-    WordDelimiterFilter wdf = new WordDelimiterFilter(new SingleTokenTokenStream(new Token("übelkeit)", 7, 16)), DEFAULT_WORD_DELIM_TABLE, flags, null);
+    WordDelimiterFilter wdf = new WordDelimiterFilter(new CannedTokenStream(new Token("übelkeit)", 7, 16)), DEFAULT_WORD_DELIM_TABLE, flags, null);
     
     assertTokenStreamContents(wdf,
         new String[] { "übelkeit" },
@@ -91,7 +92,7 @@ public class TestWordDelimiterFilter extends BaseTokenStreamTestCase {
   @Test
   public void testOffsetChange2() throws Exception {
     int flags = GENERATE_WORD_PARTS | GENERATE_NUMBER_PARTS | CATENATE_ALL | SPLIT_ON_CASE_CHANGE | SPLIT_ON_NUMERICS | STEM_ENGLISH_POSSESSIVE;
-    WordDelimiterFilter wdf = new WordDelimiterFilter(new SingleTokenTokenStream(new Token("(übelkeit", 7, 17)), DEFAULT_WORD_DELIM_TABLE, flags, null);
+    WordDelimiterFilter wdf = new WordDelimiterFilter(new CannedTokenStream(new Token("(übelkeit", 7, 17)), DEFAULT_WORD_DELIM_TABLE, flags, null);
     
     assertTokenStreamContents(wdf,
         new String[] { "übelkeit" },
@@ -102,7 +103,7 @@ public class TestWordDelimiterFilter extends BaseTokenStreamTestCase {
   @Test
   public void testOffsetChange3() throws Exception {
     int flags = GENERATE_WORD_PARTS | GENERATE_NUMBER_PARTS | CATENATE_ALL | SPLIT_ON_CASE_CHANGE | SPLIT_ON_NUMERICS | STEM_ENGLISH_POSSESSIVE;
-    WordDelimiterFilter wdf = new WordDelimiterFilter(new SingleTokenTokenStream(new Token("(übelkeit", 7, 16)), DEFAULT_WORD_DELIM_TABLE, flags, null);
+    WordDelimiterFilter wdf = new WordDelimiterFilter(new CannedTokenStream(new Token("(übelkeit", 7, 16)), DEFAULT_WORD_DELIM_TABLE, flags, null);
     
     assertTokenStreamContents(wdf,
         new String[] { "übelkeit" },
@@ -113,7 +114,7 @@ public class TestWordDelimiterFilter extends BaseTokenStreamTestCase {
   @Test
   public void testOffsetChange4() throws Exception {
     int flags = GENERATE_WORD_PARTS | GENERATE_NUMBER_PARTS | CATENATE_ALL | SPLIT_ON_CASE_CHANGE | SPLIT_ON_NUMERICS | STEM_ENGLISH_POSSESSIVE;
-    WordDelimiterFilter wdf = new WordDelimiterFilter(new SingleTokenTokenStream(new Token("(foo,bar)", 7, 16)), DEFAULT_WORD_DELIM_TABLE, flags, null);
+    WordDelimiterFilter wdf = new WordDelimiterFilter(new CannedTokenStream(new Token("(foo,bar)", 7, 16)), DEFAULT_WORD_DELIM_TABLE, flags, null);
     
     assertTokenStreamContents(wdf,
         new String[] { "foo", "foobar", "bar"},
@@ -292,6 +293,7 @@ public class TestWordDelimiterFilter extends BaseTokenStreamTestCase {
         new int[] { 4, 4, 11 }, 
         new int[] { 10, 15, 15 },
         new int[] { 2, 0, 1 });
+    IOUtils.close(a, a2, a3);
   }
   
   /** concat numbers + words + all */
@@ -312,6 +314,7 @@ public class TestWordDelimiterFilter extends BaseTokenStreamTestCase {
         new int[] { 0, 0, 0, 4, 8, 8, 12 }, 
         new int[] { 3, 7, 15, 7, 11, 15, 15 },
         new int[] { 1, 0, 0, 1, 1, 0, 1 });
+    a.close();
   }
   
   /** concat numbers + words + all + preserve original */
@@ -332,6 +335,7 @@ public class TestWordDelimiterFilter extends BaseTokenStreamTestCase {
         new int[] { 0, 0, 0, 0, 4, 8, 8, 12 }, 
         new int[] { 15, 3, 7, 15, 7, 11, 15, 15 },
         new int[] { 1, 0, 0, 0, 1, 1, 0, 1 });
+    a.close();
   }
   
   /** blast some random strings through the analyzer */
@@ -355,7 +359,8 @@ public class TestWordDelimiterFilter extends BaseTokenStreamTestCase {
         }
       };
       // TODO: properly support positionLengthAttribute
-      checkRandomData(random(), a, 1000*RANDOM_MULTIPLIER, 20, false, false);
+      checkRandomData(random(), a, 200*RANDOM_MULTIPLIER, 20, false, false);
+      a.close();
     }
   }
   
@@ -380,7 +385,8 @@ public class TestWordDelimiterFilter extends BaseTokenStreamTestCase {
         }
       };
       // TODO: properly support positionLengthAttribute
-      checkRandomData(random(), a, 100*RANDOM_MULTIPLIER, 8192, false, false);
+      checkRandomData(random(), a, 20*RANDOM_MULTIPLIER, 8192, false, false);
+      a.close();
     }
   }
   
@@ -404,6 +410,7 @@ public class TestWordDelimiterFilter extends BaseTokenStreamTestCase {
       };
       // depending upon options, this thing may or may not preserve the empty term
       checkAnalysisConsistency(random, a, random.nextBoolean(), "");
+      a.close();
     }
   }
 }

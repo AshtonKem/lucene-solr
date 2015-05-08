@@ -21,7 +21,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 
-import org.apache.lucene.index.AtomicReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.ReaderUtil;
 import org.apache.lucene.index.StoredDocument;
@@ -110,7 +110,7 @@ public class DocumentValueSourceDictionary extends DocumentDictionary {
     
     private FunctionValues currentWeightValues;
     /** leaves of the reader */
-    private final List<AtomicReaderContext> leaves;
+    private final List<LeafReaderContext> leaves;
     /** starting docIds of all the leaves */
     private final int[] starts;
     /** current leave index */
@@ -145,7 +145,7 @@ public class DocumentValueSourceDictionary extends DocumentDictionary {
         try {
           currentWeightValues = weightsValueSource.getValues(new HashMap<String, Object>(), leaves.get(currentLeafIndex));
         } catch (IOException e) {
-          throw new RuntimeException();
+          throw new RuntimeException(e);
         }
       }
       return currentWeightValues.longVal(docId - starts[subIndex]);

@@ -16,9 +16,6 @@ package org.apache.lucene.benchmark.byTask.tasks;
  */
 
 import org.apache.lucene.analysis.Analyzer;
-import org.apache.lucene.analysis.util.CharFilterFactory;
-import org.apache.lucene.analysis.util.TokenFilterFactory;
-import org.apache.lucene.analysis.util.TokenizerFactory;
 import org.apache.lucene.benchmark.byTask.PerfRunData;
 import org.apache.lucene.benchmark.byTask.utils.AnalyzerFactory;
 import org.apache.lucene.util.Version;
@@ -47,7 +44,7 @@ public class NewAnalyzerTask extends PerfTask {
     try {
       // first try to use a ctor with version parameter (needed for many new Analyzers that have no default one anymore
       Constructor<? extends Analyzer> cnstr = clazz.getConstructor(Version.class);
-      return cnstr.newInstance(Version.LUCENE_CURRENT);
+      return cnstr.newInstance(Version.LATEST);
     } catch (NoSuchMethodException nsme) {
       // otherwise use default ctor
       return clazz.newInstance();
@@ -99,11 +96,11 @@ public class NewAnalyzerTask extends PerfTask {
   /**
    * Set the params (analyzerName only),  Comma-separate list of Analyzer class names.  If the Analyzer lives in
    * org.apache.lucene.analysis, the name can be shortened by dropping the o.a.l.a part of the Fully Qualified Class Name.
-   * <p/>
+   * <p>
    * Analyzer names may also refer to previously defined AnalyzerFactory's.
-   * <p/>
-   * Example Declaration: {"NewAnalyzer" NewAnalyzer(WhitespaceAnalyzer, SimpleAnalyzer, StopAnalyzer, standard.StandardAnalyzer) >
-   * <p/>
+   * <p>
+   * Example Declaration: {"NewAnalyzer" NewAnalyzer(WhitespaceAnalyzer, SimpleAnalyzer, StopAnalyzer, standard.StandardAnalyzer) &gt;
+   * <p>
    * Example AnalyzerFactory usage:
    * <pre>
    * -AnalyzerFactory(name:'whitespace tokenized',WhitespaceTokenizer)

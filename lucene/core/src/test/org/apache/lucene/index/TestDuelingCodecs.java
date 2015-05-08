@@ -17,9 +17,6 @@ package org.apache.lucene.index;
  * limitations under the License.
  */
 
-import java.io.IOException;
-import java.util.Random;
-
 import org.apache.lucene.analysis.MockAnalyzer;
 import org.apache.lucene.codecs.Codec;
 import org.apache.lucene.document.Document;
@@ -28,39 +25,47 @@ import org.apache.lucene.document.SortedNumericDocValuesField;
 import org.apache.lucene.document.SortedSetDocValuesField;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.util.BytesRef;
+import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.LineFileDocs;
 import org.apache.lucene.util.LuceneTestCase;
+import org.apache.lucene.util.LuceneTestCase.Slow;
 import org.apache.lucene.util.TestUtil;
+
+import java.io.IOException;
+import java.util.Random;
 
 /**
  * Compares one codec against another
  */
+@Slow
 public class TestDuelingCodecs extends LuceneTestCase {
-  private Directory leftDir;
-  private IndexReader leftReader;
-  private Codec leftCodec;
+  Directory leftDir;
+  IndexReader leftReader;
+  Codec leftCodec;
 
-  private Directory rightDir;
-  private IndexReader rightReader;
-  private Codec rightCodec;
-  
-  private String info;  // for debugging
+  Directory rightDir;
+  IndexReader rightReader;
+  Codec rightCodec;
+  RandomIndexWriter leftWriter;
+  RandomIndexWriter rightWriter;
+  long seed;
+  String info;  // for debugging
 
   @Override
   public void setUp() throws Exception {
     super.setUp();
 
-    // for now its SimpleText vs Lucene410(random postings format)
+    // for now it's SimpleText vs Default(random postings format)
     // as this gives the best overall coverage. when we have more
     // codecs we should probably pick 2 from Codec.availableCodecs()
     
     leftCodec = Codec.forName("SimpleText");
     rightCodec = new RandomCodec(random());
 
-    leftDir = newDirectory();
-    rightDir = newDirectory();
+    leftDir = newFSDirectory(createTempDir("leftDir"));
+    rightDir = newFSDirectory(createTempDir("rightDir"));
 
-    long seed = random().nextLong();
+    seed = random().nextLong();
 
     // must use same seed because of random payloads, etc
     int maxTermLength = TestUtil.nextInt(random(), 1, IndexWriter.MAX_TERM_LENGTH);
@@ -82,50 +87,29 @@ public class TestDuelingCodecs extends LuceneTestCase {
     rightConfig.setMergePolicy(newLogMergePolicy());
 
     // must use same seed because of random docvalues fields, etc
-    RandomIndexWriter leftWriter = new RandomIndexWriter(new Random(seed), leftDir, leftConfig);
-    RandomIndexWriter rightWriter = new RandomIndexWriter(new Random(seed), rightDir, rightConfig);
-    
-    int numdocs = atLeast(100);
-    createRandomIndex(numdocs, leftWriter, seed);
-    createRandomIndex(numdocs, rightWriter, seed);
+    leftWriter = new RandomIndexWriter(new Random(seed), leftDir, leftConfig);
+    rightWriter = new RandomIndexWriter(new Random(seed), rightDir, rightConfig);
 
-    leftReader = maybeWrapReader(leftWriter.getReader());
-    leftWriter.close();
-    rightReader = maybeWrapReader(rightWriter.getReader());
-    rightWriter.close();
-    
-    // check that our readers are valid
-    TestUtil.checkReader(leftReader);
-    TestUtil.checkReader(rightReader);
-    
     info = "left: " + leftCodec.toString() + " / right: " + rightCodec.toString();
   }
   
   @Override
   public void tearDown() throws Exception {
-    if (leftReader != null) {
-      leftReader.close();
-    }
-    if (rightReader != null) {
-      rightReader.close();   
-    }
-
-    if (leftDir != null) {
-      leftDir.close();
-    }
-    if (rightDir != null) {
-      rightDir.close();
-    }
-    
+    IOUtils.close(leftWriter,
+                  rightWriter,
+                  leftReader,
+                  rightReader,
+                  leftDir,
+                  rightDir);
     super.tearDown();
   }
-  
+
   /**
    * populates a writer with random stuff. this must be fully reproducable with the seed!
    */
   public static void createRandomIndex(int numdocs, RandomIndexWriter writer, long seed) throws IOException {
     Random random = new Random(seed);
-    // primary source for our data is from linefiledocs, its realistic.
+    // primary source for our data is from linefiledocs, it's realistic.
     LineFileDocs lineFileDocs = new LineFileDocs(random);
 
     // TODO: we should add other fields that use things like docs&freqs but omit positions,
@@ -135,6 +119,7 @@ public class TestDuelingCodecs extends LuceneTestCase {
       // grab the title and add some SortedSet instances for fun
       String title = document.get("titleTokenized");
       String split[] = title.split("\\s+");
+      document.removeFields("sortedset");
       for (String trash : split) {
         document.add(new SortedSetDocValuesField("sortedset", new BytesRef(trash)));
       }
@@ -160,8 +145,30 @@ public class TestDuelingCodecs extends LuceneTestCase {
   /**
    * checks the two indexes are equivalent
    */
+  // we use a small amount of docs here, so it works with any codec 
   public void testEquals() throws IOException {
+    int numdocs = atLeast(100);
+    createRandomIndex(numdocs, leftWriter, seed);
+    createRandomIndex(numdocs, rightWriter, seed);
+
+    leftReader = leftWriter.getReader();
+    rightReader = rightWriter.getReader();
+    
     assertReaderEquals(info, leftReader, rightReader);
   }
 
+  public void testCrazyReaderEquals() throws IOException {
+    int numdocs = atLeast(100);
+    createRandomIndex(numdocs, leftWriter, seed);
+    createRandomIndex(numdocs, rightWriter, seed);
+
+    leftReader = wrapReader(leftWriter.getReader());
+    rightReader = wrapReader(rightWriter.getReader());
+    
+    // check that our readers are valid
+    TestUtil.checkReader(leftReader);
+    TestUtil.checkReader(rightReader);
+    
+    assertReaderEquals(info, leftReader, rightReader);
+  }
 }

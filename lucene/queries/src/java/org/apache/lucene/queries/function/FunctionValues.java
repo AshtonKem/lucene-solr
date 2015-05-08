@@ -133,7 +133,7 @@ public abstract class FunctionValues {
   public void strVal(int doc, String [] vals) { throw new UnsupportedOperationException(); }
 
   public Explanation explain(int doc) {
-    return new Explanation(floatVal(doc), toString(doc));
+    return Explanation.match(floatVal(doc), toString(doc));
   }
 
   public ValueSourceScorer getScorer(IndexReader reader) {
@@ -143,7 +143,7 @@ public abstract class FunctionValues {
   // A RangeValueSource can't easily be a ValueSource that takes another ValueSource
   // because it needs different behavior depending on the type of fields.  There is also
   // a setup cost - parsing and normalizing params, and doing a binary search on the StringIndex.
-  // TODO: change "reader" to AtomicReaderContext
+  // TODO: change "reader" to LeafReaderContext
   public ValueSourceScorer getRangeScorer(IndexReader reader, String lowerVal, String upperVal, boolean includeLower, boolean includeUpper) {
     float lower;
     float upper;

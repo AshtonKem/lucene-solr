@@ -19,8 +19,6 @@ package org.apache.lucene.search;
 
 import java.io.IOException;
 
-import org.apache.lucene.index.AtomicReaderContext;
-
 /**
  * <p>Collector decouples the score from the collected doc:
  * the score computation is skipped entirely if it's not
@@ -45,7 +43,7 @@ import org.apache.lucene.index.AtomicReaderContext;
  * final BitSet bits = new BitSet(indexReader.maxDoc());
  * searcher.search(query, new Collector() {
  *
- *   public LeafCollector getLeafCollector(AtomicReaderContext context)
+ *   public LeafCollector getLeafCollector(LeafReaderContext context)
  *       throws IOException {
  *     final int docBase = context.docBase;
  *     return new LeafCollector() {
@@ -58,14 +56,9 @@ import org.apache.lucene.index.AtomicReaderContext;
  *         bits.set(docBase + doc);
  *       }
  *
- *       // accept docs out of order (for a BitSet it doesn't matter)
- *       public boolean acceptsDocsOutOfOrder() {
- *         return true;
- *       }
- *          
  *     };
  *   }
- *      
+ *
  * });
  * </pre>
  *
@@ -90,7 +83,7 @@ public interface LeafCollector {
    * number.
    * <p>Note: The collection of the current segment can be terminated by throwing
    * a {@link CollectionTerminatedException}. In this case, the last docs of the
-   * current {@link AtomicReaderContext} will be skipped and {@link IndexSearcher}
+   * current {@link org.apache.lucene.index.LeafReaderContext} will be skipped and {@link IndexSearcher}
    * will swallow the exception and continue collection with the next leaf.
    * <p>
    * Note: This is called in an inner search loop. For good search performance,
@@ -99,23 +92,5 @@ public interface LeafCollector {
    * Doing so can slow searches by an order of magnitude or more.
    */
   void collect(int doc) throws IOException;
-
-  /**
-   * Return <code>true</code> if this collector does not
-   * require the matching docIDs to be delivered in int sort
-   * order (smallest to largest) to {@link #collect}.
-   *
-   * <p> Most Lucene Query implementations will visit
-   * matching docIDs in order.  However, some queries
-   * (currently limited to certain cases of {@link
-   * BooleanQuery}) can achieve faster searching if the
-   * <code>Collector</code> allows them to deliver the
-   * docIDs out of order.</p>
-   *
-   * <p> Many collectors don't mind getting docIDs out of
-   * order, so it's important to return <code>true</code>
-   * here.
-   */
-  boolean acceptsDocsOutOfOrder();
 
 }

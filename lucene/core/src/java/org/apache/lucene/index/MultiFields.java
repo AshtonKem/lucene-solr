@@ -19,11 +19,11 @@ package org.apache.lucene.index;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Collection;
-import java.util.HashSet;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.lucene.util.Bits;
@@ -40,7 +40,7 @@ import org.apache.lucene.util.MergedIterator;
  * <p><b>NOTE</b>: for composite readers, you'll get better
  * performance by gathering the sub readers using
  * {@link IndexReader#getContext()} to get the
- * atomic leaves and then operate per-AtomicReader,
+ * atomic leaves and then operate per-LeafReader,
  * instead of using this class.
  *
  * @lucene.experimental
@@ -60,28 +60,21 @@ public final class MultiFields extends Fields {
    *  It's better to get the sub-readers and iterate through them
    *  yourself. */
   public static Fields getFields(IndexReader reader) throws IOException {
-    final List<AtomicReaderContext> leaves = reader.leaves();
+    final List<LeafReaderContext> leaves = reader.leaves();
     switch (leaves.size()) {
-      case 0:
-        // no fields
-        return null;
       case 1:
         // already an atomic reader / reader with one leave
         return leaves.get(0).reader().fields();
       default:
         final List<Fields> fields = new ArrayList<>();
         final List<ReaderSlice> slices = new ArrayList<>();
-        for (final AtomicReaderContext ctx : leaves) {
-          final AtomicReader r = ctx.reader();
+        for (final LeafReaderContext ctx : leaves) {
+          final LeafReader r = ctx.reader();
           final Fields f = r.fields();
-          if (f != null) {
-            fields.add(f);
-            slices.add(new ReaderSlice(ctx.docBase, r.maxDoc(), fields.size()-1));
-          }
+          fields.add(f);
+          slices.add(new ReaderSlice(ctx.docBase, r.maxDoc(), fields.size()-1));
         }
-        if (fields.isEmpty()) {
-          return null;
-        } else if (fields.size() == 1) {
+        if (fields.size() == 1) {
           return fields.get(0);
         } else {
           return new MultiFields(fields.toArray(Fields.EMPTY_ARRAY),
@@ -101,7 +94,7 @@ public final class MultiFields extends Fields {
    *  yourself. */
   public static Bits getLiveDocs(IndexReader reader) {
     if (reader.hasDeletions()) {
-      final List<AtomicReaderContext> leaves = reader.leaves();
+      final List<LeafReaderContext> leaves = reader.leaves();
       final int size = leaves.size();
       assert size > 0 : "A reader with deletions must have at least one leave";
       if (size == 1) {
@@ -111,7 +104,7 @@ public final class MultiFields extends Fields {
       final int[] starts = new int[size + 1];
       for (int i = 0; i < size; i++) {
         // record all liveDocs, even if they are null
-        final AtomicReaderContext ctx = leaves.get(i);
+        final LeafReaderContext ctx = leaves.get(i);
         liveDocs[i] = ctx.reader().getLiveDocs();
         starts[i] = ctx.docBase;
       }
@@ -124,63 +117,57 @@ public final class MultiFields extends Fields {
 
   /**  This method may return null if the field does not exist.*/
   public static Terms getTerms(IndexReader r, String field) throws IOException {
-    final Fields fields = getFields(r);
-    if (fields == null) {
-      return null;
-    } else {
-      return fields.terms(field);
-    }
+    return getFields(r).terms(field);
   }
   
-  /** Returns {@link DocsEnum} for the specified field &
+  /** Returns {@link PostingsEnum} for the specified field and
    *  term.  This will return null if the field or term does
    *  not exist. */
-  public static DocsEnum getTermDocsEnum(IndexReader r, Bits liveDocs, String field, BytesRef term) throws IOException {
-    return getTermDocsEnum(r, liveDocs, field, term, DocsEnum.FLAG_FREQS);
+  public static PostingsEnum getTermDocsEnum(IndexReader r, Bits liveDocs, String field, BytesRef term) throws IOException {
+    return getTermDocsEnum(r, liveDocs, field, term, PostingsEnum.FREQS);
   }
   
-  /** Returns {@link DocsEnum} for the specified field &
+  /** Returns {@link PostingsEnum} for the specified field and
    *  term, with control over whether freqs are required.
    *  Some codecs may be able to optimize their
    *  implementation when freqs are not required.  This will
    *  return null if the field or term does not exist.  See {@link
-   *  TermsEnum#docs(Bits,DocsEnum,int)}.*/
-  public static DocsEnum getTermDocsEnum(IndexReader r, Bits liveDocs, String field, BytesRef term, int flags) throws IOException {
+   *  TermsEnum#postings(Bits, PostingsEnum,int)}.*/
+  public static PostingsEnum getTermDocsEnum(IndexReader r, Bits liveDocs, String field, BytesRef term, int flags) throws IOException {
     assert field != null;
     assert term != null;
     final Terms terms = getTerms(r, field);
     if (terms != null) {
-      final TermsEnum termsEnum = terms.iterator(null);
+      final TermsEnum termsEnum = terms.iterator();
       if (termsEnum.seekExact(term)) {
-        return termsEnum.docs(liveDocs, null, flags);
+        return termsEnum.postings(liveDocs, null, flags);
       }
     }
     return null;
   }
 
-  /** Returns {@link DocsAndPositionsEnum} for the specified
-   *  field & term.  This will return null if the field or
+  /** Returns {@link PostingsEnum} for the specified
+   *  field and term.  This will return null if the field or
    *  term does not exist or positions were not indexed. 
    *  @see #getTermPositionsEnum(IndexReader, Bits, String, BytesRef, int) */
-  public static DocsAndPositionsEnum getTermPositionsEnum(IndexReader r, Bits liveDocs, String field, BytesRef term) throws IOException {
-    return getTermPositionsEnum(r, liveDocs, field, term, DocsAndPositionsEnum.FLAG_OFFSETS | DocsAndPositionsEnum.FLAG_PAYLOADS);
+  public static PostingsEnum getTermPositionsEnum(IndexReader r, Bits liveDocs, String field, BytesRef term) throws IOException {
+    return getTermPositionsEnum(r, liveDocs, field, term, PostingsEnum.ALL);
   }
 
-  /** Returns {@link DocsAndPositionsEnum} for the specified
-   *  field & term, with control over whether offsets and payloads are
+  /** Returns {@link PostingsEnum} for the specified
+   *  field and term, with control over whether offsets and payloads are
    *  required.  Some codecs may be able to optimize
    *  their implementation when offsets and/or payloads are not
    *  required. This will return null if the field or term does not
-   *  exist or positions were not indexed. See {@link
-   *  TermsEnum#docsAndPositions(Bits,DocsAndPositionsEnum,int)}. */
-  public static DocsAndPositionsEnum getTermPositionsEnum(IndexReader r, Bits liveDocs, String field, BytesRef term, int flags) throws IOException {
+   *  exist. See {@link TermsEnum#postings(Bits, PostingsEnum,int)}. */
+  public static PostingsEnum getTermPositionsEnum(IndexReader r, Bits liveDocs, String field, BytesRef term, int flags) throws IOException {
     assert field != null;
     assert term != null;
     final Terms terms = getTerms(r, field);
     if (terms != null) {
-      final TermsEnum termsEnum = terms.iterator(null);
+      final TermsEnum termsEnum = terms.iterator();
       if (termsEnum.seekExact(term)) {
-        return termsEnum.docsAndPositions(liveDocs, null, flags);
+        return termsEnum.postings(liveDocs, null, flags);
       }
     }
     return null;
@@ -254,7 +241,7 @@ public final class MultiFields extends Fields {
    */
   public static FieldInfos getMergedFieldInfos(IndexReader reader) {
     final FieldInfos.Builder builder = new FieldInfos.Builder();
-    for(final AtomicReaderContext ctx : reader.leaves()) {
+    for(final LeafReaderContext ctx : reader.leaves()) {
       builder.add(ctx.reader().getFieldInfos());
     }
     return builder.finish();
@@ -271,7 +258,7 @@ public final class MultiFields extends Fields {
   public static Collection<String> getIndexedFields(IndexReader reader) {
     final Collection<String> fields = new HashSet<>();
     for(final FieldInfo fieldInfo : getMergedFieldInfos(reader)) {
-      if (fieldInfo.isIndexed()) {
+      if (fieldInfo.getIndexOptions() != IndexOptions.NONE) {
         fields.add(fieldInfo.name);
       }
     }

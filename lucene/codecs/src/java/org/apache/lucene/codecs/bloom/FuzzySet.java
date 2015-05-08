@@ -18,6 +18,7 @@ package org.apache.lucene.codecs.bloom;
  */
 import java.io.IOException;
 
+import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.store.DataInput;
 import org.apache.lucene.store.DataOutput;
 import org.apache.lucene.util.Accountable;
@@ -37,7 +38,6 @@ import org.apache.lucene.util.RamUsageEstimator;
  * </p> 
  * Another application of the set is that it can be used to perform fuzzy counting because
  * it can estimate reasonably accurately how many unique values are contained in the set. 
- * </p>
  * <p>This class is NOT threadsafe.</p>
  * <p>
  * Internally a Bitset is used to record values and once a client has finished recording
@@ -271,7 +271,7 @@ public class FuzzySet implements Accountable {
       int bitIndex = 0;
       do {
         bitIndex = filter.nextSetBit(bitIndex);
-        if (bitIndex >= 0) {
+        if (bitIndex != DocIdSetIterator.NO_MORE_DOCS) {
           // Project the larger number into a smaller one effectively
           // modulo-ing by using the target bitset size as a mask
           int downSizedBitIndex = bitIndex & rightSizedBitSetSize;
@@ -308,5 +308,10 @@ public class FuzzySet implements Accountable {
   @Override
   public long ramBytesUsed() {
     return RamUsageEstimator.sizeOf(filter.getBits());
+  }
+
+  @Override
+  public String toString() {
+    return getClass().getSimpleName() + "(hash=" + hashFunction + ")";
   }
 }

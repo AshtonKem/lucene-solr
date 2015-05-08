@@ -34,6 +34,7 @@ import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.store.MockDirectoryWrapper;
 import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.TestUtil;
 
@@ -221,6 +222,10 @@ public class TestDeletionPolicy extends LuceneTestCase {
     final double SECONDS = 2.0;
 
     Directory dir = newDirectory();
+    if (dir instanceof MockDirectoryWrapper) {
+      // test manually deletes files
+      ((MockDirectoryWrapper)dir).setEnableVirusScanner(false);
+    }
     IndexWriterConfig conf = newIndexWriterConfig(new MockAnalyzer(random()))
         .setIndexDeletionPolicy(new ExpirationTimeDeletionPolicy(dir, SECONDS));
     MergePolicy mp = conf.getMergePolicy();
@@ -267,8 +272,6 @@ public class TestDeletionPolicy extends LuceneTestCase {
     String fileName = IndexFileNames.fileNameFromGeneration(IndexFileNames.SEGMENTS,
                                                             "",
                                                             gen);
-    dir.deleteFile(IndexFileNames.SEGMENTS_GEN);
-
     boolean oneSecondResolution = true;
 
     while(gen > 0) {
@@ -282,8 +285,7 @@ public class TestDeletionPolicy extends LuceneTestCase {
         // if we are on a filesystem that seems to have only
         // 1 second resolution, allow +1 second in commit
         // age tolerance:
-        SegmentInfos sis = new SegmentInfos();
-        sis.read(dir, fileName);
+        SegmentInfos sis = SegmentInfos.readCommit(dir, fileName);
         long modTime = Long.parseLong(sis.getUserData().get("commitTime"));
         oneSecondResolution &= (modTime % 1000) == 0;
         final long leeway = (long) ((SECONDS + (oneSecondResolution ? 1.0:0.0))*1000);
@@ -314,6 +316,10 @@ public class TestDeletionPolicy extends LuceneTestCase {
       boolean useCompoundFile = (pass % 2) != 0;
 
       Directory dir = newDirectory();
+      if (dir instanceof MockDirectoryWrapper) {
+        // test manually deletes files
+        ((MockDirectoryWrapper)dir).setEnableVirusScanner(false);
+      }
 
       IndexWriterConfig conf = newIndexWriterConfig(new MockAnalyzer(random()))
           .setIndexDeletionPolicy(new KeepAllDeletionPolicy(dir))
@@ -368,7 +374,6 @@ public class TestDeletionPolicy extends LuceneTestCase {
 
       // Simplistic check: just verify all segments_N's still
       // exist, and, I can open a reader on each:
-      dir.deleteFile(IndexFileNames.SEGMENTS_GEN);
       long gen = SegmentInfos.getLastCommitGeneration(dir);
       while(gen > 0) {
         IndexReader reader = DirectoryReader.open(dir);
@@ -562,6 +567,10 @@ public class TestDeletionPolicy extends LuceneTestCase {
       boolean useCompoundFile = (pass % 2) != 0;
 
       Directory dir = newDirectory();
+      if (dir instanceof MockDirectoryWrapper) {
+        // test manually deletes files
+        ((MockDirectoryWrapper)dir).setEnableVirusScanner(false);
+      }
 
       KeepLastNDeletionPolicy policy = new KeepLastNDeletionPolicy(N);
       for(int j=0;j<N+1;j++) {
@@ -586,7 +595,6 @@ public class TestDeletionPolicy extends LuceneTestCase {
 
       // Simplistic check: just verify only the past N segments_N's still
       // exist, and, I can open a reader on each:
-      dir.deleteFile(IndexFileNames.SEGMENTS_GEN);
       long gen = SegmentInfos.getLastCommitGeneration(dir);
       for(int i=0;i<N+1;i++) {
         try {
@@ -623,6 +631,10 @@ public class TestDeletionPolicy extends LuceneTestCase {
       boolean useCompoundFile = (pass % 2) != 0;
 
       Directory dir = newDirectory();
+      if (dir instanceof MockDirectoryWrapper) {
+        // test manually deletes files
+        ((MockDirectoryWrapper)dir).setEnableVirusScanner(false);
+      }
       IndexWriterConfig conf = newIndexWriterConfig(new MockAnalyzer(random()))
           .setOpenMode(OpenMode.CREATE)
           .setIndexDeletionPolicy(new KeepLastNDeletionPolicy(N))
@@ -660,7 +672,7 @@ public class TestDeletionPolicy extends LuceneTestCase {
         writer.close();
         IndexReader reader = DirectoryReader.open(dir);
         IndexSearcher searcher = newSearcher(reader);
-        ScoreDoc[] hits = searcher.search(query, null, 1000).scoreDocs;
+        ScoreDoc[] hits = searcher.search(query, 1000).scoreDocs;
         assertEquals(16, hits.length);
         reader.close();
 
@@ -678,14 +690,13 @@ public class TestDeletionPolicy extends LuceneTestCase {
 
       IndexReader rwReader = DirectoryReader.open(dir);
       IndexSearcher searcher = newSearcher(rwReader);
-      ScoreDoc[] hits = searcher.search(query, null, 1000).scoreDocs;
+      ScoreDoc[] hits = searcher.search(query, 1000).scoreDocs;
       assertEquals(0, hits.length);
 
       // Simplistic check: just verify only the past N segments_N's still
       // exist, and, I can open a reader on each:
       long gen = SegmentInfos.getLastCommitGeneration(dir);
 
-      dir.deleteFile(IndexFileNames.SEGMENTS_GEN);
       int expectedCount = 0;
       
       rwReader.close();
@@ -697,7 +708,7 @@ public class TestDeletionPolicy extends LuceneTestCase {
           // Work backwards in commits on what the expected
           // count should be.
           searcher = newSearcher(reader);
-          hits = searcher.search(query, null, 1000).scoreDocs;
+          hits = searcher.search(query, 1000).scoreDocs;
           assertEquals(expectedCount, hits.length);
           if (expectedCount == 0) {
             expectedCount = 16;

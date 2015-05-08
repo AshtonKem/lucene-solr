@@ -22,18 +22,17 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Set;
 
-import org.apache.lucene.index.AtomicReaderContext;
 import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.Term;
-import org.apache.lucene.search.DocIdSet;
 import org.apache.lucene.search.Explanation;
-import org.apache.lucene.search.Filter;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.Scorer;
 import org.apache.lucene.search.Weight;
+import org.apache.lucene.util.BitDocIdSet;
+import org.apache.lucene.util.BitSet;
 import org.apache.lucene.util.Bits;
-import org.apache.lucene.util.FixedBitSet;
 
 /**
  * Just like {@link ToParentBlockJoinQuery}, except this
@@ -50,8 +49,9 @@ public class ToChildBlockJoinQuery extends Query {
    *  ToChildBlockJoinScorer#validateParentDoc} on mis-use,
    *  when the parent query incorrectly returns child docs. */
   static final String INVALID_QUERY_MESSAGE = "Parent query yields document which is not matched by parents filter, docID=";
+  static final String ILLEGAL_ADVANCE_ON_PARENT = "Expect to be advanced on child docs only. got docID=";
 
-  private final Filter parentsFilter;
+  private final BitDocIdSetFilter parentsFilter;
   private final Query parentQuery;
 
   // If we are rewritten, this is the original parentQuery we
@@ -60,46 +60,45 @@ public class ToChildBlockJoinQuery extends Query {
   // original, so that user does not have to .rewrite() their
   // query before searching:
   private final Query origParentQuery;
-  private final boolean doScores;
 
   /**
    * Create a ToChildBlockJoinQuery.
    * 
    * @param parentQuery Query that matches parent documents
-   * @param parentsFilter Filter (must produce FixedBitSet
-   * per-segment, like {@link FixedBitSetCachingWrapperFilter})
-   * identifying the parent documents.
-   * @param doScores true if parent scores should be calculated
+   * @param parentsFilter Filter identifying the parent documents.
    */
-  public ToChildBlockJoinQuery(Query parentQuery, Filter parentsFilter, boolean doScores) {
+  public ToChildBlockJoinQuery(Query parentQuery, BitDocIdSetFilter parentsFilter) {
     super();
     this.origParentQuery = parentQuery;
     this.parentQuery = parentQuery;
     this.parentsFilter = parentsFilter;
-    this.doScores = doScores;
   }
 
-  private ToChildBlockJoinQuery(Query origParentQuery, Query parentQuery, Filter parentsFilter, boolean doScores) {
+  private ToChildBlockJoinQuery(Query origParentQuery, Query parentQuery, BitDocIdSetFilter parentsFilter) {
     super();
     this.origParentQuery = origParentQuery;
     this.parentQuery = parentQuery;
     this.parentsFilter = parentsFilter;
-    this.doScores = doScores;
   }
 
   @Override
-  public Weight createWeight(IndexSearcher searcher) throws IOException {
-    return new ToChildBlockJoinWeight(this, parentQuery.createWeight(searcher), parentsFilter, doScores);
+  public Weight createWeight(IndexSearcher searcher, boolean needsScores) throws IOException {
+    return new ToChildBlockJoinWeight(this, parentQuery.createWeight(searcher, needsScores), parentsFilter, needsScores);
+  }
+
+  /** Return our parent query. */
+  public Query getParentQuery() {
+    return parentQuery;
   }
 
   private static class ToChildBlockJoinWeight extends Weight {
     private final Query joinQuery;
     private final Weight parentWeight;
-    private final Filter parentsFilter;
+    private final BitDocIdSetFilter parentsFilter;
     private final boolean doScores;
 
-    public ToChildBlockJoinWeight(Query joinQuery, Weight parentWeight, Filter parentsFilter, boolean doScores) {
-      super();
+    public ToChildBlockJoinWeight(Query joinQuery, Weight parentWeight, BitDocIdSetFilter parentsFilter, boolean doScores) {
+      super(joinQuery);
       this.joinQuery = joinQuery;
       this.parentWeight = parentWeight;
       this.parentsFilter = parentsFilter;
@@ -107,9 +106,7 @@ public class ToChildBlockJoinQuery extends Query {
     }
 
     @Override
-    public Query getQuery() {
-      return joinQuery;
-    }
+    public void extractTerms(Set<Term> terms) {}
 
     @Override
     public float getValueForNormalization() throws IOException {
@@ -124,7 +121,7 @@ public class ToChildBlockJoinQuery extends Query {
     // NOTE: acceptDocs applies (and is checked) only in the
     // child document space
     @Override
-    public Scorer scorer(AtomicReaderContext readerContext, Bits acceptDocs) throws IOException {
+    public Scorer scorer(LeafReaderContext readerContext, Bits acceptDocs) throws IOException {
 
       final Scorer parentScorer = parentWeight.scorer(readerContext, null);
 
@@ -133,40 +130,28 @@ public class ToChildBlockJoinQuery extends Query {
         return null;
       }
 
-      // NOTE: we cannot pass acceptDocs here because this
-      // will (most likely, justifiably) cause the filter to
-      // not return a FixedBitSet but rather a
-      // BitsFilteredDocIdSet.  Instead, we filter by
-      // acceptDocs when we score:
-      final DocIdSet parents = parentsFilter.getDocIdSet(readerContext, null);
-
+      // NOTE: this doesn't take acceptDocs into account, the responsibility
+      // to not match deleted docs is on the scorer
+      final BitDocIdSet parents = parentsFilter.getDocIdSet(readerContext);
       if (parents == null) {
-        // No matches
+        // No parents
         return null;
       }
-      if (!(parents instanceof FixedBitSet)) {
-        throw new IllegalStateException("parentFilter must return FixedBitSet; got " + parents);
-      }
 
-      return new ToChildBlockJoinScorer(this, parentScorer, (FixedBitSet) parents, doScores, acceptDocs);
+      return new ToChildBlockJoinScorer(this, parentScorer, parents.bits(), doScores, acceptDocs);
     }
 
     @Override
-    public Explanation explain(AtomicReaderContext reader, int doc) throws IOException {
+    public Explanation explain(LeafReaderContext reader, int doc) throws IOException {
       // TODO
       throw new UnsupportedOperationException(getClass().getName() +
                                               " cannot explain match on parent document");
-    }
-
-    @Override
-    public boolean scoresDocsOutOfOrder() {
-      return false;
     }
   }
 
   static class ToChildBlockJoinScorer extends Scorer {
     private final Scorer parentScorer;
-    private final FixedBitSet parentBits;
+    private final BitSet parentBits;
     private final boolean doScores;
     private final Bits acceptDocs;
 
@@ -176,7 +161,7 @@ public class ToChildBlockJoinQuery extends Query {
     private int childDoc = -1;
     private int parentDoc;
 
-    public ToChildBlockJoinScorer(Weight weight, Scorer parentScorer, FixedBitSet parentBits, boolean doScores, Bits acceptDocs) {
+    public ToChildBlockJoinScorer(Weight weight, Scorer parentScorer, BitSet parentBits, boolean doScores, Bits acceptDocs) {
       super(weight);
       this.doScores = doScores;
       this.parentBits = parentBits;
@@ -283,12 +268,15 @@ public class ToChildBlockJoinQuery extends Query {
 
     @Override
     public int advance(int childTarget) throws IOException {
-      assert childTarget >= parentBits.length() || !parentBits.get(childTarget);
       
       //System.out.println("Q.advance childTarget=" + childTarget);
       if (childTarget == NO_MORE_DOCS) {
         //System.out.println("  END");
         return childDoc = parentDoc = NO_MORE_DOCS;
+      }
+
+      if (parentBits.get(childTarget)) {
+        throw new IllegalStateException(ILLEGAL_ADVANCE_ON_PARENT + childTarget);
       }
 
       assert childDoc == -1 || childTarget != parentDoc: "childTarget=" + childTarget;
@@ -329,18 +317,12 @@ public class ToChildBlockJoinQuery extends Query {
   }
 
   @Override
-  public void extractTerms(Set<Term> terms) {
-    parentQuery.extractTerms(terms);
-  }
-
-  @Override
   public Query rewrite(IndexReader reader) throws IOException {
     final Query parentRewrite = parentQuery.rewrite(reader);
     if (parentRewrite != parentQuery) {
       Query rewritten = new ToChildBlockJoinQuery(parentQuery,
                                 parentRewrite,
-                                parentsFilter,
-                                doScores);
+                                parentsFilter);
       rewritten.setBoost(getBoost());
       return rewritten;
     } else {
@@ -359,7 +341,6 @@ public class ToChildBlockJoinQuery extends Query {
       final ToChildBlockJoinQuery other = (ToChildBlockJoinQuery) _other;
       return origParentQuery.equals(other.origParentQuery) &&
         parentsFilter.equals(other.parentsFilter) &&
-        doScores == other.doScores &&
         super.equals(other);
     } else {
       return false;
@@ -371,7 +352,6 @@ public class ToChildBlockJoinQuery extends Query {
     final int prime = 31;
     int hash = super.hashCode();
     hash = prime * hash + origParentQuery.hashCode();
-    hash = prime * hash + new Boolean(doScores).hashCode();
     hash = prime * hash + parentsFilter.hashCode();
     return hash;
   }
@@ -379,7 +359,6 @@ public class ToChildBlockJoinQuery extends Query {
   @Override
   public ToChildBlockJoinQuery clone() {
     return new ToChildBlockJoinQuery(origParentQuery.clone(),
-                                     parentsFilter,
-                                     doScores);
+                                     parentsFilter);
   }
 }

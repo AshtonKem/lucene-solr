@@ -17,6 +17,8 @@ package org.apache.lucene.search.similarities;
  * limitations under the License.
  */
 
+import java.util.List;
+
 import org.apache.lucene.search.Explanation;
 import org.apache.lucene.search.similarities.Normalization.NoNormalization;
 
@@ -36,7 +38,6 @@ import org.apache.lucene.search.similarities.Normalization.NoNormalization;
  *   <li><em>t<sup>d</sup><sub>w</sub></em> is the normalized term frequency;</li>
  *   <li><em>&lambda;<sub>w</sub></em> is a parameter.</li>
  * </ul>
- * </p>
  * <p>The framework described in the paper has many similarities to the DFR
  * framework (see {@link DFRSimilarity}). It is possible that the two
  * Similarities will be merged at one point.</p>
@@ -64,7 +65,6 @@ import org.apache.lucene.search.similarities.Normalization.NoNormalization;
  *                      {@link DFRSimilarity})</blockquote>
  *     </li>
  * </ol>
- * <p>
  * @see DFRSimilarity
  * @lucene.experimental 
  */
@@ -105,16 +105,15 @@ public class IBSimilarity extends SimilarityBase {
 
   @Override
   protected void explain(
-      Explanation expl, BasicStats stats, int doc, float freq, float docLen) {
+      List<Explanation> subs, BasicStats stats, int doc, float freq, float docLen) {
     if (stats.getTotalBoost() != 1.0f) {
-      expl.addDetail(new Explanation(stats.getTotalBoost(), "boost"));
+      subs.add(Explanation.match(stats.getTotalBoost(), "boost"));
     }
     Explanation normExpl = normalization.explain(stats, freq, docLen);
     Explanation lambdaExpl = lambda.explain(stats);
-    expl.addDetail(normExpl);
-    expl.addDetail(lambdaExpl);
-    expl.addDetail(distribution.explain(
-        stats, normExpl.getValue(), lambdaExpl.getValue()));
+    subs.add(normExpl);
+    subs.add(lambdaExpl);
+    subs.add(distribution.explain(stats, normExpl.getValue(), lambdaExpl.getValue()));
   }
   
   /**

@@ -44,23 +44,17 @@ import org.apache.solr.SolrTestCaseJ4;
 import org.apache.solr.cloud.AbstractZkTestCase;
 import org.apache.solr.hadoop.hack.MiniMRCluster;
 import org.apache.solr.morphlines.solr.AbstractSolrMorphlineTestBase;
+import org.apache.solr.util.BadHdfsThreadsFilter;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakAction;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakAction.Action;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakLingering;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope.Scope;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakZombies;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakZombies.Consequence;
+import com.carrotsearch.randomizedtesting.annotations.ThreadLeakFilters;
 
-@ThreadLeakAction({Action.WARN})
-@ThreadLeakLingering(linger = 0)
-@ThreadLeakZombies(Consequence.CONTINUE)
-@ThreadLeakScope(Scope.NONE)
+@ThreadLeakFilters(defaultFilters = true, filters = {
+    BadHdfsThreadsFilter.class // hdfs currently leaks thread(s)
+})
 @Slow
 public class MorphlineBasicMiniMRTest extends SolrTestCaseJ4 {
   
@@ -109,7 +103,7 @@ public class MorphlineBasicMiniMRTest extends SolrTestCaseJ4 {
 
   @BeforeClass
   public static void setupClass() throws Exception {
-    solrHomeDirectory = createTempDir();
+    solrHomeDirectory = createTempDir().toFile();
     assumeTrue(
         "Currently this test can only be run without the lucene test security policy in place",
         System.getProperty("java.security.manager", "").equals(""));
@@ -118,12 +112,10 @@ public class MorphlineBasicMiniMRTest extends SolrTestCaseJ4 {
         Boolean.parseBoolean(System.getProperty("tests.disableHdfs", "false")));
     
     assumeFalse("FIXME: This test does not work with Windows because of native library requirements", Constants.WINDOWS);
-    assumeFalse("FIXME: This test fails under Java 8 due to the Saxon dependency - see SOLR-1301", Constants.JRE_IS_MINIMUM_JAVA8);
-    assumeFalse("FIXME: This test fails under J9 due to the Saxon dependency - see SOLR-1301", System.getProperty("java.vm.info", "<?>").contains("IBM J9"));
     
     AbstractZkTestCase.SOLRHOME = solrHomeDirectory;
     FileUtils.copyDirectory(MINIMR_CONF_DIR, solrHomeDirectory);
-    File dataDir = createTempDir();
+    File dataDir = createTempDir().toFile();
     tempDir = dataDir.getAbsolutePath();
     new File(tempDir).mkdirs();
     FileUtils.copyFile(new File(RESOURCES_DIR + "/custom-mimetypes.xml"), new File(tempDir + "/custom-mimetypes.xml"));

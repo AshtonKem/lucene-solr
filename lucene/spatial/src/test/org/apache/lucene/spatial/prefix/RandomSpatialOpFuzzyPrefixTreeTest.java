@@ -17,6 +17,18 @@ package org.apache.lucene.spatial.prefix;
  * limitations under the License.
  */
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
 import com.carrotsearch.randomizedtesting.annotations.Repeat;
 import com.spatial4j.core.context.SpatialContext;
 import com.spatial4j.core.context.SpatialContextFactory;
@@ -35,23 +47,12 @@ import org.apache.lucene.spatial.StrategyTestCase;
 import org.apache.lucene.spatial.prefix.tree.Cell;
 import org.apache.lucene.spatial.prefix.tree.CellIterator;
 import org.apache.lucene.spatial.prefix.tree.GeohashPrefixTree;
+import org.apache.lucene.spatial.prefix.tree.PackedQuadPrefixTree;
 import org.apache.lucene.spatial.prefix.tree.QuadPrefixTree;
 import org.apache.lucene.spatial.prefix.tree.SpatialPrefixTree;
 import org.apache.lucene.spatial.query.SpatialArgs;
 import org.apache.lucene.spatial.query.SpatialOperation;
 import org.junit.Test;
-
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
 import static com.carrotsearch.randomizedtesting.RandomizedTest.randomBoolean;
 import static com.carrotsearch.randomizedtesting.RandomizedTest.randomInt;
@@ -67,21 +68,27 @@ public class RandomSpatialOpFuzzyPrefixTreeTest extends StrategyTestCase {
 
   static final int ITERATIONS = 10;
 
-  private SpatialPrefixTree grid;
+  protected SpatialPrefixTree grid;
   private SpatialContext ctx2D;
 
   public void setupGrid(int maxLevels) throws IOException {
     if (randomBoolean())
-      setupQuadGrid(maxLevels);
+      setupQuadGrid(maxLevels, randomBoolean());
     else
       setupGeohashGrid(maxLevels);
     setupCtx2D(ctx);
 
-    //((PrefixTreeStrategy) strategy).setDistErrPct(0);//fully precise to grid
-
+    // set prune independently on strategy & grid randomly; should work
     ((RecursivePrefixTreeStrategy)strategy).setPruneLeafyBranches(randomBoolean());
+    if (this.grid instanceof PackedQuadPrefixTree) {
+      ((PackedQuadPrefixTree) this.grid).setPruneLeafyBranches(randomBoolean());
+    }
 
-    System.out.println("Strategy: " + strategy.toString());
+    if (maxLevels == -1 && rarely()) {
+      ((PrefixTreeStrategy) strategy).setPointsOnly(true);
+    }
+
+    log.info("Strategy: " + strategy.toString());
   }
 
   private void setupCtx2D(SpatialContext ctx) {
@@ -94,7 +101,7 @@ public class RandomSpatialOpFuzzyPrefixTreeTest extends StrategyTestCase {
     ctx2D = ctxFactory.newSpatialContext();
   }
 
-  private void setupQuadGrid(int maxLevels) {
+  private void setupQuadGrid(int maxLevels, boolean packedQuadPrefixTree) {
     //non-geospatial makes this test a little easier (in gridSnap), and using boundary values 2^X raises
     // the prospect of edge conditions we want to test, plus makes for simpler numbers (no decimals).
     SpatialContextFactory factory = new SpatialContextFactory();
@@ -104,8 +111,12 @@ public class RandomSpatialOpFuzzyPrefixTreeTest extends StrategyTestCase {
     //A fairly shallow grid, and default 2.5% distErrPct
     if (maxLevels == -1)
       maxLevels = randomIntBetween(1, 8);//max 64k cells (4^8), also 256*256
-    this.grid = new QuadPrefixTree(ctx, maxLevels);
-    this.strategy = new RecursivePrefixTreeStrategy(grid, getClass().getSimpleName());
+    if (packedQuadPrefixTree) {
+      this.grid = new PackedQuadPrefixTree(ctx, maxLevels);
+    } else {
+      this.grid = new QuadPrefixTree(ctx, maxLevels);
+    }
+    this.strategy = newRPT();
   }
 
   public void setupGeohashGrid(int maxLevels) {
@@ -114,7 +125,11 @@ public class RandomSpatialOpFuzzyPrefixTreeTest extends StrategyTestCase {
     if (maxLevels == -1)
       maxLevels = randomIntBetween(1, 3);//max 16k cells (32^3)
     this.grid = new GeohashPrefixTree(ctx, maxLevels);
-    this.strategy = new RecursivePrefixTreeStrategy(grid, getClass().getSimpleName());
+    this.strategy = newRPT();
+  }
+
+  protected RecursivePrefixTreeStrategy newRPT() {
+    return new RecursivePrefixTreeStrategy(this.grid, getClass().getSimpleName());
   }
 
   @Test
@@ -141,7 +156,7 @@ public class RandomSpatialOpFuzzyPrefixTreeTest extends StrategyTestCase {
   /** See LUCENE-5062, {@link ContainsPrefixTreeFilter#multiOverlappingIndexedShapes}. */
   @Test
   public void testContainsPairOverlap() throws IOException {
-    setupQuadGrid(3);
+    setupQuadGrid(3, randomBoolean());
     adoc("0", new ShapePair(ctx.makeRectangle(0, 33, -128, 128), ctx.makeRectangle(33, 128, -128, 128), true));
     commit();
     Query query = strategy.makeQuery(new SpatialArgs(SpatialOperation.Contains,
@@ -152,7 +167,7 @@ public class RandomSpatialOpFuzzyPrefixTreeTest extends StrategyTestCase {
 
   @Test
   public void testWithinDisjointParts() throws IOException {
-    setupQuadGrid(7);
+    setupQuadGrid(7, randomBoolean());
     //one shape comprised of two parts, quite separated apart
     adoc("0", new ShapePair(ctx.makeRectangle(0, 10, -120, -100), ctx.makeRectangle(220, 240, 110, 125), false));
     commit();
@@ -166,7 +181,7 @@ public class RandomSpatialOpFuzzyPrefixTreeTest extends StrategyTestCase {
 
   @Test /** LUCENE-4916 */
   public void testWithinLeafApproxRule() throws IOException {
-    setupQuadGrid(2);//4x4 grid
+    setupQuadGrid(2, randomBoolean());//4x4 grid
     //indexed shape will simplify to entire right half (2 top cells)
     adoc("0", ctx.makeRectangle(192, 204, -128, 128));
     commit();
@@ -180,7 +195,7 @@ public class RandomSpatialOpFuzzyPrefixTreeTest extends StrategyTestCase {
         new SpatialArgs(SpatialOperation.IsWithin, ctx.makeRectangle(38, 192, -72, 56))
     ), 1).numFound==0);//no-match
 
-    //this time the rect is a little bigger and is considered a match. It's a
+    //this time the rect is a little bigger and is considered a match. It's
     // an acceptable false-positive because of the grid approximation.
     assertTrue(executeQuery(strategy.makeQuery(
         new SpatialArgs(SpatialOperation.IsWithin, ctx.makeRectangle(38, 192, -72, 80))
@@ -223,6 +238,7 @@ public class RandomSpatialOpFuzzyPrefixTreeTest extends StrategyTestCase {
     return doc;
   }
 
+  @SuppressWarnings("fallthrough")
   private void doTest(final SpatialOperation operation) throws IOException {
     //first show that when there's no data, a query will result in no results
     {
@@ -238,13 +254,14 @@ public class RandomSpatialOpFuzzyPrefixTreeTest extends StrategyTestCase {
     Map<String, Shape> indexedShapesGS = new LinkedHashMap<>();//grid snapped
     final int numIndexedShapes = randomIntBetween(1, 6);
     boolean indexedAtLeastOneShapePair = false;
+    final boolean pointsOnly = ((PrefixTreeStrategy) strategy).isPointsOnly();
     for (int i = 0; i < numIndexedShapes; i++) {
       String id = "" + i;
       Shape indexedShape;
       int R = random().nextInt(12);
       if (R == 0) {//1 in 12
         indexedShape = null;
-      } else if (R == 1) {//1 in 12
+      } else if (R == 1 || pointsOnly) {//1 in 12
         indexedShape = randomPoint();//just one point
       } else if (R <= 4) {//3 in 12
         //comprised of more than one shape
@@ -292,6 +309,17 @@ public class RandomSpatialOpFuzzyPrefixTreeTest extends StrategyTestCase {
 //            queryShape = randomShapePairRect(!biasContains);//invert biasContains for query side
 //            break;
 //          }
+
+        case 4:
+          //choose an existing indexed shape
+          if (!indexedShapes.isEmpty()) {
+            Shape tmp = indexedShapes.values().iterator().next();
+            if (tmp instanceof Point || tmp instanceof Rectangle) {//avoids null and shapePair
+              queryShape = tmp;
+              break;
+            }
+          }//else fall-through
+
         default: queryShape = randomRectangle();
       }
       final Shape queryShapeGS = gridSnap(queryShape);
@@ -407,7 +435,7 @@ public class RandomSpatialOpFuzzyPrefixTreeTest extends StrategyTestCase {
 
   /**
    * An aggregate of 2 shapes. Unfortunately we can't simply use a ShapeCollection because:
-   * (a) ambiguity between CONTAINS & WITHIN for equal shapes, and
+   * (a) ambiguity between CONTAINS and WITHIN for equal shapes, and
    * (b) adjacent pairs could as a whole contain the input shape.
    * The tests here are sensitive to these matters, although in practice ShapeCollection
    * is fine.
@@ -462,7 +490,7 @@ public class RandomSpatialOpFuzzyPrefixTreeTest extends StrategyTestCase {
         return r;
       //test all 4 corners
       // Note: awkwardly, we use a non-geo context for this because in geo, -180 & +180 are the same place, which means
-      //  that "other" might wrap the world horizontally and yet all it's corners could be in shape1 (or shape2) even
+      //  that "other" might wrap the world horizontally and yet all its corners could be in shape1 (or shape2) even
       //  though shape1 is only adjacent to the dateline. I couldn't think of a better way to handle this.
       Rectangle oRect = (Rectangle)other;
       if (cornerContainsNonGeo(oRect.getMinX(), oRect.getMinY())

@@ -18,58 +18,32 @@ package org.apache.lucene.search;
  */
 
 import java.io.IOException;
-import java.lang.ref.WeakReference;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Map;
 import java.util.Random;
-import java.util.WeakHashMap;
-
-import org.apache.lucene.index.AssertingAtomicReader;
 
 /** Wraps a Scorer with additional checks */
 public class AssertingScorer extends Scorer {
 
-  // we need to track scorers using a weak hash map because otherwise we
-  // could loose references because of eg.
-  // AssertingScorer.score(Collector) which needs to delegate to work correctly
-  private static Map<Scorer, WeakReference<AssertingScorer>> ASSERTING_INSTANCES = Collections.synchronizedMap(new WeakHashMap<Scorer, WeakReference<AssertingScorer>>());
+  static enum IteratorState { START, APPROXIMATING, ITERATING, FINISHED };
 
   public static Scorer wrap(Random random, Scorer other) {
     if (other == null || other instanceof AssertingScorer) {
       return other;
     }
-    final AssertingScorer assertScorer = new AssertingScorer(random, other);
-    ASSERTING_INSTANCES.put(other, new WeakReference<>(assertScorer));
-    return assertScorer;
-  }
-
-  static Scorer getAssertingScorer(Random random, Scorer other) {
-    if (other == null || other instanceof AssertingScorer) {
-      return other;
-    }
-    final WeakReference<AssertingScorer> assertingScorerRef = ASSERTING_INSTANCES.get(other);
-    final AssertingScorer assertingScorer = assertingScorerRef == null ? null : assertingScorerRef.get();
-    if (assertingScorer == null) {
-      // can happen in case of memory pressure or if
-      // scorer1.score(collector) calls
-      // collector.setScorer(scorer2) with scorer1 != scorer2, such as
-      // BooleanScorer. In that case we can't enable all assertions
-      return new AssertingScorer(random, other);
-    } else {
-      return assertingScorer;
-    }
+    return new AssertingScorer(random, other);
   }
 
   final Random random;
   final Scorer in;
-  final AssertingAtomicReader.AssertingDocsEnum docsEnumIn;
+
+  IteratorState state = IteratorState.START;
+  int doc = -1;
 
   private AssertingScorer(Random random, Scorer in) {
     super(in.weight);
     this.random = random;
     this.in = in;
-    this.docsEnumIn = new AssertingAtomicReader.AssertingDocsEnum(in);
   }
 
   public Scorer getIn() {
@@ -77,12 +51,13 @@ public class AssertingScorer extends Scorer {
   }
 
   boolean iterating() {
+    // we cannot assert that state == ITERATING because of CachingScorerWrapper
     switch (docID()) {
     case -1:
     case NO_MORE_DOCS:
       return false;
     default:
-      return true;
+      return state != IteratorState.APPROXIMATING; // Matches must be confirmed before calling freq() or score()
     }
   }
 
@@ -90,8 +65,7 @@ public class AssertingScorer extends Scorer {
   public float score() throws IOException {
     assert iterating();
     final float score = in.score();
-    assert !Float.isNaN(score);
-    assert !Float.isNaN(score);
+    assert !Float.isNaN(score) : "NaN score for in="+in;
     return score;
   }
 
@@ -112,17 +86,37 @@ public class AssertingScorer extends Scorer {
 
   @Override
   public int docID() {
+    assert state != IteratorState.APPROXIMATING : "calling docId() on the Scorer while the match has not been confirmed";
     return in.docID();
   }
 
   @Override
   public int nextDoc() throws IOException {
-    return docsEnumIn.nextDoc();
+    assert state != IteratorState.FINISHED : "nextDoc() called after NO_MORE_DOCS";
+    int nextDoc = in.nextDoc();
+    assert nextDoc > doc : "backwards nextDoc from " + doc + " to " + nextDoc + " " + in;
+    if (nextDoc == DocIdSetIterator.NO_MORE_DOCS) {
+      state = IteratorState.FINISHED;
+    } else {
+      state = IteratorState.ITERATING;
+    }
+    assert in.docID() == nextDoc;
+    return doc = nextDoc;
   }
 
   @Override
   public int advance(int target) throws IOException {
-    return docsEnumIn.advance(target);
+    assert state != IteratorState.FINISHED : "advance() called after NO_MORE_DOCS";
+    assert target > doc : "target must be > docID(), got " + target + " <= " + doc;
+    int advanced = in.advance(target);
+    assert advanced >= target : "backwards advance from: " + target + " to: " + advanced;
+    if (advanced == DocIdSetIterator.NO_MORE_DOCS) {
+      state = IteratorState.FINISHED;
+    } else {
+      state = IteratorState.ITERATING;
+    }
+    assert in.docID() == advanced;
+    return doc = advanced;
   }
 
   @Override
@@ -133,6 +127,71 @@ public class AssertingScorer extends Scorer {
   @Override
   public String toString() {
     return "AssertingScorer(" + in + ")";
+  }
+
+  @Override
+  public TwoPhaseIterator asTwoPhaseIterator() {
+    final TwoPhaseIterator in = this.in.asTwoPhaseIterator();
+    if (in == null) {
+      return null;
+    }
+    final DocIdSetIterator inApproximation = in.approximation();
+    assert inApproximation.docID() == doc;
+    final DocIdSetIterator assertingApproximation = new DocIdSetIterator() {
+
+      @Override
+      public int docID() {
+        return inApproximation.docID();
+      }
+
+      @Override
+      public int nextDoc() throws IOException {
+        assert state != IteratorState.FINISHED : "advance() called after NO_MORE_DOCS";
+        final int nextDoc = inApproximation.nextDoc();
+        assert nextDoc > doc : "backwards advance from: " + doc + " to: " + nextDoc;
+        if (nextDoc == NO_MORE_DOCS) {
+          state = IteratorState.FINISHED;
+        } else {
+          state = IteratorState.APPROXIMATING;
+        }
+        assert inApproximation.docID() == nextDoc;
+        return nextDoc;
+      }
+
+      @Override
+      public int advance(int target) throws IOException {
+        assert state != IteratorState.FINISHED : "advance() called after NO_MORE_DOCS";
+        assert target > doc : "target must be > docID(), got " + target + " <= " + doc;
+        final int advanced = inApproximation.advance(target);
+        assert advanced >= target : "backwards advance from: " + target + " to: " + advanced;
+        if (advanced == NO_MORE_DOCS) {
+          state = IteratorState.FINISHED;
+        } else {
+          state = IteratorState.APPROXIMATING;
+        }
+        assert inApproximation.docID() == advanced;
+        return advanced;
+      }
+
+      @Override
+      public long cost() {
+        return inApproximation.cost();
+      }
+
+    };
+    return new TwoPhaseIterator(assertingApproximation) {
+      @Override
+      public boolean matches() throws IOException {
+        assert state == IteratorState.APPROXIMATING;
+        final boolean matches = in.matches();
+        if (matches) {
+          assert AssertingScorer.this.in.docID() == inApproximation.docID() : "Approximation and scorer don't advance synchronously";
+          doc = inApproximation.docID();
+          state = IteratorState.ITERATING;
+        }
+        return matches;
+      }
+    };
   }
 }
 

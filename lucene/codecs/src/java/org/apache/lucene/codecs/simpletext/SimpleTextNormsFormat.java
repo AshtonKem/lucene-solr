@@ -18,17 +18,21 @@ package org.apache.lucene.codecs.simpletext;
  */
 
 import java.io.IOException;
+import java.util.Collection;
 
-import org.apache.lucene.codecs.DocValuesConsumer;
-import org.apache.lucene.codecs.DocValuesProducer;
+import org.apache.lucene.codecs.NormsConsumer;
 import org.apache.lucene.codecs.NormsFormat;
+import org.apache.lucene.codecs.NormsProducer;
+import org.apache.lucene.index.FieldInfo;
+import org.apache.lucene.index.NumericDocValues;
 import org.apache.lucene.index.SegmentReadState;
 import org.apache.lucene.index.SegmentWriteState;
+import org.apache.lucene.util.Accountable;
 
 /**
  * plain-text norms format.
  * <p>
- * <b><font color="red">FOR RECREATIONAL USE ONLY</font></B>
+ * <b>FOR RECREATIONAL USE ONLY</b>
  * 
  * @lucene.experimental
  */
@@ -36,42 +40,86 @@ public class SimpleTextNormsFormat extends NormsFormat {
   private static final String NORMS_SEG_EXTENSION = "len";
   
   @Override
-  public DocValuesConsumer normsConsumer(SegmentWriteState state) throws IOException {
+  public NormsConsumer normsConsumer(SegmentWriteState state) throws IOException {
     return new SimpleTextNormsConsumer(state);
   }
   
   @Override
-  public DocValuesProducer normsProducer(SegmentReadState state) throws IOException {
+  public NormsProducer normsProducer(SegmentReadState state) throws IOException {
     return new SimpleTextNormsProducer(state);
   }
   
   /**
    * Reads plain-text norms.
    * <p>
-   * <b><font color="red">FOR RECREATIONAL USE ONLY</font></B>
+   * <b>FOR RECREATIONAL USE ONLY</b>
    * 
    * @lucene.experimental
    */
-  public static class SimpleTextNormsProducer extends SimpleTextDocValuesReader {
+  public static class SimpleTextNormsProducer extends NormsProducer {
+    private final SimpleTextDocValuesReader impl;
+    
     public SimpleTextNormsProducer(SegmentReadState state) throws IOException {
       // All we do is change the extension from .dat -> .len;
       // otherwise this is a normal simple doc values file:
-      super(state, NORMS_SEG_EXTENSION);
+      impl = new SimpleTextDocValuesReader(state, NORMS_SEG_EXTENSION);
+    }
+    
+    @Override
+    public NumericDocValues getNorms(FieldInfo field) throws IOException {
+      return impl.getNumeric(field);
+    }
+    
+    @Override
+    public void close() throws IOException {
+      impl.close();
+    }
+    
+    @Override
+    public long ramBytesUsed() {
+      return impl.ramBytesUsed();
+    }
+    
+    @Override
+    public Collection<Accountable> getChildResources() {
+      return impl.getChildResources();
+    }
+
+    @Override
+    public void checkIntegrity() throws IOException {
+      impl.checkIntegrity();
+    }
+
+    @Override
+    public String toString() {
+      return getClass().getSimpleName() + "(" + impl + ")";
     }
   }
   
   /**
    * Writes plain-text norms.
    * <p>
-   * <b><font color="red">FOR RECREATIONAL USE ONLY</font></B>
+   * <b>FOR RECREATIONAL USE ONLY</b>
    * 
    * @lucene.experimental
    */
-  public static class SimpleTextNormsConsumer extends SimpleTextDocValuesWriter {
+  public static class SimpleTextNormsConsumer extends NormsConsumer {
+    private final SimpleTextDocValuesWriter impl;
+    
     public SimpleTextNormsConsumer(SegmentWriteState state) throws IOException {
       // All we do is change the extension from .dat -> .len;
       // otherwise this is a normal simple doc values file:
-      super(state, NORMS_SEG_EXTENSION);
+      impl = new SimpleTextDocValuesWriter(state, NORMS_SEG_EXTENSION);
+    }
+    
+    @Override
+    public void addNormsField(FieldInfo field, Iterable<Number> values) throws IOException {
+      impl.addNumericField(field, values);
+    }
+
+    @Override
+    public void close() throws IOException {
+      impl.close();
     }
   }
 }

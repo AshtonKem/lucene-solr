@@ -17,7 +17,7 @@
 
 package org.apache.lucene.queries.function.valuesource;
 
-import org.apache.lucene.index.AtomicReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.queries.function.FunctionValues;
 import org.apache.lucene.queries.function.ValueSource;
 import org.apache.lucene.queries.function.docvalues.FloatDocValues;
@@ -31,7 +31,7 @@ import java.util.Map;
  * the float value of a field or function as exported by {@link org.apache.lucene.queries.function.ValueSource}.
  * <br>
  *
- * When a and b are equal, and x>=0, this function has a maximum value of 1 that drops as x increases.
+ * When a and b are equal, and x&gt;=0, this function has a maximum value of 1 that drops as x increases.
  * Increasing the value of a and b together results in a movement of the entire function to a flatter part of the curve.
  * <p>These properties make this an idea function for boosting more recent documents.
  * <p>Example:<code>  recip(ms(NOW,mydatefield),3.16e-11,1,1)</code>
@@ -61,12 +61,16 @@ public class ReciprocalFloatFunction extends ValueSource {
   }
 
   @Override
-  public FunctionValues getValues(Map context, AtomicReaderContext readerContext) throws IOException {
+  public FunctionValues getValues(Map context, LeafReaderContext readerContext) throws IOException {
     final FunctionValues vals = source.getValues(context, readerContext);
     return new FloatDocValues(this) {
       @Override
       public float floatVal(int doc) {
         return a/(m*vals.floatVal(doc) + b);
+      }
+      @Override
+      public boolean exists(int doc) {
+        return vals.exists(doc);
       }
       @Override
       public String toString(int doc) {

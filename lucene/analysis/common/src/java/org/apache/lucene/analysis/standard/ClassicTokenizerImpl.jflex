@@ -17,13 +17,6 @@ package org.apache.lucene.analysis.standard;
  * limitations under the License.
  */
 
-/*
-
-WARNING: if you change ClassicTokenizerImpl.jflex and need to regenerate
-      the tokenizer, only use the trunk version of JFlex 1.5 at the moment!
-
-*/
-
 import java.io.Reader;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 
@@ -33,7 +26,6 @@ import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 %%
 
 %class ClassicTokenizerImpl
-%implements StandardTokenizerInterface
 %unicode 3.0
 %integer
 %function getNextToken
@@ -67,6 +59,9 @@ public final void getText(CharTermAttribute t) {
   t.copyBuffer(zzBuffer, zzStartRead, zzMarkedPos-zzStartRead);
 }
 
+   public final void setBufferSize(int numChars) {
+     throw new UnsupportedOperationException();
+   }
 %}
 
 THAI       = [\u0E00-\u0E59]

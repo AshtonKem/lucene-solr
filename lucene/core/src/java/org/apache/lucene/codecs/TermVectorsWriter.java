@@ -21,8 +21,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.util.Iterator;
 
-import org.apache.lucene.index.AtomicReader;
-import org.apache.lucene.index.DocsAndPositionsEnum;
+import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.FieldInfos;
 import org.apache.lucene.index.Fields;
@@ -37,7 +36,6 @@ import org.apache.lucene.util.BytesRefBuilder;
 
 /**
  * Codec API for writing term vectors:
- * <p>
  * <ol>
  *   <li>For every document, {@link #startDocument(int)} is called,
  *       informing the Codec how many fields will be written.
@@ -94,10 +92,6 @@ public abstract class TermVectorsWriter implements Closeable {
 
   /** Adds a term position and offsets */
   public abstract void addPosition(int position, int startOffset, int endOffset, BytesRef payload) throws IOException;
-  
-  /** Aborts writing entirely, implementation should remove
-   *  any partially-written files, etc. */
-  public abstract void abort();
 
   /** Called before {@link #close()}, passing in the number
    *  of documents that were written. Note that this is 
@@ -121,7 +115,7 @@ public abstract class TermVectorsWriter implements Closeable {
    * @lucene.internal
    */
   // TODO: we should probably nuke this and make a more efficient 4.x format
-  // PreFlex-RW could then be slow and buffer (its only used in tests...)
+  // PreFlex-RW could then be slow and buffer (it's only used in tests...)
   public void addProx(int numProx, DataInput positions, DataInput offsets) throws IOException {
     int position = 0;
     int lastOffset = 0;
@@ -177,25 +171,33 @@ public abstract class TermVectorsWriter implements Closeable {
    *  merging (bulk-byte copying, etc). */
   public int merge(MergeState mergeState) throws IOException {
     int docCount = 0;
-    for (int i = 0; i < mergeState.readers.size(); i++) {
-      final AtomicReader reader = mergeState.readers.get(i);
-      final int maxDoc = reader.maxDoc();
-      final Bits liveDocs = reader.getLiveDocs();
+    int numReaders = mergeState.maxDocs.length;
+    for (int i = 0; i < numReaders; i++) {
+      int maxDoc = mergeState.maxDocs[i];
+      Bits liveDocs = mergeState.liveDocs[i];
+      TermVectorsReader termVectorsReader = mergeState.termVectorsReaders[i];
+      if (termVectorsReader != null) {
+        termVectorsReader.checkIntegrity();
+      }
 
-      for (int docID = 0; docID < maxDoc; docID++) {
+      for (int docID=0;docID<maxDoc;docID++) {
         if (liveDocs != null && !liveDocs.get(docID)) {
           // skip deleted docs
           continue;
         }
         // NOTE: it's very important to first assign to vectors then pass it to
         // termVectorsWriter.addAllDocVectors; see LUCENE-1282
-        Fields vectors = reader.getTermVectors(docID);
+        Fields vectors;
+        if (termVectorsReader == null) {
+          vectors = null;
+        } else {
+          vectors = termVectorsReader.get(docID);
+        }
         addAllDocVectors(vectors, mergeState);
         docCount++;
-        mergeState.checkAbort.work(300);
       }
     }
-    finish(mergeState.fieldInfos, docCount);
+    finish(mergeState.mergeFieldInfos, docCount);
     return docCount;
   }
   
@@ -222,12 +224,12 @@ public abstract class TermVectorsWriter implements Closeable {
     String lastFieldName = null;
     
     TermsEnum termsEnum = null;
-    DocsAndPositionsEnum docsAndPositionsEnum = null;
+    PostingsEnum docsAndPositionsEnum = null;
     
     int fieldCount = 0;
     for(String fieldName : vectors) {
       fieldCount++;
-      final FieldInfo fieldInfo = mergeState.fieldInfos.fieldInfo(fieldName);
+      final FieldInfo fieldInfo = mergeState.mergeFieldInfos.fieldInfo(fieldName);
 
       assert lastFieldName == null || fieldName.compareTo(lastFieldName) > 0: "lastFieldName=" + lastFieldName + " fieldName=" + fieldName;
       lastFieldName = fieldName;
@@ -247,14 +249,14 @@ public abstract class TermVectorsWriter implements Closeable {
       if (numTerms == -1) {
         // count manually. It is stupid, but needed, as Terms.size() is not a mandatory statistics function
         numTerms = 0;
-        termsEnum = terms.iterator(termsEnum);
+        termsEnum = terms.iterator();
         while(termsEnum.next() != null) {
           numTerms++;
         }
       }
       
       startField(fieldInfo, numTerms, hasPositions, hasOffsets, hasPayloads);
-      termsEnum = terms.iterator(termsEnum);
+      termsEnum = terms.iterator();
 
       int termCount = 0;
       while(termsEnum.next() != null) {
@@ -265,7 +267,7 @@ public abstract class TermVectorsWriter implements Closeable {
         startTerm(termsEnum.term(), freq);
 
         if (hasPositions || hasOffsets) {
-          docsAndPositionsEnum = termsEnum.docsAndPositions(null, docsAndPositionsEnum);
+          docsAndPositionsEnum = termsEnum.postings(null, docsAndPositionsEnum, PostingsEnum.OFFSETS | PostingsEnum.PAYLOADS);
           assert docsAndPositionsEnum != null;
           
           final int docID = docsAndPositionsEnum.nextDoc();
@@ -279,7 +281,7 @@ public abstract class TermVectorsWriter implements Closeable {
             
             final BytesRef payload = docsAndPositionsEnum.getPayload();
 
-            assert !hasPositions || pos >= 0;
+            assert !hasPositions || pos >= 0 ;
             addPosition(pos, startOffset, endOffset, payload);
           }
         }

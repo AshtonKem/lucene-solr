@@ -23,17 +23,17 @@ import org.apache.lucene.analysis.MockAnalyzer;
 import org.apache.lucene.analysis.MockTokenizer;
 import org.apache.lucene.analysis.Token;
 import org.apache.lucene.analysis.TokenStream;
+import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 import org.apache.lucene.analysis.tokenattributes.OffsetAttribute;
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute;
-import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
-import org.apache.lucene.document.FieldType;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
+import org.apache.lucene.document.FieldType;
 import org.apache.lucene.document.TextField;
-import org.apache.lucene.index.AtomicReaderContext;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.PhraseQuery;
@@ -44,11 +44,12 @@ import org.apache.lucene.search.spans.SpanNearQuery;
 import org.apache.lucene.search.spans.SpanQuery;
 import org.apache.lucene.search.spans.SpanTermQuery;
 import org.apache.lucene.store.Directory;
-import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.FixedBitSet;
+import org.apache.lucene.util.LuceneTestCase;
 
 public class HighlighterPhraseTest extends LuceneTestCase {
   private static final String FIELD = "text";
+
   public void testConcurrentPhrase() throws IOException, InvalidTokenOffsetsException {
     final String TEXT = "the fox jumped";
     final Directory directory = newDirectory();
@@ -79,9 +80,8 @@ public class HighlighterPhraseTest extends LuceneTestCase {
           new SimpleHTMLFormatter(), new SimpleHTMLEncoder(),
           new QueryScorer(phraseQuery));
 
-      final TokenStream tokenStream = TokenSources
-          .getTokenStream(indexReader.getTermVector(
-              0, FIELD), false);
+      final TokenStream tokenStream =
+          TokenSources.getTermVectorTokenStreamOrNull(FIELD, indexReader.getTermVectors(0), -1);
       assertEquals(highlighter.getBestFragment(new TokenStreamConcurrent(),
           TEXT), highlighter.getBestFragment(tokenStream, TEXT));
     } finally {
@@ -119,17 +119,12 @@ public class HighlighterPhraseTest extends LuceneTestCase {
         private int baseDoc;
 
         @Override
-        public boolean acceptsDocsOutOfOrder() {
-          return true;
-        }
-
-        @Override
         public void collect(int i) {
           bitset.set(this.baseDoc + i);
         }
 
         @Override
-        protected void doSetNextReader(AtomicReaderContext context) throws IOException {
+        protected void doSetNextReader(LeafReaderContext context) throws IOException {
           this.baseDoc = context.docBase;
         }
 
@@ -137,18 +132,22 @@ public class HighlighterPhraseTest extends LuceneTestCase {
         public void setScorer(org.apache.lucene.search.Scorer scorer) {
           // Do Nothing
         }
+
+        @Override
+        public boolean needsScores() {
+          return false;
+        }
       });
       assertEquals(1, bitset.cardinality());
       final int maxDoc = indexReader.maxDoc();
       final Highlighter highlighter = new Highlighter(
           new SimpleHTMLFormatter(), new SimpleHTMLEncoder(),
           new QueryScorer(phraseQuery));
-      for (int position = bitset.nextSetBit(0); position >= 0 && position < maxDoc-1; position = bitset
+      for (int position = bitset.nextSetBit(0); position < maxDoc-1; position = bitset
           .nextSetBit(position + 1)) {
         assertEquals(0, position);
-        final TokenStream tokenStream = TokenSources.getTokenStream(
-            indexReader.getTermVector(position,
-                FIELD), false);
+        final TokenStream tokenStream =
+            TokenSources.getTermVectorTokenStreamOrNull(FIELD, indexReader.getTermVectors(position), -1);
         assertEquals(highlighter.getBestFragment(new TokenStreamConcurrent(),
             TEXT), highlighter.getBestFragment(tokenStream, TEXT));
       }
@@ -188,9 +187,8 @@ public class HighlighterPhraseTest extends LuceneTestCase {
       final Highlighter highlighter = new Highlighter(
           new SimpleHTMLFormatter(), new SimpleHTMLEncoder(),
           new QueryScorer(phraseQuery));
-      final TokenStream tokenStream = TokenSources
-          .getTokenStream(indexReader.getTermVector(
-              0, FIELD), false);
+      final TokenStream tokenStream =
+          TokenSources.getTermVectorTokenStreamOrNull(FIELD, indexReader.getTermVectors(0), -1);
       assertEquals(
           highlighter.getBestFragment(new TokenStreamSparse(), TEXT),
           highlighter.getBestFragment(tokenStream, TEXT));
@@ -229,8 +227,8 @@ public class HighlighterPhraseTest extends LuceneTestCase {
       final Highlighter highlighter = new Highlighter(
           new SimpleHTMLFormatter(), new SimpleHTMLEncoder(),
           new QueryScorer(phraseQuery));
-      final TokenStream tokenStream = TokenSources.getTokenStream(
-          indexReader.getTermVector(0, FIELD), true);
+      final TokenStream tokenStream =
+          TokenSources.getTermVectorTokenStreamOrNull(FIELD, indexReader.getTermVectors(0), -1);
       assertEquals("the fox <B>did</B> not <B>jump</B>", highlighter
           .getBestFragment(tokenStream, TEXT));
     } finally {
@@ -268,9 +266,8 @@ public class HighlighterPhraseTest extends LuceneTestCase {
       final Highlighter highlighter = new Highlighter(
           new SimpleHTMLFormatter(), new SimpleHTMLEncoder(),
           new QueryScorer(phraseQuery));
-      final TokenStream tokenStream = TokenSources
-          .getTokenStream(indexReader.getTermVector(
-              0, FIELD), false);
+      final TokenStream tokenStream =
+          TokenSources.getTermVectorTokenStreamOrNull(FIELD, indexReader.getTermVectors(0), -1);
       assertEquals(
           highlighter.getBestFragment(new TokenStreamSparse(), TEXT),
           highlighter.getBestFragment(tokenStream, TEXT));

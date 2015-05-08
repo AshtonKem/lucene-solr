@@ -17,6 +17,7 @@ package org.apache.lucene.search;
  * limitations under the License.
  */
 
+import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -24,6 +25,9 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
+import org.apache.lucene.document.Field.Store;
+import org.apache.lucene.document.SortedDocValuesField;
+import org.apache.lucene.document.StringField;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.RandomIndexWriter;
 import org.apache.lucene.index.Term;
@@ -48,6 +52,7 @@ public class TestIndexSearcher extends LuceneTestCase {
       Document doc = new Document();
       doc.add(newStringField("field", Integer.toString(i), Field.Store.NO));
       doc.add(newStringField("field2", Boolean.toString(i % 2 == 0), Field.Store.NO));
+      doc.add(new SortedDocValuesField("field2", new BytesRef(Boolean.toString(i % 2 == 0))));
       iw.addDocument(doc);
     }
     reader = iw.getReader();
@@ -79,10 +84,6 @@ public class TestIndexSearcher extends LuceneTestCase {
         null,
         new Sort(new SortField("field2", SortField.Type.STRING))
     };
-    Filter filters[] = new Filter[] {
-        null,
-        new QueryWrapperFilter(new TermQuery(new Term("field2", "true")))
-    };
     ScoreDoc afters[] = new ScoreDoc[] {
         null,
         new FieldDoc(0, 0f, new Object[] { new BytesRef("boo!") })
@@ -92,24 +93,19 @@ public class TestIndexSearcher extends LuceneTestCase {
       for (ScoreDoc after : afters) {
         for (Query query : queries) {
           for (Sort sort : sorts) {
-            for (Filter filter : filters) {
-              searcher.search(query, Integer.MAX_VALUE);
-              searcher.searchAfter(after, query, Integer.MAX_VALUE);
-              searcher.search(query, filter, Integer.MAX_VALUE);
-              searcher.searchAfter(after, query, filter, Integer.MAX_VALUE);
-              if (sort != null) {
-                searcher.search(query, Integer.MAX_VALUE, sort);
-                searcher.search(query, filter, Integer.MAX_VALUE, sort);
-                searcher.search(query, filter, Integer.MAX_VALUE, sort, true, true);
-                searcher.search(query, filter, Integer.MAX_VALUE, sort, true, false);
-                searcher.search(query, filter, Integer.MAX_VALUE, sort, false, true);
-                searcher.search(query, filter, Integer.MAX_VALUE, sort, false, false);
-                searcher.searchAfter(after, query, filter, Integer.MAX_VALUE, sort);
-                searcher.searchAfter(after, query, filter, Integer.MAX_VALUE, sort, true, true);
-                searcher.searchAfter(after, query, filter, Integer.MAX_VALUE, sort, true, false);
-                searcher.searchAfter(after, query, filter, Integer.MAX_VALUE, sort, false, true);
-                searcher.searchAfter(after, query, filter, Integer.MAX_VALUE, sort, false, false);
-              }
+            searcher.search(query, Integer.MAX_VALUE);
+            searcher.searchAfter(after, query, Integer.MAX_VALUE);
+            if (sort != null) {
+              searcher.search(query, Integer.MAX_VALUE, sort);
+              searcher.search(query, Integer.MAX_VALUE, sort, true, true);
+              searcher.search(query, Integer.MAX_VALUE, sort, true, false);
+              searcher.search(query, Integer.MAX_VALUE, sort, false, true);
+              searcher.search(query, Integer.MAX_VALUE, sort, false, false);
+              searcher.searchAfter(after, query, Integer.MAX_VALUE, sort);
+              searcher.searchAfter(after, query, Integer.MAX_VALUE, sort, true, true);
+              searcher.searchAfter(after, query, Integer.MAX_VALUE, sort, true, false);
+              searcher.searchAfter(after, query, Integer.MAX_VALUE, sort, false, true);
+              searcher.searchAfter(after, query, Integer.MAX_VALUE, sort, false, false);
             }
           }
         }
@@ -138,5 +134,26 @@ public class TestIndexSearcher extends LuceneTestCase {
       IOUtils.close(r, dir);
     }
   }
-  
+
+  public void testCount() throws IOException {
+    Directory dir = newDirectory();
+    RandomIndexWriter w = new RandomIndexWriter(random(), dir);
+    final int numDocs = atLeast(100);
+    for (int i = 0; i < numDocs; ++i) {
+      Document doc = new Document();
+      if (random().nextBoolean()) {
+        doc.add(new StringField("foo", "bar", Store.NO));
+      }
+      w.addDocument(doc);
+    }
+    w.commit();
+    final IndexReader reader = w.getReader();
+    w.close();
+    final IndexSearcher searcher = newSearcher(reader);
+    final Query query = new TermQuery(new Term("foo", "bar"));
+    assertEquals(searcher.count(query), searcher.search(query, 1).totalHits);
+    reader.close();
+    dir.close();
+  }
+
 }

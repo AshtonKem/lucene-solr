@@ -21,7 +21,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.apache.lucene.index.AtomicReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.search.Collector;
 import org.apache.lucene.search.DocIdSet;
 import org.apache.lucene.search.FieldDoc;
@@ -40,6 +40,7 @@ import org.apache.lucene.search.TopFieldCollector;
 import org.apache.lucene.search.TopFieldDocs;
 import org.apache.lucene.search.TopScoreDocCollector;
 import org.apache.lucene.util.ArrayUtil;
+import org.apache.lucene.util.BitDocIdSet;
 import org.apache.lucene.util.FixedBitSet;
 
 /** Collects hits for subsequent faceting.  Once you've run
@@ -48,9 +49,10 @@ import org.apache.lucene.util.FixedBitSet;
  *  counting.  Use the {@code search} utility methods to
  *  perform an "ordinary" search but also collect into a
  *  {@link Collector}. */
-public class FacetsCollector extends SimpleCollector {
+// redundant 'implements Collector' to workaround javadocs bugs
+public class FacetsCollector extends SimpleCollector implements Collector {
 
-  private AtomicReaderContext context;
+  private LeafReaderContext context;
   private Scorer scorer;
   private int totalHits;
   private float[] scores;
@@ -75,13 +77,13 @@ public class FacetsCollector extends SimpleCollector {
   }
 
   /**
-   * Holds the documents that were matched in the {@link AtomicReaderContext}.
+   * Holds the documents that were matched in the {@link org.apache.lucene.index.LeafReaderContext}.
    * If scores were required, then {@code scores} is not null.
    */
   public final static class MatchingDocs {
     
     /** Context for this segment. */
-    public final AtomicReaderContext context;
+    public final LeafReaderContext context;
 
     /** Which documents were seen. */
     public final DocIdSet bits;
@@ -93,7 +95,7 @@ public class FacetsCollector extends SimpleCollector {
     public final int totalHits;
 
     /** Sole constructor. */
-    public MatchingDocs(AtomicReaderContext context, DocIdSet bits, int totalHits, float[] scores) {
+    public MatchingDocs(LeafReaderContext context, DocIdSet bits, int totalHits, float[] scores) {
       this.context = context;
       this.bits = bits;
       this.scores = scores;
@@ -128,7 +130,7 @@ public class FacetsCollector extends SimpleCollector {
       
       @Override
       public DocIdSet getDocIdSet() {
-        return bits;
+        return new BitDocIdSet(bits);
       }
     };
   }
@@ -154,14 +156,6 @@ public class FacetsCollector extends SimpleCollector {
   }
 
   @Override
-  public final boolean acceptsDocsOutOfOrder() {
-    // If we are keeping scores then we require in-order
-    // because we append each score to the float[] and
-    // expect that they correlate in order to the hits:
-    return keepScores == false;
-  }
-
-  @Override
   public final void collect(int doc) throws IOException {
     docs.addDoc(doc);
     if (keepScores) {
@@ -176,12 +170,17 @@ public class FacetsCollector extends SimpleCollector {
   }
 
   @Override
+  public boolean needsScores() {
+    return true;
+  }
+
+  @Override
   public final void setScorer(Scorer scorer) throws IOException {
     this.scorer = scorer;
   }
     
   @Override
-  protected void doSetNextReader(AtomicReaderContext context) throws IOException {
+  protected void doSetNextReader(LeafReaderContext context) throws IOException {
     if (docs != null) {
       matchingDocs.add(new MatchingDocs(this.context, docs.getDocIdSet(), totalHits, scores));
     }
@@ -283,14 +282,9 @@ public class FacetsCollector extends SimpleCollector {
                                                (FieldDoc) after,
                                                fillFields,
                                                doDocScores,
-                                               doMaxScore,
-                                               false);
+                                               doMaxScore);
     } else {
-      // TODO: can we pass the right boolean for
-      // in-order instead of hardwired to false...?  we'd
-      // need access to the protected IS.search methods
-      // taking Weight... could use reflection...
-      hitsCollector = TopScoreDocCollector.create(n, after, false);
+      hitsCollector = TopScoreDocCollector.create(n, after);
     }
     searcher.search(q, MultiCollector.wrap(hitsCollector, fc));
     return hitsCollector.topDocs();

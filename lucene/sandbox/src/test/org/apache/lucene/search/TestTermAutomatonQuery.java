@@ -23,6 +23,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Random;
 import java.util.Set;
 
@@ -38,20 +39,21 @@ import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.StoredField;
-import org.apache.lucene.index.AtomicReaderContext;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.RandomIndexWriter;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.util.BitDocIdSet;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.FixedBitSet;
+import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.TestUtil;
 import org.apache.lucene.util.automaton.Automata;
 import org.apache.lucene.util.automaton.Automaton;
-import org.apache.lucene.util.automaton.Operations;
 import org.apache.lucene.util.automaton.Transition;
 
 public class TestTermAutomatonQuery extends LuceneTestCase {
@@ -290,19 +292,22 @@ public class TestTermAutomatonQuery extends LuceneTestCase {
         private Scorer scorer;
 
         @Override
-        public boolean acceptsDocsOutOfOrder() {
-          return false;
-        }
-
-        @Override
         public void setScorer(Scorer scorer) {
-          assert scorer instanceof TermAutomatonScorer;
           this.scorer = scorer;
+          while (scorer instanceof AssertingScorer) {
+            scorer = ((AssertingScorer) scorer).getIn();
+          }
+          assert scorer instanceof TermAutomatonScorer;
         }
 
         @Override
         public void collect(int docID) throws IOException {
           assertEquals(3, scorer.freq());
+        }
+        
+        @Override
+        public boolean needsScores() {
+          return true;
         }
       });
 
@@ -572,15 +577,19 @@ public class TestTermAutomatonQuery extends LuceneTestCase {
         System.out.println(q.toDot());
       }
       
-      Filter filter;
+      Query q1 = q;
+      Query q2 = bq;
       if (random().nextInt(5) == 1) {
-        filter = new RandomFilter(random().nextLong(), random().nextFloat());
-      } else {
-        filter = null;
+        if (VERBOSE) {
+          System.out.println("  use random filter");
+        }
+        RandomFilter filter = new RandomFilter(random().nextLong(), random().nextFloat());
+        q1 = new FilteredQuery(q1, filter);
+        q2 = new FilteredQuery(q2, filter);
       }
 
-      TopDocs hits1 = s.search(q, filter, numDocs);
-      TopDocs hits2 = s.search(bq, filter, numDocs);
+      TopDocs hits1 = s.search(q1, numDocs);
+      TopDocs hits2 = s.search(q2, numDocs);
       Set<String> hits1Docs = toDocIDs(s, hits1);
       Set<String> hits2Docs = toDocIDs(s, hits2);
 
@@ -603,9 +612,7 @@ public class TestTermAutomatonQuery extends LuceneTestCase {
       }
     }
 
-    w.close();
-    r.close();
-    dir.close();
+    IOUtils.close(w, r, dir, analyzer);
   }
 
   private Set<String> toDocIDs(IndexSearcher s, TopDocs hits) throws IOException {
@@ -627,7 +634,7 @@ public class TestTermAutomatonQuery extends LuceneTestCase {
     }
 
     @Override
-    public DocIdSet getDocIdSet(AtomicReaderContext context, Bits acceptDocs) throws IOException {
+    public DocIdSet getDocIdSet(LeafReaderContext context, Bits acceptDocs) throws IOException {
       int maxDoc = context.reader().maxDoc();
       FixedBitSet bits = new FixedBitSet(maxDoc);
       Random random = new Random(seed ^ context.docBase);
@@ -638,7 +645,90 @@ public class TestTermAutomatonQuery extends LuceneTestCase {
         }
       }
 
-      return bits;
+      return new BitDocIdSet(bits);
     }
+
+    @Override
+    public String toString(String field) {
+      return "RandomFilter(seed=" + seed + ",density=" + density + ")";
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      if (super.equals(obj) == false) {
+        return false;
+      }
+      RandomFilter other = (RandomFilter) obj;
+      return seed == other.seed && density == other.density;
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(super.hashCode(), seed, density);
+    }
+  }
+
+  /** See if we can create a TAQ with cycles */
+  public void testWithCycles1() throws Exception {
+    
+    Directory dir = newDirectory();
+    RandomIndexWriter w = new RandomIndexWriter(random(), dir);
+    Document doc = new Document();
+    doc.add(newTextField("field", "here comes here comes", Field.Store.NO));
+    w.addDocument(doc);
+
+    doc = new Document();
+    doc.add(newTextField("field", "comes here", Field.Store.NO));
+    w.addDocument(doc);
+    IndexReader r = w.getReader();
+    IndexSearcher s = newSearcher(r);
+
+    TermAutomatonQuery q = new TermAutomatonQuery("field");
+    int init = q.createState();
+    int s1 = q.createState();
+    q.addTransition(init, s1, "here");
+    q.addTransition(s1, init, "comes");
+    q.setAccept(init, true);
+    q.finish();
+
+    assertEquals(1, s.search(q, 1).totalHits);
+    w.close();
+    r.close();
+    dir.close();
+  }
+
+  /** See if we can create a TAQ with cycles */
+  public void testWithCycles2() throws Exception {
+    
+    Directory dir = newDirectory();
+    RandomIndexWriter w = new RandomIndexWriter(random(), dir);
+    Document doc = new Document();
+    doc.add(newTextField("field", "here comes kaoma", Field.Store.NO));
+    w.addDocument(doc);
+
+    doc = new Document();
+    doc.add(newTextField("field", "here comes sun sun sun sun kaoma", Field.Store.NO));
+    w.addDocument(doc);
+    IndexReader r = w.getReader();
+    IndexSearcher s = newSearcher(r);
+
+    TermAutomatonQuery q = new TermAutomatonQuery("field");
+    int init = q.createState();
+    int s1 = q.createState();
+    q.addTransition(init, s1, "here");
+    int s2 = q.createState();
+    q.addTransition(s1, s2, "comes");
+    int s3 = q.createState();
+    q.addTransition(s2, s3, "sun");
+    q.addTransition(s3, s3, "sun");
+    int s4 = q.createState();
+    q.addTransition(s3, s4, "kaoma");
+    q.setAccept(s4, true);
+    q.finish();
+
+    assertEquals(1, s.search(q, 1).totalHits);
+    w.close();
+    r.close();
+    dir.close();
   }
 }

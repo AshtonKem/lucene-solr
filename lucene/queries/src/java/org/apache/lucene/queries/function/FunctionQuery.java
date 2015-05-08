@@ -17,16 +17,19 @@ package org.apache.lucene.queries.function;
  * limitations under the License.
  */
 
-import org.apache.lucene.index.AtomicReaderContext;
-import org.apache.lucene.index.IndexReader;
-import org.apache.lucene.index.Term;
-import org.apache.lucene.search.*;
-import org.apache.lucene.index.MultiFields;
-import org.apache.lucene.util.Bits;
-
 import java.io.IOException;
-import java.util.Set;
 import java.util.Map;
+import java.util.Set;
+
+import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.search.Explanation;
+import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.Query;
+import org.apache.lucene.search.Scorer;
+import org.apache.lucene.search.Weight;
+import org.apache.lucene.util.Bits;
 
 
 /**
@@ -57,9 +60,6 @@ public class FunctionQuery extends Query {
     return this;
   }
 
-  @Override
-  public void extractTerms(Set<Term> terms) {}
-
   protected class FunctionWeight extends Weight {
     protected final IndexSearcher searcher;
     protected float queryNorm;
@@ -67,15 +67,14 @@ public class FunctionQuery extends Query {
     protected final Map context;
 
     public FunctionWeight(IndexSearcher searcher) throws IOException {
+      super(FunctionQuery.this);
       this.searcher = searcher;
       this.context = ValueSource.newContext(searcher);
       func.createWeight(context, searcher);
     }
 
     @Override
-    public Query getQuery() {
-      return FunctionQuery.this;
-    }
+    public void extractTerms(Set<Term> terms) {}
 
     @Override
     public float getValueForNormalization() throws IOException {
@@ -90,12 +89,12 @@ public class FunctionQuery extends Query {
     }
 
     @Override
-    public Scorer scorer(AtomicReaderContext context, Bits acceptDocs) throws IOException {
+    public Scorer scorer(LeafReaderContext context, Bits acceptDocs) throws IOException {
       return new AllScorer(context, acceptDocs, this, queryWeight);
     }
 
     @Override
-    public Explanation explain(AtomicReaderContext context, int doc) throws IOException {
+    public Explanation explain(LeafReaderContext context, int doc) throws IOException {
       return ((AllScorer)scorer(context, context.reader().getLiveDocs())).explain(doc);
     }
   }
@@ -109,7 +108,7 @@ public class FunctionQuery extends Query {
     final FunctionValues vals;
     final Bits acceptDocs;
 
-    public AllScorer(AtomicReaderContext context, Bits acceptDocs, FunctionWeight w, float qWeight) throws IOException {
+    public AllScorer(LeafReaderContext context, Bits acceptDocs, FunctionWeight w, float qWeight) throws IOException {
       super(w);
       this.weight = w;
       this.qWeight = qWeight;
@@ -170,19 +169,17 @@ public class FunctionQuery extends Query {
     public Explanation explain(int doc) throws IOException {
       float sc = qWeight * vals.floatVal(doc);
 
-      Explanation result = new ComplexExplanation
-        (true, sc, "FunctionQuery(" + func + "), product of:");
-
-      result.addDetail(vals.explain(doc));
-      result.addDetail(new Explanation(getBoost(), "boost"));
-      result.addDetail(new Explanation(weight.queryNorm,"queryNorm"));
-      return result;
+      return Explanation.match(sc, "FunctionQuery(" + func + "), product of:",
+          vals.explain(doc),
+          Explanation.match(getBoost(), "boost"),
+          Explanation.match(weight.queryNorm, "queryNorm"));
     }
+
   }
 
 
   @Override
-  public Weight createWeight(IndexSearcher searcher) throws IOException {
+  public Weight createWeight(IndexSearcher searcher, boolean needsScores) throws IOException {
     return new FunctionQuery.FunctionWeight(searcher);
   }
 
@@ -202,14 +199,12 @@ public class FunctionQuery extends Query {
   public boolean equals(Object o) {
     if (!FunctionQuery.class.isInstance(o)) return false;
     FunctionQuery other = (FunctionQuery)o;
-    return this.getBoost() == other.getBoost()
+    return super.equals(o)
             && this.func.equals(other.func);
   }
 
-  /** Returns a hash code value for this object. */
   @Override
   public int hashCode() {
-    return func.hashCode()*31 + Float.floatToIntBits(getBoost());
+    return super.hashCode() ^ func.hashCode();
   }
-
 }

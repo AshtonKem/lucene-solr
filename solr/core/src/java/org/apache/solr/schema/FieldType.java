@@ -17,6 +17,15 @@
 
 package org.apache.solr.schema;
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.Tokenizer;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
@@ -25,14 +34,11 @@ import org.apache.lucene.analysis.util.CharFilterFactory;
 import org.apache.lucene.analysis.util.TokenFilterFactory;
 import org.apache.lucene.analysis.util.TokenizerFactory;
 import org.apache.lucene.document.Field;
-import org.apache.lucene.index.FieldInfo.IndexOptions;
+import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.StorableField;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.queries.function.ValueSource;
-import org.apache.lucene.search.ConstantScoreQuery;
-import org.apache.lucene.search.DocTermOrdsRangeFilter;
-import org.apache.lucene.search.DocTermOrdsRewriteMethod;
-import org.apache.lucene.search.DocValuesRangeFilter;
+import org.apache.lucene.search.DocValuesRangeQuery;
 import org.apache.lucene.search.DocValuesRewriteMethod;
 import org.apache.lucene.search.MultiTermQuery;
 import org.apache.lucene.search.PrefixQuery;
@@ -46,7 +52,6 @@ import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.BytesRefBuilder;
 import org.apache.lucene.util.CharsRef;
 import org.apache.lucene.util.CharsRefBuilder;
-import org.apache.lucene.util.UnicodeUtil;
 import org.apache.solr.analysis.SolrAnalyzer;
 import org.apache.solr.analysis.TokenizerChain;
 import org.apache.solr.common.SolrException;
@@ -59,15 +64,6 @@ import org.apache.solr.search.QParser;
 import org.apache.solr.search.Sorting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
 import static org.apache.lucene.analysis.util.AbstractAnalysisFactory.LUCENE_MATCH_VERSION_PARAM;
 
@@ -231,7 +227,7 @@ public abstract class FieldType extends FieldProperties {
    * (taken from toInternal()).   Having a different representation for
    * external, internal, and indexed would present quite a few problems
    * given the current Lucene architecture.  An analyzer for adding docs
-   * would need to translate internal->indexed while an analyzer for
+   * would need to translate internal-&gt;indexed while an analyzer for
    * querying would need to translate external-&gt;indexed.
    * </p>
    * <p>
@@ -265,14 +261,14 @@ public abstract class FieldType extends FieldProperties {
     if (val==null) return null;
 
     org.apache.lucene.document.FieldType newType = new org.apache.lucene.document.FieldType();
-    newType.setIndexed(field.indexed());
     newType.setTokenized(field.isTokenized());
     newType.setStored(field.stored());
     newType.setOmitNorms(field.omitNorms());
-    newType.setIndexOptions(getIndexOptions(field, val));
+    newType.setIndexOptions(field.indexed() ? getIndexOptions(field, val) : IndexOptions.NONE);
     newType.setStoreTermVectors(field.storeTermVector());
     newType.setStoreTermVectorOffsets(field.storeTermOffsets());
     newType.setStoreTermVectorPositions(field.storeTermPositions());
+    newType.setStoreTermVectorPayloads(field.storeTermPayloads());
 
     return createField(field.getName(), val, newType, boost);
   }
@@ -304,7 +300,7 @@ public abstract class FieldType extends FieldProperties {
    */
   public List<StorableField> createFields(SchemaField field, Object value, float boost) {
     StorableField f = createField( field, value, boost);
-    if (field.hasDocValues() && f.fieldType().docValueType() == null) {
+    if (field.hasDocValues() && f.fieldType().docValuesType() == null) {
       // field types that support doc values should either override createField
       // to return a field with doc values or extend createFields if this can't
       // be done in a single field instance (see StrField for example)
@@ -317,7 +313,7 @@ public abstract class FieldType extends FieldProperties {
 
     IndexOptions options = IndexOptions.DOCS_AND_FREQS_AND_POSITIONS;
     if (field.omitTermFreqAndPositions()) {
-      options = IndexOptions.DOCS_ONLY;
+      options = IndexOptions.DOCS;
     } else if (field.omitPositions()) {
       options = IndexOptions.DOCS_AND_FREQS;
     } else if (field.storeOffsetsWithPositions()) {
@@ -435,7 +431,7 @@ public abstract class FieldType extends FieldProperties {
   /**
    * Returns a Query instance for doing prefix searches on this field type.
    * Also, other QueryParser implementations may have different semantics.
-   * <p/>
+   * <p>
    * Sub-classes should override this method to provide their own range query implementation.
    *
    * @param parser       the {@link org.apache.solr.search.QParser} calling the method
@@ -451,7 +447,7 @@ public abstract class FieldType extends FieldProperties {
   }
   
   /**
-   * DocValues is not enabled for a field, but its indexed, docvalues can be constructed 
+   * DocValues is not enabled for a field, but it's indexed, docvalues can be constructed 
    * on the fly (uninverted, aka fieldcache) on the first request to sort, facet, etc. 
    * This specifies the structure to use.
    * 
@@ -677,7 +673,7 @@ public abstract class FieldType extends FieldProperties {
    * currently passes part1 and part2 as null if they are '*' respectively. minInclusive and maxInclusive are both true
    * currently by SolrQueryParser but that may change in the future. Also, other QueryParser implementations may have
    * different semantics.
-   * <p/>
+   * <p>
    * Sub-classes should override this method to provide their own range query implementation. They should strive to
    * handle nulls in part1 and/or part2 as well as unequal minInclusive and maxInclusive parameters gracefully.
    *
@@ -693,19 +689,11 @@ public abstract class FieldType extends FieldProperties {
   public Query getRangeQuery(QParser parser, SchemaField field, String part1, String part2, boolean minInclusive, boolean maxInclusive) {
     // TODO: change these all to use readableToIndexed/bytes instead (e.g. for unicode collation)
     if (field.hasDocValues() && !field.indexed()) {
-      if (field.multiValued()) {
-        return new ConstantScoreQuery(DocTermOrdsRangeFilter.newBytesRefRange(
-            field.getName(),
-            part1 == null ? null : new BytesRef(toInternal(part1)),
-            part2 == null ? null : new BytesRef(toInternal(part2)),
-            minInclusive, maxInclusive));
-      } else {
-        return new ConstantScoreQuery(DocValuesRangeFilter.newStringRange(
-            field.getName(), 
-            part1 == null ? null : toInternal(part1),
-            part2 == null ? null : toInternal(part2),
-            minInclusive, maxInclusive));
-      }
+      return DocValuesRangeQuery.newBytesRefRange(
+          field.getName(),
+          part1 == null ? null : new BytesRef(toInternal(part1)),
+          part2 == null ? null : new BytesRef(toInternal(part2)),
+          minInclusive, maxInclusive);
     } else {
       MultiTermQuery rangeQuery = TermRangeQuery.newStringRange(
             field.getName(),
@@ -744,9 +732,9 @@ public abstract class FieldType extends FieldProperties {
    */
   public MultiTermQuery.RewriteMethod getRewriteMethod(QParser parser, SchemaField field) {
     if (!field.indexed() && field.hasDocValues()) {
-      return field.multiValued() ? new DocTermOrdsRewriteMethod() : new DocValuesRewriteMethod();
+      return new DocValuesRewriteMethod();
     } else {
-      return MultiTermQuery.CONSTANT_SCORE_AUTO_REWRITE_DEFAULT;
+      return MultiTermQuery.CONSTANT_SCORE_REWRITE;
     }
   }
 
@@ -756,7 +744,7 @@ public abstract class FieldType extends FieldProperties {
    *
    * <p>
    * This method is called by the <code>SchemaField</code> constructor to 
-   * check that it's initialization does not violate any fundemental 
+   * check that its initialization does not violate any fundemental 
    * requirements of the <code>FieldType</code>.  The default implementation 
    * does nothing, but subclasses may chose to throw a {@link SolrException}  
    * if invariants are violated by the <code>SchemaField.</code>
@@ -793,7 +781,7 @@ public abstract class FieldType extends FieldProperties {
   private static final String POSITION_INCREMENT_GAP = "positionIncrementGap";
 
   /**
-   * Get a map of property name -> value for this field type. 
+   * Get a map of property name -&gt; value for this field type. 
    * @param showDefaults if true, include default properties.
    */
   public SimpleOrderedMap<Object> getNamedPropertyValues(boolean showDefaults) {
@@ -845,10 +833,11 @@ public abstract class FieldType extends FieldProperties {
       for (String propertyName : FieldProperties.propertyNames) {
         fieldProperties.add(propertyName);
       }
+
       for (String key : args.keySet()) {
         if (fieldProperties.contains(key)) {
           namedPropertyValues.add(key, StrUtils.parseBool(args.get(key)));
-        } else if ( ! CLASS_NAME.equals(key) && ! TYPE_NAME.equals(key)) {
+        } else if (!CLASS_NAME.equals(key) && !TYPE_NAME.equals(key)) {
           namedPropertyValues.add(key, args.get(key));
         }
       }
@@ -963,6 +952,12 @@ public abstract class FieldType extends FieldProperties {
       analyzerProps.add(CLASS_NAME, analyzer.getClass().getName());
     }
     return analyzerProps;
+  }
+
+  /**Converts any Object to a java Object native to this field type
+   */
+  public Object toNativeType(Object val) {
+    return val;
   }
   
   /** 

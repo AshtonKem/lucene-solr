@@ -47,8 +47,8 @@ import org.apache.lucene.store.Directory;
  * <p>
  * In addition you should periodically call {@link #maybeRefresh}. While it's
  * possible to call this just before running each query, this is discouraged
- * since it penalizes the unlucky queries that do the reopen. It's better to use
- * a separate background thread, that periodically calls maybeReopen. Finally,
+ * since it penalizes the unlucky queries that need to refresh. It's better to use
+ * a separate background thread, that periodically calls {@link #maybeRefresh}. Finally,
  * be sure to call {@link #close} once you are done.
  * 
  * @see SearcherFactory
@@ -86,7 +86,7 @@ public final class SearcherManager extends ReferenceManager<IndexSearcher> {
       searcherFactory = new SearcherFactory();
     }
     this.searcherFactory = searcherFactory;
-    current = getSearcher(searcherFactory, DirectoryReader.open(writer, applyAllDeletes));
+    current = getSearcher(searcherFactory, DirectoryReader.open(writer, applyAllDeletes), null);
   }
   
   /**
@@ -103,7 +103,26 @@ public final class SearcherManager extends ReferenceManager<IndexSearcher> {
       searcherFactory = new SearcherFactory();
     }
     this.searcherFactory = searcherFactory;
-    current = getSearcher(searcherFactory, DirectoryReader.open(dir));
+    current = getSearcher(searcherFactory, DirectoryReader.open(dir), null);
+  }
+
+  /**
+   * Creates and returns a new SearcherManager from an existing {@link DirectoryReader}.  Note that
+   * this steals the incoming reference.
+   *
+   * @param reader the DirectoryReader.
+   * @param searcherFactory An optional {@link SearcherFactory}. Pass
+   *        <code>null</code> if you don't require the searcher to be warmed
+   *        before going live or other custom behavior.
+   *        
+   * @throws IOException if there is a low-level I/O error
+   */
+  public SearcherManager(DirectoryReader reader, SearcherFactory searcherFactory) throws IOException {
+    if (searcherFactory == null) {
+      searcherFactory = new SearcherFactory();
+    }
+    this.searcherFactory = searcherFactory;
+    this.current = getSearcher(searcherFactory, reader, null);
   }
 
   @Override
@@ -119,7 +138,7 @@ public final class SearcherManager extends ReferenceManager<IndexSearcher> {
     if (newReader == null) {
       return null;
     } else {
-      return getSearcher(searcherFactory, newReader);
+      return getSearcher(searcherFactory, newReader, r);
     }
   }
   
@@ -153,11 +172,11 @@ public final class SearcherManager extends ReferenceManager<IndexSearcher> {
    *  IndexReader} using the provided {@link
    *  SearcherFactory}.  NOTE: this decRefs incoming reader
    * on throwing an exception. */
-  public static IndexSearcher getSearcher(SearcherFactory searcherFactory, IndexReader reader) throws IOException {
+  public static IndexSearcher getSearcher(SearcherFactory searcherFactory, IndexReader reader, IndexReader previousReader) throws IOException {
     boolean success = false;
     final IndexSearcher searcher;
     try {
-      searcher = searcherFactory.newSearcher(reader);
+      searcher = searcherFactory.newSearcher(reader, previousReader);
       if (searcher.getIndexReader() != reader) {
         throw new IllegalStateException("SearcherFactory must wrap exactly the provided reader (got " + searcher.getIndexReader() + " but expected " + reader + ")");
       }

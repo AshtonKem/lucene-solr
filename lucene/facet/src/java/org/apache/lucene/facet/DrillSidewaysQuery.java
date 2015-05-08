@@ -18,9 +18,12 @@ package org.apache.lucene.facet;
  */
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.Set;
 
-import org.apache.lucene.index.AtomicReaderContext;
 import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.search.BulkScorer;
 import org.apache.lucene.search.Collector;
 import org.apache.lucene.search.DocIdSet;
 import org.apache.lucene.search.DocIdSetIterator;
@@ -29,13 +32,13 @@ import org.apache.lucene.search.Filter;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.Scorer;
-import org.apache.lucene.search.BulkScorer;
 import org.apache.lucene.search.Weight;
 import org.apache.lucene.util.Bits;
-
 /** Only purpose is to punch through and return a
- *  DrillSidewaysScorer */ 
+ *  DrillSidewaysScorer*/ 
 
+// TODO change the way DrillSidewaysScorer is used, this query does not work
+// with filter caching
 class DrillSidewaysQuery extends Query {
   final Query baseQuery;
   final Collector drillDownCollector;
@@ -74,8 +77,8 @@ class DrillSidewaysQuery extends Query {
   }
   
   @Override
-  public Weight createWeight(IndexSearcher searcher) throws IOException {
-    final Weight baseWeight = baseQuery.createWeight(searcher);
+  public Weight createWeight(IndexSearcher searcher, boolean needsScores) throws IOException {
+    final Weight baseWeight = baseQuery.createWeight(searcher, needsScores);
     final Object[] drillDowns = new Object[drillDownQueries.length];
     for(int dim=0;dim<drillDownQueries.length;dim++) {
       Query query = drillDownQueries[dim];
@@ -85,19 +88,17 @@ class DrillSidewaysQuery extends Query {
       } else {
         // TODO: would be nice if we could say "we will do no
         // scoring" here....
-        drillDowns[dim] = searcher.rewrite(query).createWeight(searcher);
+        drillDowns[dim] = searcher.rewrite(query).createWeight(searcher, needsScores);
       }
     }
 
-    return new Weight() {
+    return new Weight(DrillSidewaysQuery.this) {
       @Override
-      public Explanation explain(AtomicReaderContext context, int doc) throws IOException {
-        return baseWeight.explain(context, doc);
-      }
+      public void extractTerms(Set<Term> terms) {}
 
       @Override
-      public Query getQuery() {
-        return baseQuery;
+      public Explanation explain(LeafReaderContext context, int doc) throws IOException {
+        return baseWeight.explain(context, doc);
       }
 
       @Override
@@ -111,20 +112,13 @@ class DrillSidewaysQuery extends Query {
       }
 
       @Override
-      public boolean scoresDocsOutOfOrder() {
-        // TODO: would be nice if AssertingIndexSearcher
-        // confirmed this for us
-        return false;
-      }
-
-      @Override
-      public Scorer scorer(AtomicReaderContext context, Bits acceptDocs) throws IOException {
+      public Scorer scorer(LeafReaderContext context, Bits acceptDocs) throws IOException {
         // We can only run as a top scorer:
         throw new UnsupportedOperationException();
       }
 
       @Override
-      public BulkScorer bulkScorer(AtomicReaderContext context, boolean scoreDocsInOrder, Bits acceptDocs) throws IOException {
+      public BulkScorer bulkScorer(LeafReaderContext context, Bits acceptDocs) throws IOException {
 
         // TODO: it could be better if we take acceptDocs
         // into account instead of baseScorer?

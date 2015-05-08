@@ -22,23 +22,23 @@ import java.io.IOException;
 import org.apache.lucene.codecs.BlockTermState;
 import org.apache.lucene.codecs.CodecUtil;
 import org.apache.lucene.codecs.PostingsReaderBase;
-import org.apache.lucene.index.DocsAndPositionsEnum;
-import org.apache.lucene.index.DocsEnum;
+import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.FieldInfo;
+import org.apache.lucene.index.SegmentReadState;
 import org.apache.lucene.store.DataInput;
 import org.apache.lucene.store.IndexInput;
-import org.apache.lucene.util.BitUtil;
 import org.apache.lucene.util.Bits;
 
 final class IDVersionPostingsReader extends PostingsReaderBase {
 
   @Override
-  public void init(IndexInput termsIn) throws IOException {
+  public void init(IndexInput termsIn, SegmentReadState state) throws IOException {
     // Make sure we are talking to the matching postings writer
-    CodecUtil.checkHeader(termsIn,
-                          IDVersionPostingsWriter.TERMS_CODEC,
-                          IDVersionPostingsWriter.VERSION_START,
-                          IDVersionPostingsWriter.VERSION_CURRENT);
+    CodecUtil.checkIndexHeader(termsIn,
+                                 IDVersionPostingsWriter.TERMS_CODEC,
+                                 IDVersionPostingsWriter.VERSION_START,
+                                 IDVersionPostingsWriter.VERSION_CURRENT,
+                                 state.segmentInfo.getId(), state.segmentSuffix);
   }
 
   @Override
@@ -63,8 +63,21 @@ final class IDVersionPostingsReader extends PostingsReaderBase {
   }
 
   @Override
-  public DocsEnum docs(FieldInfo fieldInfo, BlockTermState termState, Bits liveDocs, DocsEnum reuse, int flags) throws IOException {
+  public PostingsEnum postings(FieldInfo fieldInfo, BlockTermState termState, Bits liveDocs, PostingsEnum reuse, int flags) throws IOException {
     SingleDocsEnum docsEnum;
+
+    if (PostingsEnum.featureRequested(flags, PostingsEnum.POSITIONS)) {
+      SinglePostingsEnum posEnum;
+
+      if (reuse instanceof SinglePostingsEnum) {
+        posEnum = (SinglePostingsEnum) reuse;
+      } else {
+        posEnum = new SinglePostingsEnum();
+      }
+      IDVersionTermState _termState = (IDVersionTermState) termState;
+      posEnum.reset(_termState.docID, _termState.idVersion, liveDocs);
+      return posEnum;
+    }
 
     if (reuse instanceof SingleDocsEnum) {
       docsEnum = (SingleDocsEnum) reuse;
@@ -77,26 +90,16 @@ final class IDVersionPostingsReader extends PostingsReaderBase {
   }
 
   @Override
-  public DocsAndPositionsEnum docsAndPositions(FieldInfo fieldInfo, BlockTermState _termState, Bits liveDocs,
-                                               DocsAndPositionsEnum reuse, int flags) {
-    SingleDocsAndPositionsEnum posEnum;
-
-    if (reuse instanceof SingleDocsAndPositionsEnum) {
-      posEnum = (SingleDocsAndPositionsEnum) reuse;
-    } else {
-      posEnum = new SingleDocsAndPositionsEnum();
-    }
-    IDVersionTermState termState = (IDVersionTermState) _termState;
-    posEnum.reset(termState.docID, termState.idVersion, liveDocs);
-    return posEnum;
-  }
-
-  @Override
   public long ramBytesUsed() {
     return 0;
   }
 
   @Override
   public void checkIntegrity() throws IOException {
+  }
+
+  @Override
+  public String toString() {
+    return getClass().getSimpleName();
   }
 }

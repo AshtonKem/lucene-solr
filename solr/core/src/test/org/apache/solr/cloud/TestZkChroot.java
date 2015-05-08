@@ -19,11 +19,12 @@ package org.apache.solr.cloud;
 
 import java.io.File;
 
+import org.apache.solr.SolrJettyTestBase;
 import org.apache.solr.SolrTestCaseJ4;
 import org.apache.solr.common.cloud.SolrZkClient;
+import org.apache.solr.common.cloud.ZkConfigManager;
 import org.apache.solr.common.cloud.ZooKeeperException;
 import org.apache.solr.core.CoreContainer;
-import org.apache.solr.util.ExternalPaths;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -43,10 +44,10 @@ public class TestZkChroot extends SolrTestCaseJ4 {
   public void setUp() throws Exception {
     super.setUp();
 
-    zkDir = createTempDir("zkData").getAbsolutePath();
+    zkDir = createTempDir("zkData").toFile().getAbsolutePath();
     zkServer = new ZkTestServer(zkDir);
     zkServer.run();
-    home = ExternalPaths.EXAMPLE_HOME;
+    home = SolrJettyTestBase.legacyExampleCollection1SolrHome();
     
   }
   
@@ -140,7 +141,7 @@ public class TestZkChroot extends SolrTestCaseJ4 {
       cores = CoreContainer.createAndLoad(home, new File(home, "solr.xml"));
       assertTrue(
           "solrconfig.xml should have been uploaded to zk to the correct config directory",
-          zkClient.exists(chroot + ZkController.CONFIGS_ZKNODE + "/"
+          zkClient.exists(chroot + ZkConfigManager.CONFIGS_ZKNODE + "/"
               + configName + "/solrconfig.xml", true));
     } finally {
       if (cores != null) cores.shutdown();

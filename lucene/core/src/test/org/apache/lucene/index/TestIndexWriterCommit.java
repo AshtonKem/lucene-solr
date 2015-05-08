@@ -18,6 +18,7 @@ package org.apache.lucene.index;
  */
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -51,7 +52,7 @@ public class TestIndexWriterCommit extends LuceneTestCase {
       Term searchTerm = new Term("content", "aaa");
       DirectoryReader reader = DirectoryReader.open(dir);
       IndexSearcher searcher = newSearcher(reader);
-      ScoreDoc[] hits = searcher.search(new TermQuery(searchTerm), null, 1000).scoreDocs;
+      ScoreDoc[] hits = searcher.search(new TermQuery(searchTerm), 1000).scoreDocs;
       assertEquals("first number of hits", 14, hits.length);
       reader.close();
 
@@ -64,7 +65,7 @@ public class TestIndexWriterCommit extends LuceneTestCase {
         }
         IndexReader r = DirectoryReader.open(dir);
         searcher = newSearcher(r);
-        hits = searcher.search(new TermQuery(searchTerm), null, 1000).scoreDocs;
+        hits = searcher.search(new TermQuery(searchTerm), 1000).scoreDocs;
         assertEquals("reader incorrectly sees changes from writer", 14, hits.length);
         r.close();
         assertTrue("reader should have still been current", reader.isCurrent());
@@ -76,7 +77,7 @@ public class TestIndexWriterCommit extends LuceneTestCase {
 
       IndexReader r = DirectoryReader.open(dir);
       searcher = newSearcher(r);
-      hits = searcher.search(new TermQuery(searchTerm), null, 1000).scoreDocs;
+      hits = searcher.search(new TermQuery(searchTerm), 1000).scoreDocs;
       assertEquals("reader did not see changes after writer was closed", 47, hits.length);
       r.close();
       reader.close();
@@ -93,6 +94,10 @@ public class TestIndexWriterCommit extends LuceneTestCase {
    */
   public void testCommitOnCloseAbort() throws IOException {
     Directory dir = newDirectory();
+    if (dir instanceof MockDirectoryWrapper) {
+      // test uses IW unref'ed check which is unaware of retries
+      ((MockDirectoryWrapper)dir).setEnableVirusScanner(false);
+    }
     IndexWriter writer = new IndexWriter(dir, newIndexWriterConfig(new MockAnalyzer(random()))
                                                 .setMaxBufferedDocs(10));
     for (int i = 0; i < 14; i++) {
@@ -103,7 +108,7 @@ public class TestIndexWriterCommit extends LuceneTestCase {
     Term searchTerm = new Term("content", "aaa");
     IndexReader reader = DirectoryReader.open(dir);
     IndexSearcher searcher = newSearcher(reader);
-    ScoreDoc[] hits = searcher.search(new TermQuery(searchTerm), null, 1000).scoreDocs;
+    ScoreDoc[] hits = searcher.search(new TermQuery(searchTerm), 1000).scoreDocs;
     assertEquals("first number of hits", 14, hits.length);
     reader.close();
 
@@ -118,7 +123,7 @@ public class TestIndexWriterCommit extends LuceneTestCase {
 
     reader = DirectoryReader.open(dir);
     searcher = newSearcher(reader);
-    hits = searcher.search(new TermQuery(searchTerm), null, 1000).scoreDocs;
+    hits = searcher.search(new TermQuery(searchTerm), 1000).scoreDocs;
     assertEquals("reader incorrectly sees changes from writer", 14, hits.length);
     reader.close();
 
@@ -129,7 +134,7 @@ public class TestIndexWriterCommit extends LuceneTestCase {
 
     reader = DirectoryReader.open(dir);
     searcher = newSearcher(reader);
-    hits = searcher.search(new TermQuery(searchTerm), null, 1000).scoreDocs;
+    hits = searcher.search(new TermQuery(searchTerm), 1000).scoreDocs;
     assertEquals("saw changes after writer.abort", 14, hits.length);
     reader.close();
 
@@ -151,7 +156,7 @@ public class TestIndexWriterCommit extends LuceneTestCase {
       }
       IndexReader r = DirectoryReader.open(dir);
       searcher = newSearcher(r);
-      hits = searcher.search(new TermQuery(searchTerm), null, 1000).scoreDocs;
+      hits = searcher.search(new TermQuery(searchTerm), 1000).scoreDocs;
       assertEquals("reader incorrectly sees changes from writer", 14, hits.length);
       r.close();
     }
@@ -159,7 +164,7 @@ public class TestIndexWriterCommit extends LuceneTestCase {
     writer.close();
     IndexReader r = DirectoryReader.open(dir);
     searcher = newSearcher(r);
-    hits = searcher.search(new TermQuery(searchTerm), null, 1000).scoreDocs;
+    hits = searcher.search(new TermQuery(searchTerm), 1000).scoreDocs;
     assertEquals("didn't see changes after close", 218, hits.length);
     r.close();
 
@@ -184,6 +189,11 @@ public class TestIndexWriterCommit extends LuceneTestCase {
     final String contentFormat = TestUtil.getPostingsFormat("content");
     assumeFalse("This test cannot run with Memory codec", idFormat.equals("Memory") || contentFormat.equals("Memory"));
     MockDirectoryWrapper dir = newMockDirectory();
+    if (dir instanceof MockDirectoryWrapper) {
+      // the virus scanner can use up too much disk space :)
+      // an alternative is to expose MDW.triedToDelete and discount it
+      dir.setEnableVirusScanner(false);
+    }
     Analyzer analyzer;
     if (random().nextBoolean()) {
       // no payloads
@@ -268,6 +278,10 @@ public class TestIndexWriterCommit extends LuceneTestCase {
     // writing to same file more than once
     if (dir instanceof MockDirectoryWrapper) {
       ((MockDirectoryWrapper)dir).setPreventDoubleWrite(false);
+    }
+    if (dir instanceof MockDirectoryWrapper) {
+      // test uses IW unref'ed check which is unaware of retries
+      ((MockDirectoryWrapper)dir).setEnableVirusScanner(false);
     }
     IndexWriter writer = new IndexWriter(
         dir,
@@ -556,8 +570,13 @@ public class TestIndexWriterCommit extends LuceneTestCase {
   // LUCENE-1274: test writer.prepareCommit()
   public void testPrepareCommitRollback() throws IOException {
     Directory dir = newDirectory();
+
+    MockDirectoryWrapper mockDir;
     if (dir instanceof MockDirectoryWrapper) {
-      ((MockDirectoryWrapper)dir).setPreventDoubleWrite(false);
+      mockDir = (MockDirectoryWrapper) dir;
+      mockDir.setPreventDoubleWrite(false);
+    } else {
+      mockDir = null;
     }
 
     IndexWriter writer = new IndexWriter(
@@ -568,8 +587,9 @@ public class TestIndexWriterCommit extends LuceneTestCase {
     );
     writer.commit();
 
-    for (int i = 0; i < 23; i++)
+    for (int i = 0; i < 23; i++) {
       TestIndexWriter.addDoc(writer);
+    }
 
     DirectoryReader reader = DirectoryReader.open(dir);
     assertEquals(0, reader.numDocs());
@@ -579,7 +599,14 @@ public class TestIndexWriterCommit extends LuceneTestCase {
     IndexReader reader2 = DirectoryReader.open(dir);
     assertEquals(0, reader2.numDocs());
 
+    // We need to let IW delete the partial segments_N that was written in prepareCommit, else we get a false fail below:
+    if (mockDir != null) {
+      mockDir.setEnableVirusScanner(false);
+    }
     writer.rollback();
+    if (mockDir != null) {
+      mockDir.setEnableVirusScanner(true);
+    }
 
     IndexReader reader3 = DirectoryReader.openIfChanged(reader);
     assertNull(reader3);
@@ -588,9 +615,12 @@ public class TestIndexWriterCommit extends LuceneTestCase {
     reader.close();
     reader2.close();
 
+    // System.out.println("TEST: after rollback: " + Arrays.toString(dir.listAll()));
+
     writer = new IndexWriter(dir, newIndexWriterConfig(new MockAnalyzer(random())));
-    for (int i = 0; i < 17; i++)
+    for (int i = 0; i < 17; i++) {
       TestIndexWriter.addDoc(writer);
+    }
 
     reader = DirectoryReader.open(dir);
     assertEquals(0, reader.numDocs());

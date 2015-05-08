@@ -18,11 +18,11 @@ package org.apache.lucene.search;
  */
 
 import org.apache.lucene.document.Field;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.util.LuceneTestCase;
 
 import java.io.IOException;
 
-import org.apache.lucene.index.AtomicReaderContext;
 import org.apache.lucene.index.FieldInvertState;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.RandomIndexWriter;
@@ -48,7 +48,7 @@ public class TestSimilarity extends LuceneTestCase {
     @Override public float sloppyFreq(int distance) { return 2.0f; }
     @Override public float idf(long docFreq, long numDocs) { return 1.0f; }
     @Override public Explanation idfExplain(CollectionStatistics collectionStats, TermStatistics[] stats) {
-      return new Explanation(1.0f, "Inexplicable"); 
+      return Explanation.match(1.0f, "Inexplicable"); 
     }
   }
 
@@ -86,7 +86,8 @@ public class TestSimilarity extends LuceneTestCase {
         public final void collect(int doc) throws IOException {
            assertEquals(1.0f, scorer.score(), 0);
          }
-        public boolean acceptsDocsOutOfOrder() {
+         @Override
+         public boolean needsScores() {
            return true;
          }
        });
@@ -108,11 +109,11 @@ public class TestSimilarity extends LuceneTestCase {
            assertEquals((float)doc+base+1, scorer.score(), 0);
          }
          @Override
-         protected void doSetNextReader(AtomicReaderContext context) throws IOException {
+         protected void doSetNextReader(LeafReaderContext context) throws IOException {
            base = context.docBase;
          }
          @Override
-        public boolean acceptsDocsOutOfOrder() {
+         public boolean needsScores() {
            return true;
          }
        });
@@ -134,7 +135,7 @@ public class TestSimilarity extends LuceneTestCase {
            assertEquals(1.0f, scorer.score(), 0);
          }
          @Override
-         public boolean acceptsDocsOutOfOrder() {
+         public boolean needsScores() {
            return true;
          }
        });
@@ -153,7 +154,7 @@ public class TestSimilarity extends LuceneTestCase {
         assertEquals(2.0f, scorer.score(), 0);
       }
       @Override
-      public boolean acceptsDocsOutOfOrder() {
+      public boolean needsScores() {
         return true;
       }
     });

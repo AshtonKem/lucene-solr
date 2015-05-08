@@ -17,12 +17,11 @@ package org.apache.lucene.search.suggest.analyzing;
  * limitations under the License.
  */
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -82,21 +81,21 @@ public class TestFreeTextSuggester extends LuceneTestCase {
                    toString(sug.lookup("b", 10)));
 
       // Try again after save/load:
-      File tmpDir = createTempDir("FreeTextSuggesterTest");
-      tmpDir.mkdir();
+      Path tmpDir = createTempDir("FreeTextSuggesterTest");
 
-      File path = new File(tmpDir, "suggester");
+      Path path = tmpDir.resolve("suggester");
 
-      OutputStream os = new FileOutputStream(path);
+      OutputStream os = Files.newOutputStream(path);
       sug.store(os);
       os.close();
 
-      InputStream is = new FileInputStream(path);
+      InputStream is = Files.newInputStream(path);
       sug = new FreeTextSuggester(a, a, 2, (byte) 0x20);
       sug.load(is);
       is.close();
       assertEquals(2, sug.getCount());
     }
+    a.close();
   }
 
   public void testIllegalByteDuringBuild() throws Exception {
@@ -105,13 +104,15 @@ public class TestFreeTextSuggester extends LuceneTestCase {
     Iterable<Input> keys = AnalyzingSuggesterTest.shuffle(
         new Input("foo\u001ebar baz", 50)
     );
-    FreeTextSuggester sug = new FreeTextSuggester(new MockAnalyzer(random()));
+    Analyzer analyzer = new MockAnalyzer(random());
+    FreeTextSuggester sug = new FreeTextSuggester(analyzer);
     try {
       sug.build(new InputArrayIterator(keys));
       fail("did not hit expected exception");
     } catch (IllegalArgumentException iae) {
       // expected
     }
+    analyzer.close();
   }
 
   public void testIllegalByteDuringQuery() throws Exception {
@@ -120,7 +121,8 @@ public class TestFreeTextSuggester extends LuceneTestCase {
     Iterable<Input> keys = AnalyzingSuggesterTest.shuffle(
         new Input("foo bar baz", 50)
     );
-    FreeTextSuggester sug = new FreeTextSuggester(new MockAnalyzer(random()));
+    Analyzer analyzer = new MockAnalyzer(random());
+    FreeTextSuggester sug = new FreeTextSuggester(analyzer);
     sug.build(new InputArrayIterator(keys));
 
     try {
@@ -129,6 +131,7 @@ public class TestFreeTextSuggester extends LuceneTestCase {
     } catch (IllegalArgumentException iae) {
       // expected
     }
+    analyzer.close();
   }
 
   @Ignore
@@ -136,7 +139,8 @@ public class TestFreeTextSuggester extends LuceneTestCase {
     final LineFileDocs lfd = new LineFileDocs(null, "/lucenedata/enwiki/enwiki-20120502-lines-1k.txt", false);
     // Skip header:
     lfd.nextDoc();
-    FreeTextSuggester sug = new FreeTextSuggester(new MockAnalyzer(random()));
+    Analyzer analyzer = new MockAnalyzer(random());
+    FreeTextSuggester sug = new FreeTextSuggester(analyzer);
     sug.build(new InputIterator() {
 
         private int count;
@@ -192,6 +196,7 @@ public class TestFreeTextSuggester extends LuceneTestCase {
         System.out.println("  " + result);
       }
     }
+    analyzer.close();
   }
 
   // Make sure you can suggest based only on unigram model:
@@ -206,6 +211,7 @@ public class TestFreeTextSuggester extends LuceneTestCase {
     // Sorts first by count, descending, second by term, ascending
     assertEquals("bar/0.22 baz/0.11 bee/0.11 blah/0.11 boo/0.11",
                  toString(sug.lookup("b", 10)));
+    a.close();
   }
 
   // Make sure the last token is not duplicated
@@ -218,6 +224,7 @@ public class TestFreeTextSuggester extends LuceneTestCase {
     sug.build(new InputArrayIterator(keys));
     assertEquals("foo bar/1.00",
                  toString(sug.lookup("foo b", 10)));
+    a.close();
   }
 
   // Lookup of just empty string produces unicode only matches:
@@ -234,6 +241,7 @@ public class TestFreeTextSuggester extends LuceneTestCase {
     } catch (IllegalArgumentException iae) {
       // expected
     }
+    a.close();
   }
 
   // With one ending hole, ShingleFilter produces "of _" and
@@ -261,6 +269,7 @@ public class TestFreeTextSuggester extends LuceneTestCase {
     // prop 0.5:
     assertEquals("oz/0.20",
                  toString(sug.lookup("wizard o", 10)));
+    a.close();
   }
 
   // If the number of ending holes exceeds the ngrams window
@@ -284,6 +293,7 @@ public class TestFreeTextSuggester extends LuceneTestCase {
     sug.build(new InputArrayIterator(keys));
     assertEquals("",
                  toString(sug.lookup("wizard of of", 10)));
+    a.close();
   }
 
   private static Comparator<LookupResult> byScoreThenKey = new Comparator<LookupResult>() {
@@ -580,6 +590,7 @@ public class TestFreeTextSuggester extends LuceneTestCase {
 
       assertEquals(expected.toString(), actual.toString());
     }
+    a.close();
   }
 
   private static String getZipfToken(String[] tokens) {

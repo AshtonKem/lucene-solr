@@ -17,10 +17,9 @@ package org.apache.lucene.search.grouping.function;
  * limitations under the License.
  */
 
-import org.apache.lucene.index.AtomicReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.queries.function.FunctionValues;
 import org.apache.lucene.queries.function.ValueSource;
-import org.apache.lucene.search.LeafCollector;
 import org.apache.lucene.search.grouping.AbstractAllGroupsCollector;
 import org.apache.lucene.util.mutable.MutableValue;
 
@@ -35,8 +34,7 @@ import java.util.TreeSet;
  * query. Only the group value is collected, and the order
  * is undefined.  This collector does not determine
  * the most relevant document of a group.
- *
- * <p/>
+ * <p>
  * Implementation detail: Uses {@link ValueSource} and {@link FunctionValues} to retrieve the
  * field values to group by.
  *
@@ -76,9 +74,14 @@ public class FunctionAllGroupsCollector extends AbstractAllGroupsCollector<Mutab
   }
 
   @Override
-  protected void doSetNextReader(AtomicReaderContext context) throws IOException {
+  protected void doSetNextReader(LeafReaderContext context) throws IOException {
     FunctionValues values = groupBy.getValues(vsContext, context);
     filler = values.getValueFiller();
     mval = filler.getValue();
+  }
+  
+  @Override
+  public boolean needsScores() {
+    return true; // TODO, maybe we don't?
   }
 }

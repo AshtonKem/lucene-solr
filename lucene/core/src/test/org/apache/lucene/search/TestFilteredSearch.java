@@ -18,12 +18,13 @@
 package org.apache.lucene.search;
 
 import java.io.IOException;
+import java.util.Arrays;
 
 import org.apache.lucene.document.Field;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.analysis.MockAnalyzer;
 import org.apache.lucene.document.Document;
-import org.apache.lucene.index.AtomicReaderContext;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
@@ -31,6 +32,7 @@ import org.apache.lucene.index.Term;
 import org.apache.lucene.index.IndexWriterConfig.OpenMode;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.util.Bits;
+import org.apache.lucene.util.BitDocIdSet;
 import org.apache.lucene.util.FixedBitSet;
 
 
@@ -74,7 +76,7 @@ public class TestFilteredSearch extends LuceneTestCase {
      
     IndexReader reader = DirectoryReader.open(directory);
     IndexSearcher indexSearcher = newSearcher(reader);
-    ScoreDoc[] hits = indexSearcher.search(booleanQuery, filter, 1000).scoreDocs;
+    ScoreDoc[] hits = indexSearcher.search(new FilteredQuery(booleanQuery, filter), 1000).scoreDocs;
     assertEquals("Number of matched documents", 1, hits.length);
     reader.close();
   }
@@ -87,7 +89,7 @@ public class TestFilteredSearch extends LuceneTestCase {
     }
 
     @Override
-    public DocIdSet getDocIdSet(AtomicReaderContext context, Bits acceptDocs) {
+    public DocIdSet getDocIdSet(LeafReaderContext context, Bits acceptDocs) {
       assertNull("acceptDocs should be null, as we have an index without deletions", acceptDocs);
       final FixedBitSet set = new FixedBitSet(context.reader().maxDoc());
       int docBase = context.docBase;
@@ -98,7 +100,25 @@ public class TestFilteredSearch extends LuceneTestCase {
           set.set(docId-docBase);
         }
       }
-      return set.cardinality() == 0 ? null:set;
+      return set.cardinality() == 0 ? null : new BitDocIdSet(set);
+    }
+
+    @Override
+    public String toString(String field) {
+      return "SimpleDocIdSetFilter";
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      if (super.equals(obj) == false) {
+        return false;
+      }
+      return Arrays.equals(docs, ((SimpleDocIdSetFilter) obj).docs);
+    }
+
+    @Override
+    public int hashCode() {
+      return 31 * super.hashCode() + Arrays.hashCode(docs);
     }
   }
 

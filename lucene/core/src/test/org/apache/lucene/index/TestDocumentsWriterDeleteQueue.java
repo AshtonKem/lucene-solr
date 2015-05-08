@@ -16,6 +16,7 @@ package org.apache.lucene.index;
  * License for the specific language governing permissions and limitations under
  * the License.
  */
+
 import java.lang.reflect.Field;
 import java.util.HashSet;
 import java.util.Set;
@@ -24,11 +25,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.lucene.index.DocumentsWriterDeleteQueue.DeleteSlice;
+import org.apache.lucene.index.PrefixCodedTerms.TermIterator;
 import org.apache.lucene.search.TermQuery;
-import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.BytesRefBuilder;
 import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.ThreadInterruptedException;
+
+
 
 /**
  * Unit test for {@link DocumentsWriterDeleteQueue}
@@ -75,9 +78,10 @@ public class TestDocumentsWriterDeleteQueue extends LuceneTestCase {
     assertEquals(uniqueValues, bd2.terms.keySet());
     HashSet<Term> frozenSet = new HashSet<>();
     BytesRefBuilder bytesRef = new BytesRefBuilder();
-    for (Term t : queue.freezeGlobalBuffer(null).termsIterable()) {
-      bytesRef.copyBytes(t.bytes);
-      frozenSet.add(new Term(t.field, bytesRef.toBytesRef()));
+    TermIterator iter = queue.freezeGlobalBuffer(null).termIterator();
+    while (iter.next() != null) {
+      bytesRef.copyBytes(iter.bytes);
+      frozenSet.add(new Term(iter.field(), bytesRef.toBytesRef()));
     }
     assertEquals(uniqueValues, frozenSet);
     assertEquals("num deletes must be 0 after freeze", 0, queue
@@ -98,16 +102,12 @@ public class TestDocumentsWriterDeleteQueue extends LuceneTestCase {
     queue.clear();
     assertFalse(queue.anyChanges());
     final int size = 200 + random().nextInt(500) * RANDOM_MULTIPLIER;
-    int termsSinceFreeze = 0;
-    int queriesSinceFreeze = 0;
     for (int i = 0; i < size; i++) {
       Term term = new Term("id", "" + i);
       if (random().nextInt(10) == 0) {
         queue.addDelete(new TermQuery(term));
-        queriesSinceFreeze++;
       } else {
         queue.addDelete(term);
-        termsSinceFreeze++;
       }
       assertTrue(queue.anyChanges());
       if (random().nextInt(10) == 0) {
@@ -204,10 +204,13 @@ public class TestDocumentsWriterDeleteQueue extends LuceneTestCase {
     queue.tryApplyGlobalSlice();
     Set<Term> frozenSet = new HashSet<>();
     BytesRefBuilder builder = new BytesRefBuilder();
-    for (Term t : queue.freezeGlobalBuffer(null).termsIterable()) {
-      builder.copyBytes(t.bytes);
-      frozenSet.add(new Term(t.field, builder.toBytesRef()));
+
+    TermIterator iter = queue.freezeGlobalBuffer(null).termIterator();
+    while (iter.next() != null) {
+      builder.copyBytes(iter.bytes);
+      frozenSet.add(new Term(iter.field(), builder.toBytesRef()));
     }
+
     assertEquals("num deletes must be 0 after freeze", 0, queue
         .numGlobalTermDeletes());
     assertEquals(uniqueValues.size(), frozenSet.size());

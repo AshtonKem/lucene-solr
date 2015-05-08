@@ -24,8 +24,10 @@ import org.apache.lucene.index.IndexWriterConfig.OpenMode;
 import org.apache.lucene.search.DocIdSet;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.Filter;
-import org.apache.lucene.search.TermRangeFilter;
+import org.apache.lucene.search.QueryWrapperFilter;
+import org.apache.lucene.search.TermRangeQuery;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.util.BitSetIterator;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.FixedBitSet;
 import org.apache.lucene.util.IOUtils;
@@ -71,13 +73,13 @@ public class PKIndexSplitter {
    */
   public PKIndexSplitter(Directory input, Directory dir1, Directory dir2, Term midTerm) {
     this(input, dir1, dir2,
-      new TermRangeFilter(midTerm.field(), null, midTerm.bytes(), true, false));
+      new QueryWrapperFilter(new TermRangeQuery(midTerm.field(), null, midTerm.bytes(), true, false)));
   }
   
   public PKIndexSplitter(Directory input, Directory dir1, 
       Directory dir2, Term midTerm, IndexWriterConfig config1, IndexWriterConfig config2) {
     this(input, dir1, dir2,
-      new TermRangeFilter(midTerm.field(), null, midTerm.bytes(), true, false), config1, config2);
+        new QueryWrapperFilter(new TermRangeQuery(midTerm.field(), null, midTerm.bytes(), true, false)), config1, config2);
   }
   
   public void split() throws IOException {
@@ -97,15 +99,15 @@ public class PKIndexSplitter {
     }
   }
   
-  private void createIndex(IndexWriterConfig config, Directory target, IndexReader reader, Filter preserveFilter, boolean negateFilter) throws IOException {
+  private void createIndex(IndexWriterConfig config, Directory target, DirectoryReader reader, Filter preserveFilter, boolean negateFilter) throws IOException {
     boolean success = false;
     final IndexWriter w = new IndexWriter(target, config);
     try {
-      final List<AtomicReaderContext> leaves = reader.leaves();
-      final IndexReader[] subReaders = new IndexReader[leaves.size()];
+      final List<LeafReaderContext> leaves = reader.leaves();
+      final CodecReader[] subReaders = new CodecReader[leaves.size()];
       int i = 0;
-      for (final AtomicReaderContext ctx : leaves) {
-        subReaders[i++] = new DocumentFilteredAtomicIndexReader(ctx, preserveFilter, negateFilter);
+      for (final LeafReaderContext ctx : leaves) {
+        subReaders[i++] = new DocumentFilteredLeafIndexReader(ctx, preserveFilter, negateFilter);
       }
       w.addIndexes(subReaders);
       success = true;
@@ -118,12 +120,13 @@ public class PKIndexSplitter {
     }
   }
     
-  private static class DocumentFilteredAtomicIndexReader extends FilterAtomicReader {
+  private static class DocumentFilteredLeafIndexReader extends FilterCodecReader {
     final Bits liveDocs;
     final int numDocs;
     
-    public DocumentFilteredAtomicIndexReader(AtomicReaderContext context, Filter preserveFilter, boolean negateFilter) throws IOException {
-      super(context.reader());
+    public DocumentFilteredLeafIndexReader(LeafReaderContext context, Filter preserveFilter, boolean negateFilter) throws IOException {
+      // our cast is ok, since we open the Directory.
+      super((CodecReader) context.reader());
       final int maxDoc = in.maxDoc();
       final FixedBitSet bits = new FixedBitSet(maxDoc);
       // ignore livedocs here, as we filter them later:
@@ -141,7 +144,7 @@ public class PKIndexSplitter {
       if (in.hasDeletions()) {
         final Bits oldLiveDocs = in.getLiveDocs();
         assert oldLiveDocs != null;
-        final DocIdSetIterator it = bits.iterator();
+        final DocIdSetIterator it = new BitSetIterator(bits, 0L); // the cost is not useful here
         for (int i = it.nextDoc(); i < maxDoc; i = it.nextDoc()) {
           if (!oldLiveDocs.get(i)) {
             // we can safely modify the current bit, as the iterator already stepped over it:

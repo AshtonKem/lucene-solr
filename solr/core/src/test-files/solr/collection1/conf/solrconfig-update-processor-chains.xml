@@ -23,7 +23,7 @@
 
   -->
 <config>
-  <luceneMatchVersion>${tests.luceneMatchVersion:LUCENE_CURRENT}</luceneMatchVersion>
+  <luceneMatchVersion>${tests.luceneMatchVersion:LATEST}</luceneMatchVersion>
   <xi:include href="solrconfig.snippet.randomindexconfig.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
   <requestHandler name="standard" class="solr.StandardRequestHandler"></requestHandler>
   <directoryFactory name="DirectoryFactory" class="${solr.directoryFactory:solr.RAMDirectoryFactory}"/>
@@ -508,6 +508,27 @@
       <str name="fieldName">ssto</str>
       <str name="fieldName">sind</str>
       <str name="parser">json</str>
+    </processor>
+    <processor class="solr.RunUpdateProcessorFactory" />
+  </updateRequestProcessorChain>
+
+  <updateRequestProcessorChain name="ignore-commit-from-client-403">
+    <processor class="solr.IgnoreCommitOptimizeUpdateProcessorFactory"/>
+    <processor class="solr.RunUpdateProcessorFactory" />
+  </updateRequestProcessorChain>
+
+  <updateRequestProcessorChain name="ignore-commit-from-client-200">
+    <processor class="solr.IgnoreCommitOptimizeUpdateProcessorFactory">
+      <int name="statusCode">200</int>
+      <str name="responseMessage">Thou shall not issue a commit!</str>
+    </processor>
+    <processor class="solr.RunUpdateProcessorFactory" />
+  </updateRequestProcessorChain>
+
+  <updateRequestProcessorChain name="ignore-optimize-only-from-client-403">
+    <processor class="solr.IgnoreCommitOptimizeUpdateProcessorFactory">
+      <str name="responseMessage">Thou shall not issue an optimize, but commits are OK!</str>
+      <bool name="ignoreOptimizeOnly">true</bool>
     </processor>
     <processor class="solr.RunUpdateProcessorFactory" />
   </updateRequestProcessorChain>

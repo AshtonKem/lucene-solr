@@ -26,7 +26,7 @@ import junit.framework.Assert;
 
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
-import org.apache.lucene.index.AtomicReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.RandomIndexWriter;
 import org.apache.lucene.store.Directory;
@@ -124,12 +124,16 @@ public class TestDocIdSet extends LuceneTestCase {
     // Now search w/ a Filter which returns a null DocIdSet
     Filter f = new Filter() {
       @Override
-      public DocIdSet getDocIdSet(AtomicReaderContext context, Bits acceptDocs) {
+      public DocIdSet getDocIdSet(LeafReaderContext context, Bits acceptDocs) {
         return null;
+      }
+      @Override
+      public String toString(String field) {
+        return "nullDocIdSetFilter";
       }
     };
     
-    Assert.assertEquals(0, searcher.search(new MatchAllDocsQuery(), f, 10).totalHits);
+    Assert.assertEquals(0, searcher.search(new FilteredQuery(new MatchAllDocsQuery(), f), 10).totalHits);
     reader.close();
     dir.close();
   }
@@ -150,7 +154,7 @@ public class TestDocIdSet extends LuceneTestCase {
       // Now search w/ a Filter which returns a null DocIdSet
     Filter f = new Filter() {
       @Override
-      public DocIdSet getDocIdSet(AtomicReaderContext context, Bits acceptDocs) {
+      public DocIdSet getDocIdSet(LeafReaderContext context, Bits acceptDocs) {
         final DocIdSet innerNullIteratorSet = new DocIdSet() {
           @Override
           public DocIdSetIterator iterator() {
@@ -169,9 +173,13 @@ public class TestDocIdSet extends LuceneTestCase {
           }
         };
       }
+      @Override
+      public String toString(String field) {
+        return "nullDocIdSetFilter";
+      }
     };
     
-    Assert.assertEquals(0, searcher.search(new MatchAllDocsQuery(), f, 10).totalHits);
+    Assert.assertEquals(0, searcher.search(new FilteredQuery(new MatchAllDocsQuery(), f), 10).totalHits);
     reader.close();
     dir.close();
   }

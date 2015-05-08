@@ -28,7 +28,7 @@
   <directoryFactory name="DirectoryFactory"
                     class="${solr.directoryFactory:solr.NRTCachingDirectoryFactory}"/>
 
-  <luceneMatchVersion>${tests.luceneMatchVersion:LUCENE_CURRENT}</luceneMatchVersion>
+  <luceneMatchVersion>${tests.luceneMatchVersion:LATEST}</luceneMatchVersion>
 
   <xi:include href="solrconfig.snippet.randomindexconfig.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
@@ -38,15 +38,7 @@
     </updateLog>
   </updateHandler>
 
-  <requestHandler name="/get" class="solr.RealTimeGetHandler">
-    <lst name="defaults">
-      <str name="omitHeader">true</str>
-    </lst>
-  </requestHandler>
-  <requestHandler name="/replication" class="solr.ReplicationHandler" startup="lazy" /> 
   <requestHandler name="/select" class="solr.SearchHandler" default="true" />
-  <requestHandler name="/update" class="solr.UpdateRequestHandler"  />
-  <requestHandler name="/admin/" class="solr.admin.AdminHandlers"  />
 
   <updateRequestProcessorChain name="convert-ttl-defaults">
     <processor class="solr.processor.DocExpirationUpdateProcessorFactory">

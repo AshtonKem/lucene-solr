@@ -25,15 +25,15 @@ import java.util.List;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
-import org.apache.lucene.index.FieldInfo.IndexOptions;
 import org.apache.lucene.document.StringField;
-import org.apache.lucene.index.AtomicReaderContext;
 import org.apache.lucene.index.DirectoryReader;
+import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
-import org.apache.lucene.index.IndexWriterConfig;
-import org.apache.lucene.index.Term;
 import org.apache.lucene.index.IndexWriterConfig.OpenMode;
+import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.index.Term;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.search.BooleanClause;
@@ -49,7 +49,7 @@ import org.apache.lucene.util.BytesRefIterator;
 
 /**
  * <p>
- *   Spell Checker class  (Main class) <br/>
+ *   Spell Checker class  (Main class).<br>
  *  (initially inspired by the David Spencer code).
  * </p>
  *
@@ -364,7 +364,7 @@ public class SpellChecker implements java.io.Closeable {
       int maxHits = 10 * numSug;
 
   //    System.out.println("Q: " + query);
-      ScoreDoc[] hits = indexSearcher.search(query, null, maxHits).scoreDocs;
+      ScoreDoc[] hits = indexSearcher.search(query, maxHits).scoreDocs;
   //    System.out.println("HITS: " + hits.length());
       SuggestWordQueue sugQueue = new SuggestWordQueue(numSug, comparator);
 
@@ -496,10 +496,10 @@ public class SpellChecker implements java.io.Closeable {
 
       final IndexReader reader = searcher.getIndexReader();
       if (reader.maxDoc() > 0) {
-        for (final AtomicReaderContext ctx : reader.leaves()) {
+        for (final LeafReaderContext ctx : reader.leaves()) {
           Terms terms = ctx.reader().terms(F_WORD);
           if (terms != null)
-            termsEnums.add(terms.iterator(null));
+            termsEnums.add(terms.iterator());
         }
       }
       
@@ -568,7 +568,7 @@ public class SpellChecker implements java.io.Closeable {
 
   private static Document createDocument(String text, int ng1, int ng2) {
     Document doc = new Document();
-    // the word field is never queried on... its indexed so it can be quickly
+    // the word field is never queried on... it's indexed so it can be quickly
     // checked for rebuild (and stored for retrieval). Doesn't need norms or TF/pos
     Field f = new StringField(F_WORD, text, Field.Store.YES);
     doc.add(f); // orig term

@@ -25,8 +25,8 @@ import java.util.Set;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.NumericDocValuesField;
-import org.apache.lucene.index.AtomicReaderContext;
 import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.RandomIndexWriter;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.search.BooleanClause.Occur;
@@ -272,7 +272,6 @@ public class TestQueryRescorer extends LuceneTestCase {
     assertTrue(s.contains("first pass score"));
     assertTrue(s.contains("no second pass score"));
     assertFalse(s.contains("= second pass score"));
-    assertTrue(s.contains("NON-MATCH"));
     assertEquals(hits2.scoreDocs[1].score, explain.getValue(), 0.0f);
 
     r.close();
@@ -424,13 +423,12 @@ public class TestQueryRescorer extends LuceneTestCase {
     }
 
     @Override
-    public Weight createWeight(IndexSearcher searcher) throws IOException {
+    public Weight createWeight(IndexSearcher searcher, boolean needsScores) throws IOException {
 
-      return new Weight() {
+      return new Weight(FixedScoreQuery.this) {
 
         @Override
-        public Query getQuery() {
-          return FixedScoreQuery.this;
+        public void extractTerms(Set<Term> terms) {
         }
 
         @Override
@@ -443,7 +441,7 @@ public class TestQueryRescorer extends LuceneTestCase {
         }
 
         @Override
-        public Scorer scorer(final AtomicReaderContext context, Bits acceptDocs) throws IOException {
+        public Scorer scorer(final LeafReaderContext context, Bits acceptDocs) throws IOException {
 
           return new Scorer(null) {
             int docID = -1;
@@ -493,14 +491,10 @@ public class TestQueryRescorer extends LuceneTestCase {
         }
 
         @Override
-        public Explanation explain(AtomicReaderContext context, int doc) throws IOException {
+        public Explanation explain(LeafReaderContext context, int doc) throws IOException {
           return null;
         }
       };
-    }
-
-    @Override
-    public void extractTerms(Set<Term> terms) {
     }
 
     @Override
@@ -514,7 +508,7 @@ public class TestQueryRescorer extends LuceneTestCase {
         return false;
       }
       FixedScoreQuery other = (FixedScoreQuery) o;
-      return Float.floatToIntBits(getBoost()) == Float.floatToIntBits(other.getBoost()) &&
+      return super.equals(o) &&
         reverse == other.reverse &&
         Arrays.equals(idToNum, other.idToNum);
     }

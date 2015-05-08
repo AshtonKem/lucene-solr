@@ -38,6 +38,7 @@ import org.apache.lucene.analysis.MockRandomLookaheadTokenFilter;
 import org.apache.lucene.analysis.MockTokenFilter;
 import org.apache.lucene.analysis.MockTokenizer;
 import org.apache.lucene.analysis.MockVariableLengthPayloadFilter;
+import org.apache.lucene.analysis.SimplePayloadFilter;
 import org.apache.lucene.analysis.TokenFilter;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.Tokenizer;
@@ -54,6 +55,7 @@ import org.apache.lucene.analysis.util.StringMockResourceLoader;
 import org.apache.lucene.analysis.util.TokenFilterFactory;
 import org.apache.lucene.analysis.util.TokenizerFactory;
 import org.apache.lucene.util.LuceneTestCase;
+import org.apache.lucene.util.Version;
 
 /**
  * Tests that any newly added Tokenizers/TokenFilters/CharFilters have a
@@ -74,7 +76,8 @@ public class TestAllAnalyzersHaveFactories extends LuceneTestCase {
       MockTokenFilter.class,
       MockVariableLengthPayloadFilter.class,
       ValidatingTokenFilter.class,
-      CrankyTokenFilter.class
+      CrankyTokenFilter.class,
+      SimplePayloadFilter.class
     );
   }
   
@@ -121,7 +124,7 @@ public class TestAllAnalyzersHaveFactories extends LuceneTestCase {
       }
       
       Map<String,String> args = new HashMap<>();
-      args.put("luceneMatchVersion", TEST_VERSION_CURRENT.toString());
+      args.put("luceneMatchVersion", Version.LATEST.toString());
       
       if (Tokenizer.class.isAssignableFrom(c)) {
         String clazzName = c.getSimpleName();

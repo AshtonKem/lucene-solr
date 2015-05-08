@@ -17,9 +17,8 @@ package org.apache.lucene.analysis.no;
  * limitations under the License.
  */
 
-import java.io.FileInputStream;
 import java.io.IOException;
-import java.io.Reader;
+import java.nio.file.Files;
 import java.util.Random;
 
 import org.apache.lucene.analysis.Analyzer;
@@ -35,22 +34,33 @@ import static org.apache.lucene.analysis.VocabularyAssert.*;
 import static org.apache.lucene.analysis.no.NorwegianLightStemmer.BOKMAAL;
 import static org.apache.lucene.analysis.no.NorwegianLightStemmer.NYNORSK;
 
-
 /**
  * Simple tests for {@link NorwegianLightStemFilter}
  */
 public class TestNorwegianLightStemFilter extends BaseTokenStreamTestCase {
-  private Analyzer analyzer = new Analyzer() {
-    @Override
-    protected TokenStreamComponents createComponents(String fieldName) {
-      Tokenizer source = new MockTokenizer(MockTokenizer.WHITESPACE, false);
-      return new TokenStreamComponents(source, new NorwegianLightStemFilter(source, BOKMAAL));
-    }
-  };
+  private Analyzer analyzer;
+  
+  @Override
+  public void setUp() throws Exception {
+    super.setUp();
+    analyzer = new Analyzer() {
+      @Override
+      protected TokenStreamComponents createComponents(String fieldName) {
+        Tokenizer source = new MockTokenizer(MockTokenizer.WHITESPACE, false);
+        return new TokenStreamComponents(source, new NorwegianLightStemFilter(source, BOKMAAL));
+      }
+    };
+  }
+  
+  @Override
+  public void tearDown() throws Exception {
+    analyzer.close();
+    super.tearDown();
+  }
   
   /** Test against a vocabulary file */
   public void testVocabulary() throws IOException {
-    assertVocabulary(analyzer, new FileInputStream(getDataFile("nb_light.txt")));
+    assertVocabulary(analyzer, Files.newInputStream(getDataPath("nb_light.txt")));
   }
   
   /** Test against a Nynorsk vocabulary file */
@@ -62,7 +72,8 @@ public class TestNorwegianLightStemFilter extends BaseTokenStreamTestCase {
         return new TokenStreamComponents(source, new NorwegianLightStemFilter(source, NYNORSK));
       }
     };
-    assertVocabulary(analyzer, new FileInputStream(getDataFile("nn_light.txt")));
+    assertVocabulary(analyzer, Files.newInputStream(getDataPath("nn_light.txt")));
+    analyzer.close();
   }
   
   public void testKeyword() throws IOException {
@@ -76,6 +87,7 @@ public class TestNorwegianLightStemFilter extends BaseTokenStreamTestCase {
       }
     };
     checkOneTerm(a, "sekretæren", "sekretæren");
+    a.close();
   }
 
   /** blast some random strings through the analyzer */
@@ -93,5 +105,6 @@ public class TestNorwegianLightStemFilter extends BaseTokenStreamTestCase {
       }
     };
     checkOneTerm(a, "", "");
+    a.close();
   }
 }

@@ -45,11 +45,6 @@ final class Packed8ThreeBlocks extends PackedInts.MutableImpl {
   Packed8ThreeBlocks(int packedIntsVersion, DataInput in, int valueCount) throws IOException {
     this(valueCount);
     in.readBytes(blocks, 0, 3 * valueCount);
-    // because packed ints have not always been byte-aligned
-    final int remaining = (int) (PackedInts.Format.PACKED.byteCount(packedIntsVersion, valueCount, 24) - 3L * valueCount * 1);
-    for (int i = 0; i < remaining; ++i) {
-       in.readByte();
-    }
   }
 
   @Override
@@ -124,6 +119,6 @@ final class Packed8ThreeBlocks extends PackedInts.MutableImpl {
   @Override
   public String toString() {
     return getClass().getSimpleName() + "(bitsPerValue=" + bitsPerValue
-        + ", size=" + size() + ", elements.length=" + blocks.length + ")";
+        + ",size=" + size() + ",blocks=" + blocks.length + ")";
   }
 }

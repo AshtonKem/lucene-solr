@@ -65,7 +65,7 @@ public class SlowFuzzyQuery extends MultiTermQuery {
    *  as the query term is considered similar to the query term if the edit distance
    *  between both terms is less than <code>length(term)*0.5</code>
    *  <p>
-   *  Alternatively, if <code>minimumSimilarity</code> is >= 1f, it is interpreted 
+   *  Alternatively, if <code>minimumSimilarity</code> is &gt;= 1f, it is interpreted 
    *  as a pure Levenshtein edit distance. For example, a value of <code>2f</code>
    *  will match all terms within an edit distance of <code>2</code> from the 
    *  query term. Edit distances specified in this way may not be fractional.
@@ -144,7 +144,7 @@ public class SlowFuzzyQuery extends MultiTermQuery {
   @Override
   protected TermsEnum getTermsEnum(Terms terms, AttributeSource atts) throws IOException {
     if (!termLongEnough) {  // can only match if it's exact
-      return new SingleTermsEnum(terms.iterator(null), term.bytes());
+      return new SingleTermsEnum(terms.iterator(), term.bytes());
     }
     return new SlowFuzzyTermsEnum(terms, atts, getTerm(), minimumSimilarity, prefixLength);
   }

@@ -33,7 +33,7 @@ public class SolrTestCaseJ4Test extends SolrTestCaseJ4 {
   public static void beforeClass() throws Exception {
     // Create a temporary directory that holds a core NOT named "collection1". Use the smallest configuration sets
     // we can so we don't copy that much junk around.
-    tmpSolrHome = createTempDir().getAbsolutePath();
+    tmpSolrHome = createTempDir().toFile().getAbsolutePath();
 
     File subHome = new File(new File(tmpSolrHome, "core0"), "conf");
     assertTrue("Failed to make subdirectory ", subHome.mkdirs());
@@ -43,8 +43,12 @@ public class SolrTestCaseJ4Test extends SolrTestCaseJ4 {
     FileUtils.copyFile(new File(top, "solrconfig.snippet.randomindexconfig.xml"), new File(subHome, "solrconfig.snippet.randomindexconfig.xml"));
 
     FileUtils.copyDirectory(new File(tmpSolrHome, "core0"), new File(tmpSolrHome, "core1"));
+    // Core discovery will default to the name of the dir the core.properties file is in. So if everything else is
+    // OK as defaults, just the _presence_ of this file is sufficient.
+    FileUtils.touch(new File(tmpSolrHome, "core0/core.properties"));
+    FileUtils.touch(new File(tmpSolrHome, "core1/core.properties"));
 
-    FileUtils.copyFile(getFile("solr/solr-multicore.xml"), new File(tmpSolrHome, "solr.xml"));
+    FileUtils.copyFile(getFile("solr/solr.xml"), new File(tmpSolrHome, "solr.xml"));
 
     initCore("solrconfig-minimal.xml", "schema-tiny.xml", tmpSolrHome, "core1");
   }

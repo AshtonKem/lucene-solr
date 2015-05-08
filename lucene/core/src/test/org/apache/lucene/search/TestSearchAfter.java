@@ -21,15 +21,13 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Random;
 
 import org.apache.lucene.document.BinaryDocValuesField;
 import org.apache.lucene.document.Document;
-import org.apache.lucene.document.DoubleField;
+import org.apache.lucene.document.DoubleDocValuesField;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FloatDocValuesField;
-import org.apache.lucene.document.FloatField;
-import org.apache.lucene.document.IntField;
-import org.apache.lucene.document.LongField;
 import org.apache.lucene.document.NumericDocValuesField;
 import org.apache.lucene.document.SortedDocValuesField;
 import org.apache.lucene.document.StoredField;
@@ -63,22 +61,12 @@ public class TestSearchAfter extends LuceneTestCase {
           new SortField("double", SortField.Type.DOUBLE, false),
           new SortField("bytes", SortField.Type.STRING, false),
           new SortField("bytesval", SortField.Type.STRING_VAL, false),
-          new SortField("intdocvalues", SortField.Type.INT, false),
-          new SortField("floatdocvalues", SortField.Type.FLOAT, false),
-          new SortField("sortedbytesdocvalues", SortField.Type.STRING, false),
-          new SortField("sortedbytesdocvaluesval", SortField.Type.STRING_VAL, false),
-          new SortField("straightbytesdocvalues", SortField.Type.STRING_VAL, false),
           new SortField("int", SortField.Type.INT, true),
           new SortField("long", SortField.Type.LONG, true),
           new SortField("float", SortField.Type.FLOAT, true),
           new SortField("double", SortField.Type.DOUBLE, true),
           new SortField("bytes", SortField.Type.STRING, true),
           new SortField("bytesval", SortField.Type.STRING_VAL, true),
-          new SortField("intdocvalues", SortField.Type.INT, true),
-          new SortField("floatdocvalues", SortField.Type.FLOAT, true),
-          new SortField("sortedbytesdocvalues", SortField.Type.STRING, true),
-          new SortField("sortedbytesdocvaluesval", SortField.Type.STRING_VAL, true),
-          new SortField("straightbytesdocvalues", SortField.Type.STRING_VAL, true),
           SortField.FIELD_SCORE,
           SortField.FIELD_DOC,
         }));
@@ -136,26 +124,19 @@ public class TestSearchAfter extends LuceneTestCase {
     dir = newDirectory();
     RandomIndexWriter iw = new RandomIndexWriter(random(), dir);
     int numDocs = atLeast(200);
+    Random r = random();
     for (int i = 0; i < numDocs; i++) {
       List<Field> fields = new ArrayList<>();
       fields.add(newTextField("english", English.intToEnglish(i), Field.Store.NO));
       fields.add(newTextField("oddeven", (i % 2 == 0) ? "even" : "odd", Field.Store.NO));
-      fields.add(newStringField("byte", "" + ((byte) random().nextInt()), Field.Store.NO));
-      fields.add(newStringField("short", "" + ((short) random().nextInt()), Field.Store.NO));
-      fields.add(new IntField("int", random().nextInt(), Field.Store.NO));
-      fields.add(new LongField("long", random().nextLong(), Field.Store.NO));
-
-      fields.add(new FloatField("float", random().nextFloat(), Field.Store.NO));
-      fields.add(new DoubleField("double", random().nextDouble(), Field.Store.NO));
-      fields.add(newStringField("bytes", TestUtil.randomRealisticUnicodeString(random()), Field.Store.NO));
-      fields.add(newStringField("bytesval", TestUtil.randomRealisticUnicodeString(random()), Field.Store.NO));
-      fields.add(new DoubleField("double", random().nextDouble(), Field.Store.NO));
-
-      fields.add(new NumericDocValuesField("intdocvalues", random().nextInt()));
-      fields.add(new FloatDocValuesField("floatdocvalues", random().nextFloat()));
-      fields.add(new SortedDocValuesField("sortedbytesdocvalues", new BytesRef(TestUtil.randomRealisticUnicodeString(random()))));
-      fields.add(new SortedDocValuesField("sortedbytesdocvaluesval", new BytesRef(TestUtil.randomRealisticUnicodeString(random()))));
-      fields.add(new BinaryDocValuesField("straightbytesdocvalues", new BytesRef(TestUtil.randomRealisticUnicodeString(random()))));
+      fields.add(new NumericDocValuesField("byte", (byte) r.nextInt()));
+      fields.add(new NumericDocValuesField("short", (short) r.nextInt()));
+      fields.add(new NumericDocValuesField("int", r.nextInt()));
+      fields.add(new NumericDocValuesField("long", r.nextLong()));
+      fields.add(new FloatDocValuesField("float", r.nextFloat()));
+      fields.add(new DoubleDocValuesField("double", r.nextDouble()));
+      fields.add(new SortedDocValuesField("bytes", new BytesRef(TestUtil.randomRealisticUnicodeString(random()))));
+      fields.add(new BinaryDocValuesField("bytesval", new BytesRef(TestUtil.randomRealisticUnicodeString(random()))));
 
       Document document = new Document();
       document.add(new StoredField("id", ""+i));
@@ -199,11 +180,8 @@ public class TestSearchAfter extends LuceneTestCase {
     // pages.
     int n = atLeast(20);
     for (int i = 0; i < n; i++) {
-      Filter odd = new QueryWrapperFilter(new TermQuery(new Term("oddeven", "odd")));
       assertQuery(new MatchAllDocsQuery(), null);
       assertQuery(new TermQuery(new Term("english", "one")), null);
-      assertQuery(new MatchAllDocsQuery(), odd);
-      assertQuery(new TermQuery(new Term("english", "four")), odd);
       BooleanQuery bq = new BooleanQuery();
       bq.add(new TermQuery(new Term("english", "one")), BooleanClause.Occur.SHOULD);
       bq.add(new TermQuery(new Term("oddeven", "even")), BooleanClause.Occur.SHOULD);
@@ -211,15 +189,15 @@ public class TestSearchAfter extends LuceneTestCase {
     }
   }
 
-  void assertQuery(Query query, Filter filter) throws Exception {
-    assertQuery(query, filter, null);
-    assertQuery(query, filter, Sort.RELEVANCE);
-    assertQuery(query, filter, Sort.INDEXORDER);
+  void assertQuery(Query query) throws Exception {
+    assertQuery(query, null);
+    assertQuery(query, Sort.RELEVANCE);
+    assertQuery(query, Sort.INDEXORDER);
     for(SortField sortField : allSortFields) {
-      assertQuery(query, filter, new Sort(new SortField[] {sortField}));
+      assertQuery(query, new Sort(new SortField[] {sortField}));
     }
     for(int i=0;i<20;i++) {
-      assertQuery(query, filter, getRandomSort());
+      assertQuery(query, getRandomSort());
     }
   }
 
@@ -231,21 +209,21 @@ public class TestSearchAfter extends LuceneTestCase {
     return new Sort(sortFields);
   }
 
-  void assertQuery(Query query, Filter filter, Sort sort) throws Exception {
+  void assertQuery(Query query, Sort sort) throws Exception {
     int maxDoc = searcher.getIndexReader().maxDoc();
     TopDocs all;
     int pageSize = TestUtil.nextInt(random(), 1, maxDoc * 2);
     if (VERBOSE) {
-      System.out.println("\nassertQuery " + (iter++) + ": query=" + query + " filter=" + filter + " sort=" + sort + " pageSize=" + pageSize);
+      System.out.println("\nassertQuery " + (iter++) + ": query=" + query + " sort=" + sort + " pageSize=" + pageSize);
     }
     final boolean doMaxScore = random().nextBoolean();
     final boolean doScores = random().nextBoolean();
     if (sort == null) {
-      all = searcher.search(query, filter, maxDoc);
+      all = searcher.search(query, maxDoc);
     } else if (sort == Sort.RELEVANCE) {
-      all = searcher.search(query, filter, maxDoc, sort, true, doMaxScore);
+      all = searcher.search(query, maxDoc, sort, true, doMaxScore);
     } else {
-      all = searcher.search(query, filter, maxDoc, sort, doScores, doMaxScore);
+      all = searcher.search(query, maxDoc, sort, doScores, doMaxScore);
     }
     if (VERBOSE) {
       System.out.println("  all.totalHits=" + all.totalHits);
@@ -262,15 +240,15 @@ public class TestSearchAfter extends LuceneTestCase {
         if (VERBOSE) {
           System.out.println("  iter lastBottom=" + lastBottom);
         }
-        paged = searcher.searchAfter(lastBottom, query, filter, pageSize);
+        paged = searcher.searchAfter(lastBottom, query, pageSize);
       } else {
         if (VERBOSE) {
           System.out.println("  iter lastBottom=" + lastBottom);
         }
         if (sort == Sort.RELEVANCE) {
-          paged = searcher.searchAfter(lastBottom, query, filter, pageSize, sort, true, doMaxScore);
+          paged = searcher.searchAfter(lastBottom, query, pageSize, sort, true, doMaxScore);
         } else {
-          paged = searcher.searchAfter(lastBottom, query, filter, pageSize, sort, doScores, doMaxScore);
+          paged = searcher.searchAfter(lastBottom, query, pageSize, sort, doScores, doMaxScore);
         }
       }
       if (VERBOSE) {

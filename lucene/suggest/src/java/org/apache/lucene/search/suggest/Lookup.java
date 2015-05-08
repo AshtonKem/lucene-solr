@@ -267,5 +267,4 @@ public abstract class Lookup implements Accountable {
    * @throws IOException when fatal IO error occurs.
    */
   public abstract boolean load(DataInput input) throws IOException;
-
 }

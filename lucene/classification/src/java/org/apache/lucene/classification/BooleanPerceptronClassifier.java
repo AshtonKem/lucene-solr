@@ -16,10 +16,16 @@
  */
 package org.apache.lucene.classification;
 
+import java.io.IOException;
+import java.util.List;
+import java.util.Map;
+import java.util.SortedMap;
+import java.util.concurrent.ConcurrentSkipListMap;
+
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
-import org.apache.lucene.index.AtomicReader;
+import org.apache.lucene.index.LeafReader;
 import org.apache.lucene.index.MultiFields;
 import org.apache.lucene.index.StorableField;
 import org.apache.lucene.index.StoredDocument;
@@ -34,17 +40,11 @@ import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.WildcardQuery;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.BytesRefBuilder;
-import org.apache.lucene.util.IntsRef;
 import org.apache.lucene.util.IntsRefBuilder;
 import org.apache.lucene.util.fst.Builder;
 import org.apache.lucene.util.fst.FST;
 import org.apache.lucene.util.fst.PositiveIntOutputs;
 import org.apache.lucene.util.fst.Util;
-
-import java.io.IOException;
-import java.util.Map;
-import java.util.SortedMap;
-import java.util.TreeMap;
 
 /**
  * A perceptron (see <code>http://en.wikipedia.org/wiki/Perceptron</code>) based
@@ -53,87 +53,37 @@ import java.util.TreeMap;
  * {@link org.apache.lucene.index.TermsEnum#totalTermFreq} both on a per field
  * and a per document basis and then a corresponding
  * {@link org.apache.lucene.util.fst.FST} is used for class assignment.
- * 
+ *
  * @lucene.experimental
  */
 public class BooleanPerceptronClassifier implements Classifier<Boolean> {
 
-  private Double threshold;
-  private final Integer batchSize;
-  private Terms textTerms;
-  private Analyzer analyzer;
-  private String textFieldName;
+  private final Double threshold;
+  private final Terms textTerms;
+  private final Analyzer analyzer;
+  private final String textFieldName;
   private FST<Long> fst;
 
   /**
-   * Create a {@link BooleanPerceptronClassifier}
-   * 
-   * @param threshold
-   *          the binary threshold for perceptron output evaluation
+   * Creates a {@link BooleanPerceptronClassifier}
+   *
+   * @param leafReader     the reader on the index to be used for classification
+   * @param textFieldName  the name of the field used as input for the classifier
+   * @param classFieldName the name of the field used as the output for the classifier
+   * @param analyzer       an {@link Analyzer} used to analyze unseen text
+   * @param query          a {@link Query} to eventually filter the docs used for training the classifier, or {@code null}
+   *                       if all the indexed docs should be used
+   * @param batchSize      the size of the batch of docs to use for updating the perceptron weights
+   * @param threshold      the threshold used for class separation
+   * @throws IOException if the building of the underlying {@link FST} fails and / or {@link TermsEnum} for the text field
+   *                     cannot be found
    */
-  public BooleanPerceptronClassifier(Double threshold, Integer batchSize) {
-    this.threshold = threshold;
-    this.batchSize = batchSize;
-  }
-
-  /**
-   * Default constructor, no batch updates of FST, perceptron threshold is
-   * calculated via underlying index metrics during
-   * {@link #train(org.apache.lucene.index.AtomicReader, String, String, org.apache.lucene.analysis.Analyzer)
-   * training}
-   */
-  public BooleanPerceptronClassifier() {
-    batchSize = 1;
-  }
-
-  /**
-   * {@inheritDoc}
-   */
-  @Override
-  public ClassificationResult<Boolean> assignClass(String text)
-      throws IOException {
-    if (textTerms == null) {
-      throw new IOException("You must first call Classifier#train");
-    }
-    Long output = 0l;
-    try (TokenStream tokenStream = analyzer.tokenStream(textFieldName, text)) {
-      CharTermAttribute charTermAttribute = tokenStream
-        .addAttribute(CharTermAttribute.class);
-      tokenStream.reset();
-      while (tokenStream.incrementToken()) {
-        String s = charTermAttribute.toString();
-        Long d = Util.get(fst, new BytesRef(s));
-        if (d != null) {
-          output += d;
-        }
-      }
-      tokenStream.end();
-    }
-
-    return new ClassificationResult<>(output >= threshold, output.doubleValue());
-  }
-
-  /**
-   * {@inheritDoc}
-   */
-  @Override
-  public void train(AtomicReader atomicReader, String textFieldName,
-                    String classFieldName, Analyzer analyzer) throws IOException {
-    train(atomicReader, textFieldName, classFieldName, analyzer, null);
-  }
-
-  /**
-   * {@inheritDoc}
-   */
-  @Override
-  public void train(AtomicReader atomicReader, String textFieldName,
-      String classFieldName, Analyzer analyzer, Query query) throws IOException {
-    this.textTerms = MultiFields.getTerms(atomicReader, textFieldName);
+  public BooleanPerceptronClassifier(LeafReader leafReader, String textFieldName, String classFieldName, Analyzer analyzer,
+                                     Query query, Integer batchSize, Double threshold) throws IOException {
+    this.textTerms = MultiFields.getTerms(leafReader, textFieldName);
 
     if (textTerms == null) {
-      throw new IOException(new StringBuilder(
-          "term vectors need to be available for field ").append(textFieldName)
-          .toString());
+      throw new IOException("term vectors need to be available for field " + textFieldName);
     }
 
     this.analyzer = analyzer;
@@ -141,27 +91,29 @@ public class BooleanPerceptronClassifier implements Classifier<Boolean> {
 
     if (threshold == null || threshold == 0d) {
       // automatic assign a threshold
-      long sumDocFreq = atomicReader.getSumDocFreq(textFieldName);
+      long sumDocFreq = leafReader.getSumDocFreq(textFieldName);
       if (sumDocFreq != -1) {
         this.threshold = (double) sumDocFreq / 2d;
       } else {
         throw new IOException(
-            "threshold cannot be assigned since term vectors for field "
-                + textFieldName + " do not exist");
+                "threshold cannot be assigned since term vectors for field "
+                        + textFieldName + " do not exist");
       }
+    } else {
+      this.threshold = threshold;
     }
 
     // TODO : remove this map as soon as we have a writable FST
-    SortedMap<String,Double> weights = new TreeMap<>();
+    SortedMap<String, Double> weights = new ConcurrentSkipListMap<>();
 
-    TermsEnum reuse = textTerms.iterator(null);
+    TermsEnum termsEnum = textTerms.iterator();
     BytesRef textTerm;
-    while ((textTerm = reuse.next()) != null) {
-      weights.put(textTerm.utf8ToString(), (double) reuse.totalTermFreq());
+    while ((textTerm = termsEnum.next()) != null) {
+      weights.put(textTerm.utf8ToString(), (double) termsEnum.totalTermFreq());
     }
     updateFST(weights);
 
-    IndexSearcher indexSearcher = new IndexSearcher(atomicReader);
+    IndexSearcher indexSearcher = new IndexSearcher(leafReader);
 
     int batchCount = 0;
 
@@ -172,47 +124,45 @@ public class BooleanPerceptronClassifier implements Classifier<Boolean> {
     }
     // run the search and use stored field values
     for (ScoreDoc scoreDoc : indexSearcher.search(q,
-        Integer.MAX_VALUE).scoreDocs) {
+            Integer.MAX_VALUE).scoreDocs) {
       StoredDocument doc = indexSearcher.doc(scoreDoc.doc);
 
-      // assign class to the doc
-      ClassificationResult<Boolean> classificationResult = assignClass(doc
-          .getField(textFieldName).stringValue());
-      Boolean assignedClass = classificationResult.getAssignedClass();
-      
+      StorableField textField = doc.getField(textFieldName);
+
       // get the expected result
-      StorableField field = doc.getField(classFieldName);
-      
-      Boolean correctClass = Boolean.valueOf(field.stringValue());
-      long modifier = correctClass.compareTo(assignedClass);
-      if (modifier != 0) {
-        reuse = updateWeights(atomicReader, reuse, scoreDoc.doc, assignedClass,
-            weights, modifier, batchCount % batchSize == 0);
+      StorableField classField = doc.getField(classFieldName);
+
+      if (textField != null && classField != null) {
+        // assign class to the doc
+        ClassificationResult<Boolean> classificationResult = assignClass(textField.stringValue());
+        Boolean assignedClass = classificationResult.getAssignedClass();
+
+        Boolean correctClass = Boolean.valueOf(classField.stringValue());
+        long modifier = correctClass.compareTo(assignedClass);
+        if (modifier != 0) {
+          updateWeights(leafReader, scoreDoc.doc, assignedClass,
+                  weights, modifier, batchCount % batchSize == 0);
+        }
+        batchCount++;
       }
-      batchCount++;
     }
     weights.clear(); // free memory while waiting for GC
   }
 
-  @Override
-  public void train(AtomicReader atomicReader, String[] textFieldNames, String classFieldName, Analyzer analyzer, Query query) throws IOException {
-    throw new IOException("training with multiple fields not supported by boolean perceptron classifier");
-  }
-
-  private TermsEnum updateWeights(AtomicReader atomicReader, TermsEnum reuse,
-      int docId, Boolean assignedClass, SortedMap<String,Double> weights,
-      double modifier, boolean updateFST) throws IOException {
-    TermsEnum cte = textTerms.iterator(reuse);
+  private void updateWeights(LeafReader leafReader,
+                             int docId, Boolean assignedClass, SortedMap<String, Double> weights,
+                             double modifier, boolean updateFST) throws IOException {
+    TermsEnum cte = textTerms.iterator();
 
     // get the doc term vectors
-    Terms terms = atomicReader.getTermVector(docId, textFieldName);
+    Terms terms = leafReader.getTermVector(docId, textFieldName);
 
     if (terms == null) {
       throw new IOException("term vectors must be stored for field "
-          + textFieldName);
+              + textFieldName);
     }
 
-    TermsEnum termsEnum = terms.iterator(null);
+    TermsEnum termsEnum = terms.iterator();
 
     BytesRef term;
 
@@ -229,21 +179,63 @@ public class BooleanPerceptronClassifier implements Classifier<Boolean> {
     if (updateFST) {
       updateFST(weights);
     }
-    reuse = cte;
-    return reuse;
   }
 
-  private void updateFST(SortedMap<String,Double> weights) throws IOException {
+  private void updateFST(SortedMap<String, Double> weights) throws IOException {
     PositiveIntOutputs outputs = PositiveIntOutputs.getSingleton();
     Builder<Long> fstBuilder = new Builder<>(FST.INPUT_TYPE.BYTE1, outputs);
     BytesRefBuilder scratchBytes = new BytesRefBuilder();
     IntsRefBuilder scratchInts = new IntsRefBuilder();
-    for (Map.Entry<String,Double> entry : weights.entrySet()) {
+    for (Map.Entry<String, Double> entry : weights.entrySet()) {
       scratchBytes.copyChars(entry.getKey());
       fstBuilder.add(Util.toIntsRef(scratchBytes.get(), scratchInts), entry
-          .getValue().longValue());
+              .getValue().longValue());
     }
     fst = fstBuilder.finish();
+  }
+
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public ClassificationResult<Boolean> assignClass(String text)
+          throws IOException {
+    Long output = 0l;
+    try (TokenStream tokenStream = analyzer.tokenStream(textFieldName, text)) {
+      CharTermAttribute charTermAttribute = tokenStream
+              .addAttribute(CharTermAttribute.class);
+      tokenStream.reset();
+      while (tokenStream.incrementToken()) {
+        String s = charTermAttribute.toString();
+        Long d = Util.get(fst, new BytesRef(s));
+        if (d != null) {
+          output += d;
+        }
+      }
+      tokenStream.end();
+    }
+
+    double score = 1 - Math.exp(-1 * Math.abs(threshold - output.doubleValue()) / threshold);
+    return new ClassificationResult<>(output >= threshold, score);
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public List<ClassificationResult<Boolean>> getClasses(String text)
+          throws IOException {
+    return null;
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public List<ClassificationResult<Boolean>> getClasses(String text, int max)
+          throws IOException {
+    return null;
   }
 
 }

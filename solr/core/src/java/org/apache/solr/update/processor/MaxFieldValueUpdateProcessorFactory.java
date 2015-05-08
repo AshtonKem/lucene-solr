@@ -41,7 +41,7 @@ import java.util.Iterator;
  * values (ie: <code>64, 128, 1024</code>) in the field 
  * <code>largestFileSize</code> then only the biggest value 
  * (ie: <code>1024</code>) will be kept in that field.
- * <p>
+ * <br>
  *
  * <pre class="prettyprint">
  *  &lt;processor class="solr.MaxFieldValueUpdateProcessorFactory"&gt;
@@ -59,8 +59,9 @@ public final class MaxFieldValueUpdateProcessorFactory extends FieldValueSubsetU
   public Collection pickSubset(Collection values) {
     Collection result = values;
     try {
-      result = Collections.singletonList
-        (Collections.max(values));
+      // NOTE: the extra cast to Object is needed to prevent compile
+      // errors on Eclipse Compiler (ecj) used for javadoc lint
+      result = Collections.singletonList((Object) Collections.max(values));
     } catch (ClassCastException e) {
       throw new SolrException
         (BAD_REQUEST, 

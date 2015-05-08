@@ -229,7 +229,7 @@
              See the Java Regular Expression documentation for more
              infomation on pattern and replacement string syntax.
              
-             http://docs.oracle.com/javase/7/docs/api/java/util/regex/package-summary.html
+             http://docs.oracle.com/javase/8/docs/api/java/util/regex/package-summary.html
           -->
         <filter class="solr.PatternReplaceFilterFactory"
                 pattern="([^a-z])" replacement="" replace="all"
@@ -240,7 +240,7 @@
     <!-- since fields of this type are by default not stored or indexed, any data added to 
          them will be ignored outright 
      --> 
-    <fieldtype name="ignored" stored="false" indexed="false" class="solr.StrField" /> 
+    <fieldType name="ignored" stored="false" indexed="false" class="solr.StrField" /> 
 
  </types>
 

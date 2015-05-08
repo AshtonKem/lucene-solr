@@ -18,7 +18,7 @@
 -->
 
 <config>
-  <luceneMatchVersion>${tests.luceneMatchVersion:LUCENE_CURRENT}</luceneMatchVersion>
+  <luceneMatchVersion>${tests.luceneMatchVersion:LATEST}</luceneMatchVersion>
   <dataDir>${solr.data.dir:}</dataDir>
   <directoryFactory name="DirectoryFactory" class="${solr.directoryFactory:solr.RAMDirectoryFactory}"/>
 
@@ -34,6 +34,7 @@
   <requestHandler name="/replication" class="solr.ReplicationHandler">
     <lst name="master">
       <str name="replicateAfter">commit</str>
+      <str name="backupAfter">commit</str>
       <str name="confFiles">schema-replication2.xml:schema.xml</str>
     </lst>
   </requestHandler>

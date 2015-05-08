@@ -10,7 +10,9 @@
 /velocity.log
 /build.properties
 /.idea
-**/*.iml
+lucene/**/*.iml
+solr/**/*.iml
+parent.iml
 **/*.ipr
 **/*.iws
 /.project
@@ -45,3 +47,5 @@ solr/contrib/dataimporthandler/test-lib/
 solr/contrib/morphlines-core/test-lib/
 
 solr/core/test-lib/
+
+solr/server/start.jar

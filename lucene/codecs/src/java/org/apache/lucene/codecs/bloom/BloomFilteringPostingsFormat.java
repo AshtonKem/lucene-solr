@@ -19,19 +19,20 @@ package org.apache.lucene.codecs.bloom;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map.Entry;
 import java.util.Map;
+import java.util.Map.Entry;
 
 import org.apache.lucene.codecs.CodecUtil;
 import org.apache.lucene.codecs.FieldsConsumer;
 import org.apache.lucene.codecs.FieldsProducer;
 import org.apache.lucene.codecs.PostingsFormat;
 import org.apache.lucene.codecs.bloom.FuzzySet.ContainsResult;
-import org.apache.lucene.index.DocsAndPositionsEnum;
-import org.apache.lucene.index.DocsEnum;
+import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.Fields;
 import org.apache.lucene.index.IndexFileNames;
@@ -42,6 +43,8 @@ import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.store.ChecksumIndexInput;
 import org.apache.lucene.store.DataOutput;
 import org.apache.lucene.store.IndexOutput;
+import org.apache.lucene.util.Accountable;
+import org.apache.lucene.util.Accountables;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.IOUtils;
@@ -69,7 +72,7 @@ import org.apache.lucene.util.automaton.CompiledAutomaton;
  * NumFilteredFields, Filter<sup>NumFilteredFields</sup>, Footer</li>
  * <li>Filter --&gt; FieldNumber, FuzzySet</li>
  * <li>FuzzySet --&gt;See {@link FuzzySet#serialize(DataOutput)}</li>
- * <li>Header --&gt; {@link CodecUtil#writeHeader CodecHeader}</li>
+ * <li>Header --&gt; {@link CodecUtil#writeIndexHeader IndexHeader}</li>
  * <li>DelegatePostingsFormatName --&gt; {@link DataOutput#writeString(String)
  * String} The name of a ServiceProvider registered {@link PostingsFormat}</li>
  * <li>NumFilteredFields --&gt; {@link DataOutput#writeInt Uint32}</li>
@@ -82,9 +85,8 @@ import org.apache.lucene.util.automaton.CompiledAutomaton;
 public final class BloomFilteringPostingsFormat extends PostingsFormat {
   
   public static final String BLOOM_CODEC_NAME = "BloomFilter";
-  public static final int VERSION_START = 1;
-  public static final int VERSION_CHECKSUM = 2;
-  public static final int VERSION_CURRENT = VERSION_CHECKSUM;
+  public static final int VERSION_START = 3;
+  public static final int VERSION_CURRENT = VERSION_START;
   
   /** Extension of Bloom Filters file */
   static final String BLOOM_EXTENSION = "blm";
@@ -164,7 +166,7 @@ public final class BloomFilteringPostingsFormat extends PostingsFormat {
       boolean success = false;
       try {
         bloomIn = state.directory.openChecksumInput(bloomFileName, state.context);
-        int version = CodecUtil.checkHeader(bloomIn, BLOOM_CODEC_NAME, VERSION_START, VERSION_CURRENT);
+        CodecUtil.checkIndexHeader(bloomIn, BLOOM_CODEC_NAME, VERSION_START, VERSION_CURRENT, state.segmentInfo.getId(), state.segmentSuffix);
         // // Load the hash function used in the BloomFilter
         // hashFunction = HashFunction.forName(bloomIn.readString());
         // Load the delegate postings format
@@ -180,11 +182,7 @@ public final class BloomFilteringPostingsFormat extends PostingsFormat {
           FieldInfo fieldInfo = state.fieldInfos.fieldInfo(fieldNum);
           bloomsByFieldName.put(fieldInfo.name, bloom);
         }
-        if (version >= VERSION_CHECKSUM) {
-          CodecUtil.checkFooter(bloomIn);
-        } else {
-          CodecUtil.checkEOF(bloomIn);
-        }
+        CodecUtil.checkFooter(bloomIn);
         IOUtils.close(bloomIn);
         success = true;
       } finally {
@@ -239,19 +237,8 @@ public final class BloomFilteringPostingsFormat extends PostingsFormat {
       }
       
       @Override
-      public TermsEnum iterator(TermsEnum reuse) throws IOException {
-        if ((reuse != null) && (reuse instanceof BloomFilteredTermsEnum)) {
-          // recycle the existing BloomFilteredTermsEnum by asking the delegate
-          // to recycle its contained TermsEnum
-          BloomFilteredTermsEnum bfte = (BloomFilteredTermsEnum) reuse;
-          if (bfte.filter == filter) {
-            bfte.reset(delegateTerms, bfte.delegateTermsEnum);
-            return bfte;
-          }
-        }
-        // We have been handed something we cannot reuse (either null, wrong
-        // class or wrong filter) so allocate a new object
-        return new BloomFilteredTermsEnum(delegateTerms, reuse, filter);
+      public TermsEnum iterator() throws IOException {
+        return new BloomFilteredTermsEnum(delegateTerms, filter);
       }
       
       @Override
@@ -308,18 +295,15 @@ public final class BloomFilteringPostingsFormat extends PostingsFormat {
     final class BloomFilteredTermsEnum extends TermsEnum {
       private Terms delegateTerms;
       private TermsEnum delegateTermsEnum;
-      private TermsEnum reuseDelegate;
       private final FuzzySet filter;
       
-      public BloomFilteredTermsEnum(Terms delegateTerms, TermsEnum reuseDelegate, FuzzySet filter) throws IOException {
+      public BloomFilteredTermsEnum(Terms delegateTerms, FuzzySet filter) throws IOException {
         this.delegateTerms = delegateTerms;
-        this.reuseDelegate = reuseDelegate;
         this.filter = filter;
       }
       
-      void reset(Terms delegateTerms, TermsEnum reuseDelegate) throws IOException {
+      void reset(Terms delegateTerms) throws IOException {
         this.delegateTerms = delegateTerms;
-        this.reuseDelegate = reuseDelegate;
         this.delegateTermsEnum = null;
       }
       
@@ -329,7 +313,7 @@ public final class BloomFilteringPostingsFormat extends PostingsFormat {
            * this can be a relativly heavy operation depending on the 
            * delegate postings format and they underlying directory
            * (clone IndexInput) */
-          delegateTermsEnum = delegateTerms.iterator(reuseDelegate);
+          delegateTermsEnum = delegateTerms.iterator();
         }
         return delegateTermsEnum;
       }
@@ -383,19 +367,13 @@ public final class BloomFilteringPostingsFormat extends PostingsFormat {
       public long totalTermFreq() throws IOException {
         return delegate().totalTermFreq();
       }
-      
 
       @Override
-      public DocsAndPositionsEnum docsAndPositions(Bits liveDocs,
-          DocsAndPositionsEnum reuse, int flags) throws IOException {
-        return delegate().docsAndPositions(liveDocs, reuse, flags);
-      }
-
-      @Override
-      public DocsEnum docs(Bits liveDocs, DocsEnum reuse, int flags)
+      public PostingsEnum postings(Bits liveDocs, PostingsEnum reuse, int flags)
           throws IOException {
-        return delegate().docs(liveDocs, reuse, flags);
+        return delegate().postings(liveDocs, reuse, flags);
       }
+
     }
 
     @Override
@@ -409,8 +387,23 @@ public final class BloomFilteringPostingsFormat extends PostingsFormat {
     }
 
     @Override
+    public Collection<Accountable> getChildResources() {
+      List<Accountable> resources = new ArrayList<>();
+      resources.addAll(Accountables.namedAccountables("field", bloomsByFieldName));
+      if (delegateFieldsProducer != null) {
+        resources.add(Accountables.namedAccountable("delegate", delegateFieldsProducer));
+      }
+      return Collections.unmodifiableList(resources);
+    }
+
+    @Override
     public void checkIntegrity() throws IOException {
       delegateFieldsProducer.checkIntegrity();
+    }
+
+    @Override
+    public String toString() {
+      return getClass().getSimpleName() + "(fields=" + bloomsByFieldName.size() + ",delegate=" + delegateFieldsProducer + ")";
     }
   }
   
@@ -442,11 +435,11 @@ public final class BloomFilteringPostingsFormat extends PostingsFormat {
           continue;
         }
         FieldInfo fieldInfo = state.fieldInfos.fieldInfo(field);
-        TermsEnum termsEnum = terms.iterator(null);
+        TermsEnum termsEnum = terms.iterator();
 
         FuzzySet bloomFilter = null;
 
-        DocsEnum docsEnum = null;
+        PostingsEnum postingsEnum = null;
         while (true) {
           BytesRef term = termsEnum.next();
           if (term == null) {
@@ -462,17 +455,22 @@ public final class BloomFilteringPostingsFormat extends PostingsFormat {
             bloomFilters.put(fieldInfo, bloomFilter);
           }
           // Make sure there's at least one doc for this term:
-          docsEnum = termsEnum.docs(null, docsEnum, 0);
-          if (docsEnum.nextDoc() != DocsEnum.NO_MORE_DOCS) {
+          postingsEnum = termsEnum.postings(null, postingsEnum, 0);
+          if (postingsEnum.nextDoc() != PostingsEnum.NO_MORE_DOCS) {
             bloomFilter.addValue(term);
           }
         }
       }
     }
 
+    private boolean closed;
+    
     @Override
     public void close() throws IOException {
-
+      if (closed) {
+        return;
+      }
+      closed = true;
       delegateFieldsConsumer.close();
 
       // Now we are done accumulating values for these fields
@@ -486,10 +484,8 @@ public final class BloomFilteringPostingsFormat extends PostingsFormat {
       }
       String bloomFileName = IndexFileNames.segmentFileName(
           state.segmentInfo.name, state.segmentSuffix, BLOOM_EXTENSION);
-      IndexOutput bloomOutput = null;
-      try {
-        bloomOutput = state.directory.createOutput(bloomFileName, state.context);
-        CodecUtil.writeHeader(bloomOutput, BLOOM_CODEC_NAME, VERSION_CURRENT);
+      try (IndexOutput bloomOutput = state.directory.createOutput(bloomFileName, state.context)) {
+        CodecUtil.writeIndexHeader(bloomOutput, BLOOM_CODEC_NAME, VERSION_CURRENT, state.segmentInfo.getId(), state.segmentSuffix);
         // remember the name of the postings format we will delegate to
         bloomOutput.writeString(delegatePostingsFormat.getName());
         
@@ -502,8 +498,6 @@ public final class BloomFilteringPostingsFormat extends PostingsFormat {
           saveAppropriatelySizedBloomFilter(bloomOutput, bloomFilter, fieldInfo);
         }
         CodecUtil.writeFooter(bloomOutput);
-      } finally {
-        IOUtils.close(bloomOutput);
       }
       //We are done with large bitsets so no need to keep them hanging around
       bloomFilters.clear(); 

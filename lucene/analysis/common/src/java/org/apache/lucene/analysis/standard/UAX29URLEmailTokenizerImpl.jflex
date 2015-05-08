@@ -24,7 +24,7 @@ import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
  * algorithm, as specified in 
  * <a href="http://unicode.org/reports/tr29/">Unicode Standard Annex #29</a> 
  * URLs and email addresses are also tokenized according to the relevant RFCs.
- * <p/>
+ * <p>
  * Tokens produced are of the following types:
  * <ul>
  *   <li>&lt;ALPHANUM&gt;: A sequence of alphabetic and numeric characters</li>
@@ -46,11 +46,10 @@ import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 %final
 %public
 %class UAX29URLEmailTokenizerImpl
-%implements StandardTokenizerInterface
 %function getNextToken
 %char
 %xstate AVOID_BAD_URL
-%buffer 4096
+%buffer 255
 
 // UAX#29 WB4. X (Extend | Format)* --> X
 //
@@ -189,6 +188,16 @@ EMAIL = {EMAILlocalPart} "@" ({DomainNameStrict} | {EMAILbracketedHost})
   public final void getText(CharTermAttribute t) {
     t.copyBuffer(zzBuffer, zzStartRead, zzMarkedPos-zzStartRead);
   }
+  
+  /**
+   * Sets the scanner buffer size in chars
+   */
+   public final void setBufferSize(int numChars) {
+     ZZ_BUFFERSIZE = numChars;
+     char[] newZzBuffer = new char[ZZ_BUFFERSIZE];
+     System.arraycopy(zzBuffer, 0, newZzBuffer, 0, Math.min(zzBuffer.length, ZZ_BUFFERSIZE));
+     zzBuffer = newZzBuffer;
+   }
 %}
 
 %%
@@ -198,7 +207,7 @@ EMAIL = {EMAILlocalPart} "@" ({DomainNameStrict} | {EMAILbracketedHost})
 // UAX#29 WB1.   sot   ÷
 //        WB2.     ÷   eot
 //
-  <<EOF>> { return StandardTokenizerInterface.YYEOF; }
+  <<EOF>> { return YYEOF; }
 
   {URL}   { yybegin(YYINITIAL); return URL_TYPE; }
 

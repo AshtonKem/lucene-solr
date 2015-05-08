@@ -18,18 +18,8 @@ package org.apache.solr.handler.dataimport;
 
 import org.junit.BeforeClass;
 import org.junit.Test;
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
-import org.xml.sax.InputSource;
 
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
-import javax.xml.transform.Transformer;
-import javax.xml.transform.TransformerFactory;
-import javax.xml.transform.dom.DOMSource;
-import javax.xml.transform.stream.StreamResult;
-import java.io.StringReader;
-import java.io.StringWriter;
+import java.util.Locale;
 
 /**Testcase for TikaEntityProcessor
  *
@@ -47,6 +37,31 @@ public class TestTikaEntityProcessor extends AbstractDataImportHandlerTestCase {
   "     </entity>" +
   "  </document>" +
   "</dataConfig>";
+
+  private String skipOnErrConf =
+      "<dataConfig>" +
+          "  <dataSource type=\"BinFileDataSource\"/>" +
+          "  <document>" +
+          "    <entity name=\"Tika\" onError=\"skip\"  processor=\"TikaEntityProcessor\" url=\"" + getFile("dihextras/bad.doc").getAbsolutePath() + "\" >" +
+          "<field column=\"content\" name=\"text\"/>" +
+          " </entity>" +
+          " <entity name=\"Tika\" processor=\"TikaEntityProcessor\" url=\"" + getFile("dihextras/solr-word.pdf").getAbsolutePath() + "\" >" +
+          "      <field column=\"text\"/>" +
+          "</entity>" +
+          "  </document>" +
+          "</dataConfig>";
+
+  private String spatialConf =
+      "<dataConfig>" +
+          "  <dataSource type=\"BinFileDataSource\"/>" +
+          "  <document>" +
+          "    <entity name=\"Tika\" processor=\"TikaEntityProcessor\" url=\"" +
+          getFile("dihextras/test_jpeg.jpg").getAbsolutePath() + "\" spatialMetadataField=\"home\">" +
+          "      <field column=\"text\"/>" +
+          "     </entity>" +
+          "  </document>" +
+          "</dataConfig>";
+
 
   private String[] tests = {
       "//*[@numFound='1']"
@@ -71,8 +86,24 @@ public class TestTikaEntityProcessor extends AbstractDataImportHandlerTestCase {
       , "//str[@name='text'][contains(.,'class=\"classAttribute\"')]" //attributes are lower-cased
   };
 
+  private String[] testsSpatial = {
+      "//*[@numFound='1']"
+  };
+
+  private String[] testsEmbedded = {
+      "//*[@numFound='1']",
+      "//str[@name='text'][contains(.,'When in the Course')]"
+  };
+
+  private String[] testsIgnoreEmbedded = {
+      "//*[@numFound='1']",
+      "//str[@name='text'][not(contains(.,'When in the Course'))]"
+  };
+
   @BeforeClass
   public static void beforeClass() throws Exception {
+    assumeFalse("This test fails on UNIX with Turkish default locale (https://issues.apache.org/jira/browse/SOLR-6387)",
+        new Locale("tr").getLanguage().equals(Locale.getDefault().getLanguage()));
     initCore("dataimport-solrconfig.xml", "dataimport-schema-no-unique-key.xml", getFile("dihextras/solr").getAbsolutePath());
   }
 
@@ -80,6 +111,12 @@ public class TestTikaEntityProcessor extends AbstractDataImportHandlerTestCase {
   public void testIndexingWithTikaEntityProcessor() throws Exception {
     runFullImport(conf);
     assertQ(req("*:*"), tests );
+  }
+
+  @Test
+  public void testSkip() throws Exception {
+    runFullImport(skipOnErrConf);
+    assertQ(req("*:*"), "//*[@numFound='1']");
   }
 
   @Test
@@ -100,6 +137,16 @@ public class TestTikaEntityProcessor extends AbstractDataImportHandlerTestCase {
     assertQ(req("*:*"), testsHTMLIdentity);
   }
 
+  @Test
+  public void testTikaGeoMetadata() throws Exception {
+    runFullImport(spatialConf);
+    String pt = "38.97,-77.018";
+    Double distance = 5.0d;
+    assertQ(req("q", "*:* OR foo_i:" + random().nextInt(100), "fq",
+        "{!geofilt sfield=\"home\"}\"",
+        "pt", pt, "d", String.valueOf(distance)), testsSpatial);
+  }
+
   private String getConfigHTML(String htmlMapper) {
     return
         "<dataConfig>" +
@@ -113,5 +160,40 @@ public class TestTikaEntityProcessor extends AbstractDataImportHandlerTestCase {
             "  </document>" +
             "</dataConfig>";
 
+  }
+
+  @Test
+  public void testEmbeddedDocsLegacy() throws Exception {
+    //test legacy behavior: ignore embedded docs
+    runFullImport(conf);
+    assertQ(req("*:*"), testsIgnoreEmbedded);
+  }
+
+  @Test
+  public void testEmbeddedDocsTrue() throws Exception {
+    runFullImport(getConfigEmbedded(true));
+    assertQ(req("*:*"), testsEmbedded);
+  }
+
+  @Test
+  public void testEmbeddedDocsFalse() throws Exception {
+    runFullImport(getConfigEmbedded(false));
+    assertQ(req("*:*"), testsIgnoreEmbedded);
+  }
+
+  private String getConfigEmbedded(boolean extractEmbedded) {
+    return
+        "<dataConfig>" +
+            "  <dataSource type=\"BinFileDataSource\"/>" +
+            "  <document>" +
+            "    <entity name=\"Tika\" processor=\"TikaEntityProcessor\" url=\"" +
+                    getFile("dihextras/test_recursive_embedded.docx").getAbsolutePath() + "\" " +
+            "       extractEmbedded=\""+extractEmbedded+"\">" +
+            "      <field column=\"Author\" meta=\"true\" name=\"author\"/>" +
+            "      <field column=\"title\" meta=\"true\" name=\"title\"/>" +
+            "      <field column=\"text\"/>" +
+            "     </entity>" +
+            "  </document>" +
+            "</dataConfig>";
   }
 }

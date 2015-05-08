@@ -31,14 +31,13 @@ import org.apache.lucene.codecs.DocValuesConsumer;
 import org.apache.lucene.codecs.DocValuesFormat;
 import org.apache.lucene.codecs.FieldInfosFormat;
 import org.apache.lucene.codecs.LiveDocsFormat;
-import org.apache.lucene.document.BinaryDocValuesField;
-import org.apache.lucene.document.NumericDocValuesField;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FlushInfo;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.TrackingDirectoryWrapper;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.BytesRef;
+import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.MutableBits;
 
 // Used by IndexWriter to hold open SegmentReaders (for
@@ -113,16 +112,16 @@ class ReadersAndUpdates {
     int count;
     if (liveDocs != null) {
       count = 0;
-      for(int docID=0;docID<info.info.getDocCount();docID++) {
+      for(int docID=0;docID<info.info.maxDoc();docID++) {
         if (liveDocs.get(docID)) {
           count++;
         }
       }
     } else {
-      count = info.info.getDocCount();
+      count = info.info.maxDoc();
     }
 
-    assert info.info.getDocCount() - info.getDelCount() - pendingDeleteCount == count: "info.docCount=" + info.info.getDocCount() + " info.getDelCount()=" + info.getDelCount() + " pendingDeleteCount=" + pendingDeleteCount + " count=" + count;
+    assert info.info.maxDoc() - info.getDelCount() - pendingDeleteCount == count: "info.maxDoc=" + info.info.maxDoc() + " info.getDelCount()=" + info.getDelCount() + " pendingDeleteCount=" + pendingDeleteCount + " count=" + count;
     return true;
   }
 
@@ -149,13 +148,13 @@ class ReadersAndUpdates {
   public synchronized boolean delete(int docID) {
     assert liveDocs != null;
     assert Thread.holdsLock(writer);
-    assert docID >= 0 && docID < liveDocs.length() : "out of bounds: docid=" + docID + " liveDocsLength=" + liveDocs.length() + " seg=" + info.info.name + " docCount=" + info.info.getDocCount();
+    assert docID >= 0 && docID < liveDocs.length() : "out of bounds: docid=" + docID + " liveDocsLength=" + liveDocs.length() + " seg=" + info.info.name + " maxDoc=" + info.info.maxDoc();
     assert !liveDocsShared;
     final boolean didDelete = liveDocs.get(docID);
     if (didDelete) {
       ((MutableBits) liveDocs).clear(docID);
       pendingDeleteCount++;
-      //System.out.println("  new del seg=" + info + " docID=" + docID + " pendingDelCount=" + pendingDeleteCount + " totDelCount=" + (info.docCount-liveDocs.count()));
+      //System.out.println("  new del seg=" + info + " docID=" + docID + " pendingDelCount=" + pendingDeleteCount + " totDelCount=" + (info.info.maxDoc()-liveDocs.count()));
     }
     return didDelete;
   }
@@ -188,7 +187,7 @@ class ReadersAndUpdates {
     // force new liveDocs in initWritableLiveDocs even if it's null
     liveDocsShared = true;
     if (liveDocs != null) {
-      return new SegmentReader(reader.getSegmentInfo(), reader, liveDocs, info.info.getDocCount() - info.getDelCount() - pendingDeleteCount);
+      return new SegmentReader(reader.getSegmentInfo(), reader, liveDocs, info.info.maxDoc() - info.getDelCount() - pendingDeleteCount);
     } else {
       // liveDocs == null and reader != null. That can only be if there are no deletes
       assert reader.getLiveDocs() == null;
@@ -199,7 +198,7 @@ class ReadersAndUpdates {
 
   public synchronized void initWritableLiveDocs() throws IOException {
     assert Thread.holdsLock(writer);
-    assert info.info.getDocCount() > 0;
+    assert info.info.maxDoc() > 0;
     //System.out.println("initWritableLivedocs seg=" + info + " liveDocs=" + liveDocs + " shared=" + shared);
     if (liveDocsShared) {
       // Copy on write: this means we've cloned a
@@ -209,7 +208,7 @@ class ReadersAndUpdates {
       LiveDocsFormat liveDocsFormat = info.info.getCodec().liveDocsFormat();
       if (liveDocs == null) {
         //System.out.println("create BV seg=" + info);
-        liveDocs = liveDocsFormat.newLiveDocs(info.info.getDocCount());
+        liveDocs = liveDocsFormat.newLiveDocs(info.info.maxDoc());
       } else {
         liveDocs = liveDocsFormat.newLiveDocs(liveDocs);
       }
@@ -255,7 +254,7 @@ class ReadersAndUpdates {
     }
     
     // We have new deletes
-    assert liveDocs.length() == info.info.getDocCount();
+    assert liveDocs.length() == info.info.maxDoc();
     
     // Do this so we can delete any created files on
     // exception; this saves all codecs from having to do
@@ -278,11 +277,7 @@ class ReadersAndUpdates {
         
         // Delete any partially created file(s):
         for (String fileName : trackingDir.getCreatedFiles()) {
-          try {
-            dir.deleteFile(fileName);
-          } catch (Throwable t) {
-            // Ignore so we throw only the first exc
-          }
+          IOUtils.deleteFilesIgnoringExceptions(dir, fileName);
         }
       }
     }
@@ -306,8 +301,8 @@ class ReadersAndUpdates {
 
       final long nextDocValuesGen = info.getNextDocValuesGen();
       final String segmentSuffix = Long.toString(nextDocValuesGen, Character.MAX_RADIX);
-      final long estUpdatesSize = fieldUpdates.ramBytesPerDoc() * info.info.getDocCount();
-      final IOContext updatesContext = new IOContext(new FlushInfo(info.info.getDocCount(), estUpdatesSize));
+      final long estUpdatesSize = fieldUpdates.ramBytesPerDoc() * info.info.maxDoc();
+      final IOContext updatesContext = new IOContext(new FlushInfo(info.info.maxDoc(), estUpdatesSize));
       final FieldInfo fieldInfo = infos.fieldInfo(field);
       assert fieldInfo != null;
       fieldInfo.setDocValuesGen(nextDocValuesGen);
@@ -379,8 +374,8 @@ class ReadersAndUpdates {
 
       final long nextDocValuesGen = info.getNextDocValuesGen();
       final String segmentSuffix = Long.toString(nextDocValuesGen, Character.MAX_RADIX);
-      final long estUpdatesSize = fieldUpdates.ramBytesPerDoc() * info.info.getDocCount();
-      final IOContext updatesContext = new IOContext(new FlushInfo(info.info.getDocCount(), estUpdatesSize));
+      final long estUpdatesSize = fieldUpdates.ramBytesPerDoc() * info.info.maxDoc();
+      final IOContext updatesContext = new IOContext(new FlushInfo(info.info.maxDoc(), estUpdatesSize));
       final FieldInfo fieldInfo = infos.fieldInfo(field);
       assert fieldInfo != null;
       fieldInfo.setDocValuesGen(nextDocValuesGen);
@@ -451,10 +446,10 @@ class ReadersAndUpdates {
     // HEADER + FOOTER: 40
     // 90 bytes per-field (over estimating long name and attributes map)
     final long estInfosSize = 40 + 90 * fieldInfos.size();
-    final IOContext infosContext = new IOContext(new FlushInfo(info.info.getDocCount(), estInfosSize));
+    final IOContext infosContext = new IOContext(new FlushInfo(info.info.maxDoc(), estInfosSize));
     // separately also track which files were created for this gen
     final TrackingDirectoryWrapper trackingDir = new TrackingDirectoryWrapper(dir);
-    infosFormat.getFieldInfosWriter().write(trackingDir, info.info.name, segmentSuffix, fieldInfos, infosContext);
+    infosFormat.write(trackingDir, info.info, segmentSuffix, fieldInfos, infosContext);
     info.advanceFieldInfosGen();
     return trackingDir.getCreatedFiles();
   }
@@ -490,20 +485,20 @@ class ReadersAndUpdates {
         for (FieldInfo fi : reader.getFieldInfos()) {
           FieldInfo clone = builder.add(fi);
           // copy the stuff FieldInfos.Builder doesn't copy
-          if (fi.attributes() != null) {
-            for (Entry<String,String> e : fi.attributes().entrySet()) {
-              clone.putAttribute(e.getKey(), e.getValue());
-            }
+          for (Entry<String,String> e : fi.attributes().entrySet()) {
+            clone.putAttribute(e.getKey(), e.getValue());
           }
           clone.setDocValuesGen(fi.getDocValuesGen());
         }
         // create new fields or update existing ones to have NumericDV type
         for (String f : dvUpdates.numericDVUpdates.keySet()) {
-          builder.addOrUpdate(f, NumericDocValuesField.TYPE);
+          FieldInfo fieldInfo = builder.getOrAdd(f);
+          fieldInfo.setDocValuesType(DocValuesType.NUMERIC);
         }
         // create new fields or update existing ones to have BinaryDV type
         for (String f : dvUpdates.binaryDVUpdates.keySet()) {
-          builder.addOrUpdate(f, BinaryDocValuesField.TYPE);
+          FieldInfo fieldInfo = builder.getOrAdd(f);
+          fieldInfo.setDocValuesType(DocValuesType.BINARY);
         }
         
         fieldInfos = builder.finish();
@@ -534,11 +529,7 @@ class ReadersAndUpdates {
         
         // Delete any partially created file(s):
         for (String fileName : trackingDir.getCreatedFiles()) {
-          try {
-            dir.deleteFile(fileName);
-          } catch (Throwable t) {
-            // Ignore so we throw only the first exc
-          }
+          IOUtils.deleteFilesIgnoringExceptions(dir, fileName);
         }
       }
     }
@@ -584,7 +575,7 @@ class ReadersAndUpdates {
 
     // if there is a reader open, reopen it to reflect the updates
     if (reader != null) {
-      SegmentReader newReader = new SegmentReader(info, reader, liveDocs, info.info.getDocCount() - info.getDelCount() - pendingDeleteCount);
+      SegmentReader newReader = new SegmentReader(info, reader, liveDocs, info.info.maxDoc() - info.getDelCount() - pendingDeleteCount);
       boolean reopened = false;
       try {
         reader.decRef();

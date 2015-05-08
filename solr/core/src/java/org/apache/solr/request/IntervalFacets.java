@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.Locale;
 
 import org.apache.lucene.document.FieldType.NumericType;
-import org.apache.lucene.index.AtomicReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.DocValues;
 import org.apache.lucene.index.NumericDocValues;
 import org.apache.lucene.index.SortedDocValues;
@@ -53,7 +53,7 @@ import org.apache.solr.search.SyntaxError;
 
 /**
  * Computes interval facets for docvalues field (single or multivalued).
- * <p/>
+ * <p>
  * Given a set of intervals for a field and a DocSet, it calculates the number
  * of documents that match each of the intervals provided. The final count for
  * each interval should be exactly the same as the number of results of a range
@@ -61,12 +61,12 @@ import org.apache.solr.search.SyntaxError;
  * of {@code facet.query=field:[A TO B]} should be the same as the count of
  * {@code f.field.facet.interval.set=[A,B]}, however, this method will usually
  * be faster in cases where there are a larger number of intervals per field.
- * <p/>
+ * <p>
  * To use this class, create an instance using
  * {@link #IntervalFacets(SchemaField, SolrIndexSearcher, DocSet, String[], SolrParams)}
  * and then iterate the {@link FacetInterval} using {@link #iterator()}
- * <p/>
- * Intervals Format</br>
+ * <p>
+ * Intervals Format<br>
  * Intervals must begin with either '(' or '[', be followed by the start value,
  * then a comma ',', the end value, and finally ')' or ']'. For example:
  * <ul>
@@ -89,7 +89,7 @@ import org.apache.solr.search.SyntaxError;
  * As with facet.query, the key used to display the result can be set by using local params
  * syntax, for example:<p>
  * <code>{!key='First Half'}[0,5) </code>
- * <p/>
+ * <p>
  * To use this class:
  * <pre>
  * IntervalFacets intervalFacets = new IntervalFacets(schemaField, searcher, docs, intervalStrs, params);
@@ -104,11 +104,27 @@ public class IntervalFacets implements Iterable<FacetInterval> {
   private final DocSet docs;
   private final FacetInterval[] intervals;
 
+  /**
+   * Constructor that accepts un-parsed intervals using "interval faceting" syntax. See {@link IntervalFacets} for syntax.
+   * Intervals don't need to be in order.
+   */
   public IntervalFacets(SchemaField schemaField, SolrIndexSearcher searcher, DocSet docs, String[] intervals, SolrParams params) throws SyntaxError, IOException {
     this.schemaField = schemaField;
     this.searcher = searcher;
     this.docs = docs;
     this.intervals = getSortedIntervals(intervals, params);
+    doCount();
+  }
+  
+  /**
+   * Constructor that accepts an already constructed array of {@link FacetInterval} objects. This array needs to be sorted
+   * by start value in weakly ascending order. null values are not allowed in the array.
+   */
+  IntervalFacets(SchemaField schemaField, SolrIndexSearcher searcher, DocSet docs, FacetInterval[] intervals) throws IOException {
+    this.schemaField = schemaField;
+    this.searcher = searcher;
+    this.docs = docs;
+    this.intervals = intervals;
     doCount();
   }
 
@@ -162,10 +178,10 @@ public class IntervalFacets implements Iterable<FacetInterval> {
     if (numericType == null) {
       throw new IllegalStateException();
     }
-    final List<AtomicReaderContext> leaves = searcher.getIndexReader().leaves();
+    final List<LeafReaderContext> leaves = searcher.getIndexReader().leaves();
 
-    final Iterator<AtomicReaderContext> ctxIt = leaves.iterator();
-    AtomicReaderContext ctx = null;
+    final Iterator<LeafReaderContext> ctxIt = leaves.iterator();
+    LeafReaderContext ctx = null;
     NumericDocValues longs = null;
     Bits docsWithField = null;
     for (DocIterator docsIt = docs.iterator(); docsIt.hasNext(); ) {
@@ -220,9 +236,9 @@ public class IntervalFacets implements Iterable<FacetInterval> {
 
   private void getCountString() throws IOException {
     Filter filter = docs.getTopFilter();
-    List<AtomicReaderContext> leaves = searcher.getTopReaderContext().leaves();
+    List<LeafReaderContext> leaves = searcher.getTopReaderContext().leaves();
     for (int subIndex = 0; subIndex < leaves.size(); subIndex++) {
-      AtomicReaderContext leaf = leaves.get(subIndex);
+      LeafReaderContext leaf = leaves.get(subIndex);
       DocIdSet dis = filter.getDocIdSet(leaf, null); // solr docsets already exclude any deleted docs
       if (dis == null) {
         continue;
@@ -406,6 +422,14 @@ public class IntervalFacets implements Iterable<FacetInterval> {
      */
     private int count;
 
+    /**
+     * 
+     * Constructor that accepts un-parsed interval faceting syntax. See {@link IntervalFacets} for details
+     * 
+     * @param schemaField schemaField for this range
+     * @param intervalStr String the interval. See {@link IntervalFacets} for syntax
+     * @param params SolrParams of this request, mostly used to get local params
+     */
     FacetInterval(SchemaField schemaField, String intervalStr, SolrParams params) throws SyntaxError {
       if (intervalStr == null) throw new SyntaxError("empty facet interval");
       intervalStr = intervalStr.trim();
@@ -484,6 +508,31 @@ public class IntervalFacets implements Iterable<FacetInterval> {
     }
 
     /**
+     * 
+     * Constructor that accepts already parsed values of start and end. This constructor
+     * can only be used with numeric field types.
+     * 
+     * @param schemaField schemaField for this range
+     * @param startStr String representation of the start value of this interval. Can be a "*".
+     * @param endStr String representation of the end value of this interval. Can be a "*".
+     * @param includeLower Indicates weather this interval should include values equal to start
+     * @param includeUpper Indicates weather this interval should include values equal to end
+     * @param key String key of this interval
+     */
+    FacetInterval(SchemaField schemaField, String startStr, String endStr,
+        boolean includeLower, boolean includeUpper, String key) {
+      assert schemaField.getType().getNumericType() != null: "Only numeric fields supported with this constructor";
+      this.key = key;
+      this.startOpen = !includeLower;
+      this.endOpen = !includeUpper;
+      this.start = getLimitFromString(schemaField, startStr);
+      this.end = getLimitFromString(schemaField, endStr);
+      assert start == null || end == null || start.compareTo(end) < 0: 
+        "Bad start/end limits: " + startStr + "/" + endStr;
+      setNumericLimits(schemaField);
+    }
+
+    /**
      * Set startLimit and endLimit for numeric values. The limits in this case
      * are going to be the <code>long</code> representation of the original
      * value. <code>startLimit</code> will be incremented by one in case of the
@@ -554,6 +603,10 @@ public class IntervalFacets implements Iterable<FacetInterval> {
       if (value.length() == 0) {
         throw new SyntaxError("Empty interval limit");
       }
+      return getLimitFromString(schemaField, value);
+    }
+    
+    private BytesRef getLimitFromString(SchemaField schemaField, String value) {
       if ("*".equals(value)) {
         return null;
       }

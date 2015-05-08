@@ -18,18 +18,21 @@ package org.apache.lucene.codecs;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.io.Reader;
+import java.nio.charset.StandardCharsets;
 
+import org.apache.lucene.document.StoredField;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.FieldInfos;
+import org.apache.lucene.index.IndexableFieldType;
 import org.apache.lucene.index.MergeState;
 import org.apache.lucene.index.StorableField;
-import org.apache.lucene.index.StoredDocument;
+import org.apache.lucene.index.StoredFieldVisitor;
 import org.apache.lucene.util.Bits;
-import org.apache.lucene.index.AtomicReader;
+import org.apache.lucene.util.BytesRef;
 
 /**
  * Codec API for writing stored fields:
- * <p>
  * <ol>
  *   <li>For every document, {@link #startDocument()} is called,
  *       informing the Codec that a new document has started.
@@ -60,10 +63,6 @@ public abstract class StoredFieldsWriter implements Closeable {
 
   /** Writes a single stored field. */
   public abstract void writeField(FieldInfo info, StorableField field) throws IOException;
-
-  /** Aborts writing entirely, implementation should remove
-   *  any partially-written files, etc. */
-  public abstract void abort();
   
   /** Called before {@link #close()}, passing in the number
    *  of documents that were written. Note that this is 
@@ -82,39 +81,157 @@ public abstract class StoredFieldsWriter implements Closeable {
    *  merging (bulk-byte copying, etc). */
   public int merge(MergeState mergeState) throws IOException {
     int docCount = 0;
-    for (AtomicReader reader : mergeState.readers) {
-      final int maxDoc = reader.maxDoc();
-      final Bits liveDocs = reader.getLiveDocs();
-      for (int i = 0; i < maxDoc; i++) {
-        if (liveDocs != null && !liveDocs.get(i)) {
+    for (int i=0;i<mergeState.storedFieldsReaders.length;i++) {
+      StoredFieldsReader storedFieldsReader = mergeState.storedFieldsReaders[i];
+      storedFieldsReader.checkIntegrity();
+      MergeVisitor visitor = new MergeVisitor(mergeState, i);
+      int maxDoc = mergeState.maxDocs[i];
+      Bits liveDocs = mergeState.liveDocs[i];
+      for (int docID=0;docID<maxDoc;docID++) {
+        if (liveDocs != null && !liveDocs.get(docID)) {
           // skip deleted docs
           continue;
         }
-        // TODO: this could be more efficient using
-        // FieldVisitor instead of loading/writing entire
-        // doc; ie we just have to renumber the field number
-        // on the fly?
-        // NOTE: it's very important to first assign to doc then pass it to
-        // fieldsWriter.addDocument; see LUCENE-1282
-        StoredDocument doc = reader.document(i);
-        addDocument(doc, mergeState.fieldInfos);
+        startDocument();
+        storedFieldsReader.visitDocument(docID, visitor);
+        finishDocument();
         docCount++;
-        mergeState.checkAbort.work(300);
       }
     }
-    finish(mergeState.fieldInfos, docCount);
+    finish(mergeState.mergeFieldInfos, docCount);
     return docCount;
   }
   
-  /** sugar method for startDocument() + writeField() for every stored field in the document */
-  protected final void addDocument(Iterable<? extends StorableField> doc, FieldInfos fieldInfos) throws IOException {
-    startDocument();
-
-    for (StorableField field : doc) {
-      writeField(fieldInfos.fieldInfo(field.name()), field);
+  /** 
+   * A visitor that adds every field it sees.
+   * <p>
+   * Use like this:
+   * <pre>
+   * MergeVisitor visitor = new MergeVisitor(mergeState, readerIndex);
+   * for (...) {
+   *   startDocument();
+   *   storedFieldsReader.visitDocument(docID, visitor);
+   *   finishDocument();
+   * }
+   * </pre>
+   */
+  protected class MergeVisitor extends StoredFieldVisitor implements StorableField {
+    BytesRef binaryValue;
+    String stringValue;
+    Number numericValue;
+    FieldInfo currentField;
+    FieldInfos remapper;
+    
+    /**
+     * Create new merge visitor.
+     */
+    public MergeVisitor(MergeState mergeState, int readerIndex) {
+      // if field numbers are aligned, we can save hash lookups
+      // on every field access. Otherwise, we need to lookup
+      // fieldname each time, and remap to a new number.
+      for (FieldInfo fi : mergeState.fieldInfos[readerIndex]) {
+        FieldInfo other = mergeState.mergeFieldInfos.fieldInfo(fi.number);
+        if (other == null || !other.name.equals(fi.name)) {
+          remapper = mergeState.mergeFieldInfos;
+          break;
+        }
+      }
+    }
+    
+    @Override
+    public void binaryField(FieldInfo fieldInfo, byte[] value) throws IOException {
+      reset(fieldInfo);
+      // TODO: can we avoid new BR here?
+      binaryValue = new BytesRef(value);
+      write();
     }
 
-    finishDocument();
+    @Override
+    public void stringField(FieldInfo fieldInfo, byte[] value) throws IOException {
+      reset(fieldInfo);
+      // TODO: can we avoid new String here?
+      stringValue = new String(value, StandardCharsets.UTF_8);
+      write();
+    }
+
+    @Override
+    public void intField(FieldInfo fieldInfo, int value) throws IOException {
+      reset(fieldInfo);
+      numericValue = value;
+      write();
+    }
+
+    @Override
+    public void longField(FieldInfo fieldInfo, long value) throws IOException {
+      reset(fieldInfo);
+      numericValue = value;
+      write();
+    }
+
+    @Override
+    public void floatField(FieldInfo fieldInfo, float value) throws IOException {
+      reset(fieldInfo);
+      numericValue = value;
+      write();
+    }
+
+    @Override
+    public void doubleField(FieldInfo fieldInfo, double value) throws IOException {
+      reset(fieldInfo);
+      numericValue = value;
+      write();
+    }
+
+    @Override
+    public Status needsField(FieldInfo fieldInfo) throws IOException {
+      return Status.YES;
+    }
+
+    @Override
+    public String name() {
+      return currentField.name;
+    }
+
+    @Override
+    public IndexableFieldType fieldType() {
+      return StoredField.TYPE;
+    }
+
+    @Override
+    public BytesRef binaryValue() {
+      return binaryValue;
+    }
+
+    @Override
+    public String stringValue() {
+      return stringValue;
+    }
+
+    @Override
+    public Number numericValue() {
+      return numericValue;
+    }
+
+    @Override
+    public Reader readerValue() {
+      return null;
+    }
+    
+    void reset(FieldInfo field) {
+      if (remapper != null) {
+        // field numbers are not aligned, we need to remap to the new field number
+        currentField = remapper.fieldInfo(field.name);
+      } else {
+        currentField = field;
+      }
+      binaryValue = null;
+      stringValue = null;
+      numericValue = null;
+    }
+    
+    void write() throws IOException {
+      writeField(currentField, this);
+    }
   }
 
   @Override

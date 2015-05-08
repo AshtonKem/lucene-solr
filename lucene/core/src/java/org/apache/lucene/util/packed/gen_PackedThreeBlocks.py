@@ -78,11 +78,6 @@ if __name__ == '__main__':
       f.write("    for (int i = 0; i < 3 * valueCount; ++i) {\n")
       f.write("      blocks[i] = in.read%s();\n" %TYPES[bpv].title())
       f.write("    }\n")
-    f.write("    // because packed ints have not always been byte-aligned\n")
-    f.write("    final int remaining = (int) (PackedInts.Format.PACKED.byteCount(packedIntsVersion, valueCount, %d) - 3L * valueCount * %d);\n" %(3 * bpv, bpv / 8))
-    f.write("    for (int i = 0; i < remaining; ++i) {\n")
-    f.write("       in.readByte();\n")
-    f.write("    }\n")
     f.write("  }\n")
 
     f.write("""
@@ -158,7 +153,7 @@ if __name__ == '__main__':
   @Override
   public String toString() {
     return getClass().getSimpleName() + "(bitsPerValue=" + bitsPerValue
-        + ", size=" + size() + ", elements.length=" + blocks.length + ")";
+        + ",size=" + size() + ",blocks=" + blocks.length + ")";
   }
 }
 """ %(MASKS[bpv], 2*bpv, MASKS[bpv], bpv, MASKS[bpv], MASKS[bpv], 2*bpv, MASKS[bpv], bpv, MASKS[bpv], CASTS[bpv], 2*bpv, CASTS[bpv], bpv, CASTS[bpv], CASTS[bpv],

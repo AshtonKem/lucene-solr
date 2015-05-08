@@ -25,6 +25,7 @@ import java.util.List;
 import org.apache.lucene.analysis.MockTokenizer;
 import org.apache.lucene.analysis.Tokenizer;
 import org.apache.lucene.index.DirectoryReader;
+import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.RandomIndexWriter;
 import org.apache.lucene.index.StorableField;
@@ -64,7 +65,7 @@ public class TestDocument extends LuceneTestCase {
     
     assertTrue(binaryFld.binaryValue() != null);
     assertTrue(binaryFld.fieldType().stored());
-    assertFalse(binaryFld.fieldType().indexed());
+    assertEquals(IndexOptions.NONE, binaryFld.fieldType().indexOptions());
     
     String binaryTest = doc.getBinaryValue("binary").utf8ToString();
     assertTrue(binaryTest.equals(binaryVal));
@@ -217,7 +218,7 @@ public class TestDocument extends LuceneTestCase {
     Query query = new TermQuery(new Term("keyword", "test1"));
     
     // ensure that queries return expected results without DateFilter first
-    ScoreDoc[] hits = searcher.search(query, null, 1000).scoreDocs;
+    ScoreDoc[] hits = searcher.search(query, 1000).scoreDocs;
     assertEquals(1, hits.length);
     
     doAssert(searcher.doc(hits[0].doc));
@@ -249,7 +250,7 @@ public class TestDocument extends LuceneTestCase {
     query.add(new Term("indexed_not_tokenized", "test1"));
     query.add(new Term("indexed_not_tokenized", "test2"));
     
-    ScoreDoc[] hits = searcher.search(query, null, 1000).scoreDocs;
+    ScoreDoc[] hits = searcher.search(query, 1000).scoreDocs;
     assertEquals(1, hits.length);
     
     doAssert(searcher.doc(hits[0].doc));
@@ -263,7 +264,7 @@ public class TestDocument extends LuceneTestCase {
     FieldType stored = new FieldType();
     stored.setStored(true);
     FieldType indexedNotTokenized = new FieldType();
-    indexedNotTokenized.setIndexed(true);
+    indexedNotTokenized.setIndexOptions(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS);
     indexedNotTokenized.setTokenized(false);
     doc.add(new StringField("keyword", "test1", Field.Store.YES));
     doc.add(new StringField("keyword", "test2", Field.Store.YES));
@@ -271,10 +272,8 @@ public class TestDocument extends LuceneTestCase {
     doc.add(new TextField("text", "test2", Field.Store.YES));
     doc.add(new Field("unindexed", "test1", stored));
     doc.add(new Field("unindexed", "test2", stored));
-    doc
-        .add(new TextField("unstored", "test1", Field.Store.NO));
-    doc
-        .add(new TextField("unstored", "test2", Field.Store.NO));
+    doc.add(new TextField("unstored", "test1", Field.Store.NO));
+    doc.add(new TextField("unstored", "test2", Field.Store.NO));
     doc.add(new Field("indexed_not_tokenized", "test1", indexedNotTokenized));
     doc.add(new Field("indexed_not_tokenized", "test2", indexedNotTokenized));
     return doc;
@@ -333,7 +332,7 @@ public class TestDocument extends LuceneTestCase {
     Query query = new TermQuery(new Term("keyword", "test"));
     
     // ensure that queries return expected results without DateFilter first
-    ScoreDoc[] hits = searcher.search(query, null, 1000).scoreDocs;
+    ScoreDoc[] hits = searcher.search(query, 1000).scoreDocs;
     assertEquals(3, hits.length);
     int result = 0;
     for (int i = 0; i < 3; i++) {

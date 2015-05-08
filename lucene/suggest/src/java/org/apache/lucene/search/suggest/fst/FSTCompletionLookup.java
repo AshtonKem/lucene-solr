@@ -17,9 +17,12 @@ package org.apache.lucene.search.suggest.fst;
  * limitations under the License.
  */
 
-import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
@@ -32,16 +35,15 @@ import org.apache.lucene.store.ByteArrayDataOutput;
 import org.apache.lucene.store.DataInput;
 import org.apache.lucene.store.DataOutput;
 import org.apache.lucene.util.Accountable;
+import org.apache.lucene.util.Accountables;
 import org.apache.lucene.util.ArrayUtil;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.BytesRefBuilder;
-import org.apache.lucene.util.CharsRef;
 import org.apache.lucene.util.CharsRefBuilder;
 import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.OfflineSorter;
 import org.apache.lucene.util.OfflineSorter.SortInfo;
 import org.apache.lucene.util.RamUsageEstimator;
-import org.apache.lucene.util.UnicodeUtil;
 import org.apache.lucene.util.fst.FST;
 import org.apache.lucene.util.fst.NoOutputs;
 
@@ -157,10 +159,10 @@ public class FSTCompletionLookup extends Lookup implements Accountable {
     if (iterator.hasContexts()) {
       throw new IllegalArgumentException("this suggester doesn't support contexts");
     }
-    File tempInput = File.createTempFile(
-        FSTCompletionLookup.class.getSimpleName(), ".input", OfflineSorter.defaultTempDir());
-    File tempSorted = File.createTempFile(
-        FSTCompletionLookup.class.getSimpleName(), ".sorted", OfflineSorter.defaultTempDir());
+    Path tempInput = Files.createTempFile(
+        OfflineSorter.defaultTempDir(), FSTCompletionLookup.class.getSimpleName(), ".input");
+    Path tempSorted = Files.createTempFile(
+        OfflineSorter.defaultTempDir(), FSTCompletionLookup.class.getSimpleName(), ".sorted");
 
     OfflineSorter.ByteSequencesWriter writer = new OfflineSorter.ByteSequencesWriter(tempInput);
     OfflineSorter.ByteSequencesReader reader = null;
@@ -189,7 +191,7 @@ public class FSTCompletionLookup extends Lookup implements Accountable {
       // We don't know the distribution of scores and we need to bucket them, so we'll sort
       // and divide into equal buckets.
       SortInfo info = new OfflineSorter().sort(tempInput, tempSorted);
-      tempInput.delete();
+      Files.delete(tempInput);
       FSTCompletionBuilder builder = new FSTCompletionBuilder(
           buckets, sorter = new ExternalRefSorter(new OfflineSorter()), sharedTailLength);
 
@@ -231,17 +233,17 @@ public class FSTCompletionLookup extends Lookup implements Accountable {
       
       success = true;
     } finally {
-      if (success) 
-        IOUtils.close(reader, writer, sorter);
-      else 
-        IOUtils.closeWhileHandlingException(reader, writer, sorter);
+      IOUtils.closeWhileHandlingException(reader, writer, sorter);
 
-      tempInput.delete();
-      tempSorted.delete();
+      if (success) {
+        Files.delete(tempSorted);
+      } else {
+        IOUtils.deleteFilesIgnoringExceptions(tempInput, tempSorted);
+      }
     }
   }
   
-  /** weight -> cost */
+  /** weight -&gt; cost */
   private static int encodeWeight(long value) {
     if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
       throw new UnsupportedOperationException("cannot encode value: " + value);
@@ -310,6 +312,18 @@ public class FSTCompletionLookup extends Lookup implements Accountable {
       mem += higherWeightsCompletion.getFST().ramBytesUsed();
     }
     return mem;
+  }
+
+  @Override
+  public Collection<Accountable> getChildResources() {
+    List<Accountable> resources = new ArrayList<>();
+    if (normalCompletion != null) {
+      resources.add(Accountables.namedAccountable("fst", normalCompletion.getFST()));
+    }
+    if (higherWeightsCompletion != null && (normalCompletion == null || normalCompletion.getFST() != higherWeightsCompletion.getFST())) {
+      resources.add(Accountables.namedAccountable("higher weights fst", higherWeightsCompletion.getFST()));
+    }
+    return Collections.unmodifiableList(resources);
   }
 
   @Override

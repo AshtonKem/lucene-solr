@@ -17,6 +17,7 @@ package org.apache.solr.util;
  */
 
 import org.apache.lucene.util.PriorityQueue;
+import org.apache.solr.common.util.Cache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,7 +35,7 @@ import java.lang.ref.WeakReference;
 /**
  * A LRU cache implementation based upon ConcurrentHashMap and other techniques to reduce
  * contention and synchronization overhead to utilize multiple CPU cores more effectively.
- * <p/>
+ * <p>
  * Note that the implementation does not follow a true LRU (least-recently-used) eviction
  * strategy. Instead it strives to remove least recently used items but when the initial
  * cleanup does not remove enough items to reach the 'acceptableWaterMark' limit, it can
@@ -43,7 +44,7 @@ import java.lang.ref.WeakReference;
  *
  * @since solr 1.4
  */
-public class ConcurrentLRUCache<K,V> {
+public class ConcurrentLRUCache<K,V> implements Cache<K,V> {
   private static Logger log = LoggerFactory.getLogger(ConcurrentLRUCache.class);
 
   private final ConcurrentHashMap<Object, CacheEntry<K,V>> map;
@@ -85,6 +86,7 @@ public class ConcurrentLRUCache<K,V> {
     islive = live;
   }
 
+  @Override
   public V get(K key) {
     CacheEntry<K,V> e = map.get(key);
     if (e == null) {
@@ -95,6 +97,7 @@ public class ConcurrentLRUCache<K,V> {
     return e.value;
   }
 
+  @Override
   public V remove(K key) {
     CacheEntry<K,V> cacheEntry = map.remove(key);
     if (cacheEntry != null) {
@@ -104,6 +107,7 @@ public class ConcurrentLRUCache<K,V> {
     return null;
   }
 
+  @Override
   public V put(K key, V val) {
     if (val == null) return null;
     CacheEntry<K,V> e = new CacheEntry<>(key, val, stats.accessCounter.incrementAndGet());
@@ -122,11 +126,11 @@ public class ConcurrentLRUCache<K,V> {
 
     // Check if we need to clear out old entries from the cache.
     // isCleaning variable is checked instead of markAndSweepLock.isLocked()
-    // for performance because every put invokation will check until
+    // for performance because every put invocation will check until
     // the size is back to an acceptable level.
     //
     // There is a race between the check and the call to markAndSweep, but
-    // it's unimportant because markAndSweep actually aquires the lock or returns if it can't.
+    // it's unimportant because markAndSweep actually acquires the lock or returns if it can't.
     //
     // Thread safety note: isCleaning read is piggybacked (comes after) other volatile reads
     // in this method.
@@ -161,7 +165,7 @@ public class ConcurrentLRUCache<K,V> {
   private void markAndSweep() {
     // if we want to keep at least 1000 entries, then timestamps of
     // current through current-1000 are guaranteed not to be the oldest (but that does
-    // not mean there are 1000 entries in that group... it's acutally anywhere between
+    // not mean there are 1000 entries in that group... it's actually anywhere between
     // 1 and 1000).
     // Also, if we want to remove 500 entries, then
     // oldestEntry through oldestEntry+500 are guaranteed to be
@@ -185,7 +189,7 @@ public class ConcurrentLRUCache<K,V> {
       int wantToKeep = lowerWaterMark;
       int wantToRemove = sz - lowerWaterMark;
 
-      @SuppressWarnings("unchecked") // generic array's are anoying
+      @SuppressWarnings("unchecked") // generic array's are annoying
       CacheEntry<K,V>[] eset = new CacheEntry[sz];
       int eSize = 0;
 
@@ -245,7 +249,7 @@ public class ConcurrentLRUCache<K,V> {
             // this entry is guaranteed not to be in the bottom
             // group, so do nothing but remove it from the eset.
             numKept++;
-            // remove the entry by moving the last element to it's position
+            // remove the entry by moving the last element to its position
             eset[i] = eset[eSize-1];
             eSize--;
 
@@ -258,7 +262,7 @@ public class ConcurrentLRUCache<K,V> {
             evictEntry(ce.key);
             numRemoved++;
 
-            // remove the entry by moving the last element to it's position
+            // remove the entry by moving the last element to its position
             eset[i] = eset[eSize-1];
             eSize--;
           } else {
@@ -468,6 +472,7 @@ public class ConcurrentLRUCache<K,V> {
     return stats.size.get();
   }
 
+  @Override
   public void clear() {
     map.clear();
   }
@@ -623,8 +628,8 @@ public class ConcurrentLRUCache<K,V> {
   @Override
   protected void finalize() throws Throwable {
     try {
-      if(!isDestroyed){
-        log.error("ConcurrentLRUCache was not destroyed prior to finalize(), indicates a bug -- POSSIBLE RESOURCE LEAK!!!");
+      if(!isDestroyed && (cleanupThread != null)){
+        log.error("ConcurrentLRUCache created with a thread and was not destroyed prior to finalize(), indicates a bug -- POSSIBLE RESOURCE LEAK!!!");
         destroy();
       }
     } finally {

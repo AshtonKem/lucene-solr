@@ -31,7 +31,7 @@ import org.apache.lucene.util.AttributeFactory;
  * algorithm, as specified in 
  * <a href="http://unicode.org/reports/tr29/">Unicode Standard Annex #29</a> 
  * URLs and email addresses are also tokenized according to the relevant RFCs.
- * <p/>
+ * <p>
  * Tokens produced are of the following types:
  * <ul>
  *   <li>&lt;ALPHANUM&gt;: A sequence of alphabetic and numeric characters</li>
@@ -47,7 +47,7 @@ import org.apache.lucene.util.AttributeFactory;
 
 public final class UAX29URLEmailTokenizer extends Tokenizer {
   /** A private instance of the JFlex-constructed scanner */
-  private final StandardTokenizerInterface scanner;
+  private final UAX29URLEmailTokenizerImpl scanner;
   
   public static final int ALPHANUM          = 0;
   public static final int NUM               = 1;
@@ -83,6 +83,7 @@ public final class UAX29URLEmailTokenizer extends Tokenizer {
       throw new IllegalArgumentException("maxTokenLength must be greater than zero");
     }
     this.maxTokenLength = length;
+    scanner.setBufferSize(Math.min(length, 1024 * 1024)); // limit buffer size to 1M chars
   }
 
   /** @see #setMaxTokenLength */
@@ -107,7 +108,7 @@ public final class UAX29URLEmailTokenizer extends Tokenizer {
     this.scanner = getScanner();
   }
 
-  private StandardTokenizerInterface getScanner() {
+  private UAX29URLEmailTokenizerImpl getScanner() {
     return new UAX29URLEmailTokenizerImpl(input);
   }
 
@@ -126,7 +127,7 @@ public final class UAX29URLEmailTokenizer extends Tokenizer {
     while(true) {
       int tokenType = scanner.getNextToken();
 
-      if (tokenType == StandardTokenizerInterface.YYEOF) {
+      if (tokenType == UAX29URLEmailTokenizerImpl.YYEOF) {
         return false;
       }
 

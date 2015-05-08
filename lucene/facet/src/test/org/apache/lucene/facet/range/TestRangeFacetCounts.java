@@ -31,8 +31,8 @@ import org.apache.lucene.document.FloatField;
 import org.apache.lucene.document.LongField;
 import org.apache.lucene.document.NumericDocValuesField;
 import org.apache.lucene.facet.DrillDownQuery;
-import org.apache.lucene.facet.DrillSideways.DrillSidewaysResult;
 import org.apache.lucene.facet.DrillSideways;
+import org.apache.lucene.facet.DrillSideways.DrillSidewaysResult;
 import org.apache.lucene.facet.FacetField;
 import org.apache.lucene.facet.FacetResult;
 import org.apache.lucene.facet.FacetTestCase;
@@ -44,10 +44,9 @@ import org.apache.lucene.facet.MultiFacets;
 import org.apache.lucene.facet.taxonomy.TaxonomyReader;
 import org.apache.lucene.facet.taxonomy.directory.DirectoryTaxonomyReader;
 import org.apache.lucene.facet.taxonomy.directory.DirectoryTaxonomyWriter;
-import org.apache.lucene.index.AtomicReader;
-import org.apache.lucene.index.AtomicReaderContext;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.RandomIndexWriter;
 import org.apache.lucene.queries.function.FunctionValues;
 import org.apache.lucene.queries.function.ValueSource;
@@ -55,17 +54,14 @@ import org.apache.lucene.queries.function.docvalues.DoubleDocValues;
 import org.apache.lucene.queries.function.valuesource.DoubleFieldSource;
 import org.apache.lucene.queries.function.valuesource.FloatFieldSource;
 import org.apache.lucene.queries.function.valuesource.LongFieldSource;
-import org.apache.lucene.search.CachingWrapperFilter;
 import org.apache.lucene.search.DocIdSet;
-import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.Filter;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.MatchAllDocsQuery;
-import org.apache.lucene.search.NumericRangeFilter;
 import org.apache.lucene.search.NumericRangeQuery;
 import org.apache.lucene.search.QueryWrapperFilter;
 import org.apache.lucene.store.Directory;
-import org.apache.lucene.util.FixedBitSet;
+import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.TestUtil;
 
@@ -479,9 +475,9 @@ public class TestRangeFacetCounts extends FacetTestCase {
       Filter fastMatchFilter;
       if (random().nextBoolean()) {
         if (random().nextBoolean()) {
-          fastMatchFilter = NumericRangeFilter.newLongRange("field", minValue, maxValue, true, true);
+          fastMatchFilter = new QueryWrapperFilter(NumericRangeQuery.newLongRange("field", minValue, maxValue, true, true));
         } else {
-          fastMatchFilter = NumericRangeFilter.newLongRange("field", minAcceptedValue, maxAcceptedValue, true, true);
+          fastMatchFilter = new QueryWrapperFilter(NumericRangeQuery.newLongRange("field", minAcceptedValue, maxAcceptedValue, true, true));
         }
       } else {
         fastMatchFilter = null;
@@ -503,11 +499,7 @@ public class TestRangeFacetCounts extends FacetTestCase {
         // Test drill-down:
         DrillDownQuery ddq = new DrillDownQuery(config);
         if (random().nextBoolean()) {
-          if (random().nextBoolean()) {
-            ddq.add("field", NumericRangeFilter.newLongRange("field", range.min, range.max, range.minInclusive, range.maxInclusive));
-          } else {
-            ddq.add("field", NumericRangeQuery.newLongRange("field", range.min, range.max, range.minInclusive, range.maxInclusive));
-          }
+          ddq.add("field", NumericRangeQuery.newLongRange("field", range.min, range.max, range.minInclusive, range.maxInclusive));
         } else {
           ddq.add("field", range.getFilter(fastMatchFilter, vs));
         }
@@ -638,9 +630,9 @@ public class TestRangeFacetCounts extends FacetTestCase {
       Filter fastMatchFilter;
       if (random().nextBoolean()) {
         if (random().nextBoolean()) {
-          fastMatchFilter = NumericRangeFilter.newFloatRange("field", minValue, maxValue, true, true);
+          fastMatchFilter = new QueryWrapperFilter(NumericRangeQuery.newFloatRange("field", minValue, maxValue, true, true));
         } else {
-          fastMatchFilter = NumericRangeFilter.newFloatRange("field", minAcceptedValue, maxAcceptedValue, true, true);
+          fastMatchFilter = new QueryWrapperFilter(NumericRangeQuery.newFloatRange("field", minAcceptedValue, maxAcceptedValue, true, true));
         }
       } else {
         fastMatchFilter = null;
@@ -662,11 +654,7 @@ public class TestRangeFacetCounts extends FacetTestCase {
         // Test drill-down:
         DrillDownQuery ddq = new DrillDownQuery(config);
         if (random().nextBoolean()) {
-          if (random().nextBoolean()) {
-            ddq.add("field", NumericRangeFilter.newFloatRange("field", (float) range.min, (float) range.max, range.minInclusive, range.maxInclusive));
-          } else {
-            ddq.add("field", NumericRangeQuery.newFloatRange("field", (float) range.min, (float) range.max, range.minInclusive, range.maxInclusive));
-          }
+          ddq.add("field", NumericRangeQuery.newFloatRange("field", (float) range.min, (float) range.max, range.minInclusive, range.maxInclusive));
         } else {
           ddq.add("field", range.getFilter(fastMatchFilter, vs));
         }
@@ -781,9 +769,9 @@ public class TestRangeFacetCounts extends FacetTestCase {
       Filter fastMatchFilter;
       if (random().nextBoolean()) {
         if (random().nextBoolean()) {
-          fastMatchFilter = NumericRangeFilter.newDoubleRange("field", minValue, maxValue, true, true);
+          fastMatchFilter = new QueryWrapperFilter(NumericRangeQuery.newDoubleRange("field", minValue, maxValue, true, true));
         } else {
-          fastMatchFilter = NumericRangeFilter.newDoubleRange("field", minAcceptedValue, maxAcceptedValue, true, true);
+          fastMatchFilter = new QueryWrapperFilter(NumericRangeQuery.newDoubleRange("field", minAcceptedValue, maxAcceptedValue, true, true));
         }
       } else {
         fastMatchFilter = null;
@@ -805,11 +793,7 @@ public class TestRangeFacetCounts extends FacetTestCase {
         // Test drill-down:
         DrillDownQuery ddq = new DrillDownQuery(config);
         if (random().nextBoolean()) {
-          if (random().nextBoolean()) {
-            ddq.add("field", NumericRangeFilter.newDoubleRange("field", range.min, range.max, range.minInclusive, range.maxInclusive));
-          } else {
-            ddq.add("field", NumericRangeQuery.newDoubleRange("field", range.min, range.max, range.minInclusive, range.maxInclusive));
-          }
+          ddq.add("field", NumericRangeQuery.newDoubleRange("field", range.min, range.max, range.minInclusive, range.maxInclusive));
         } else {
           ddq.add("field", range.getFilter(fastMatchFilter, vs));
         }
@@ -824,7 +808,6 @@ public class TestRangeFacetCounts extends FacetTestCase {
 
   // LUCENE-5178
   public void testMissingValues() throws Exception {
-    assumeTrue("codec does not support docsWithField", defaultCodecSupportsDocsWithField());
     Directory d = newDirectory();
     RandomIndexWriter w = new RandomIndexWriter(random(), d);
     Document doc = new Document();
@@ -860,6 +843,42 @@ public class TestRangeFacetCounts extends FacetTestCase {
     IOUtils.close(r, d);
   }
 
+  private static class UsedFilter extends Filter {
+    
+    private final AtomicBoolean used;
+    private final Filter in;
+    
+    UsedFilter(Filter in, AtomicBoolean used) {
+      this.in = in;
+      this.used = used;
+    }
+
+    @Override
+    public DocIdSet getDocIdSet(LeafReaderContext context, Bits acceptDocs)
+        throws IOException {
+      used.set(true);
+      return in.getDocIdSet(context, acceptDocs);
+    }
+
+    @Override
+    public String toString(String field) {
+      return in.toString(field);
+    }
+    
+    @Override
+    public boolean equals(Object obj) {
+      if (super.equals(obj) == false) {
+        return false;
+      }
+      return in.equals(((UsedFilter) obj).in);
+    }
+
+    @Override
+    public int hashCode() {
+      return 31 * super.hashCode() + in.hashCode();
+    }
+  }
+
   public void testCustomDoublesValueSource() throws Exception {
     Directory dir = newDirectory();
     RandomIndexWriter writer = new RandomIndexWriter(random(), dir);
@@ -875,7 +894,7 @@ public class TestRangeFacetCounts extends FacetTestCase {
     final ValueSource vs = new ValueSource() {
         @SuppressWarnings("rawtypes")
         @Override
-        public FunctionValues getValues(Map ignored, AtomicReaderContext ignored2) {
+        public FunctionValues getValues(Map ignored, LeafReaderContext ignored2) {
           return new DoubleDocValues(null) {
             @Override
             public double doubleVal(int doc) {
@@ -886,12 +905,12 @@ public class TestRangeFacetCounts extends FacetTestCase {
 
         @Override
         public boolean equals(Object o) {
-          throw new UnsupportedOperationException();
+          return o != null && getClass() == o.getClass();
         }
 
         @Override
         public int hashCode() {
-          throw new UnsupportedOperationException();
+          return getClass().hashCode();
         }
 
         @Override
@@ -920,16 +939,8 @@ public class TestRangeFacetCounts extends FacetTestCase {
     final AtomicBoolean filterWasUsed = new AtomicBoolean();
     if (random().nextBoolean()) {
       // Sort of silly:
-      fastMatchFilter = new CachingWrapperFilter(new QueryWrapperFilter(new MatchAllDocsQuery())) {
-          @Override
-          protected DocIdSet cacheImpl(DocIdSetIterator iterator, AtomicReader reader)
-            throws IOException {
-            final FixedBitSet cached = new FixedBitSet(reader.maxDoc());
-            filterWasUsed.set(true);
-            cached.or(iterator);
-            return cached;
-          }
-        };
+      final Filter in = new QueryWrapperFilter(new MatchAllDocsQuery());
+      fastMatchFilter = new UsedFilter(in, filterWasUsed);
     } else {
       fastMatchFilter = null;
     }

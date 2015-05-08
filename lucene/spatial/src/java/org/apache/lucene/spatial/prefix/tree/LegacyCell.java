@@ -17,15 +17,15 @@ package org.apache.lucene.spatial.prefix.tree;
  * limitations under the License.
  */
 
+import java.util.Collection;
+
 import com.spatial4j.core.shape.Point;
 import com.spatial4j.core.shape.Shape;
 import com.spatial4j.core.shape.SpatialRelation;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.StringHelper;
 
-import java.util.Collection;
-
-/** The base for the original two SPT's: Geohash & Quad. Don't subclass this for new SPTs.
+/** The base for the original two SPT's: Geohash and Quad. Don't subclass this for new SPTs.
  * @lucene.internal */
 //public for RPT pruneLeafyBranches code
 public abstract class LegacyCell implements Cell {
@@ -36,9 +36,9 @@ public abstract class LegacyCell implements Cell {
   private static final byte LEAF_BYTE = '+';//NOTE: must sort before letters & numbers
 
   //Arguably we could simply use a BytesRef, using an extra Object.
-  private byte[] bytes;//generally bigger to potentially hold a leaf
-  private int b_off;
-  private int b_len;//doesn't reflect leaf; same as getLevel()
+  protected byte[] bytes;//generally bigger to potentially hold a leaf
+  protected int b_off;
+  protected int b_len;//doesn't reflect leaf; same as getLevel()
 
   protected boolean isLeaf;
 
@@ -64,29 +64,21 @@ public abstract class LegacyCell implements Cell {
     shape = null;
     this.bytes = bytes.bytes;
     this.b_off = bytes.offset;
-    this.b_len = bytes.length;
+    this.b_len = (short) bytes.length;
     readLeafAdjust();
   }
 
-  private void readLeafAdjust() {
+  protected void readLeafAdjust() {
     isLeaf = (b_len > 0 && bytes[b_off + b_len - 1] == LEAF_BYTE);
     if (isLeaf)
       b_len--;
+    if (getLevel() == getMaxLevels())
+      isLeaf = true;
   }
 
-//  @Override
-//  public void copyFrom(Cell source) {
-//    LegacyCell src = (LegacyCell) source;
-//    shapeRel = src.shapeRel;
-//    shape = src.shape;
-//    isLeaf = src.isLeaf;
-//    //we don't actually copy the bytes because in LegacyCell the bytes aren't modified. (leaf byte doesn't count)
-//    bytes = src.bytes;
-//    b_off = src.b_off;
-//    b_len = src.b_len;
-//  }
-
   protected abstract SpatialPrefixTree getGrid();
+
+  protected abstract int getMaxLevels();
 
   @Override
   public SpatialRelation getShapeRel() {
@@ -111,7 +103,7 @@ public abstract class LegacyCell implements Cell {
   @Override
   public BytesRef getTokenBytesWithLeaf(BytesRef result) {
     result = getTokenBytesNoLeaf(result);
-    if (!isLeaf)
+    if (!isLeaf || getLevel() == getMaxLevels())
       return result;
     if (result.bytes.length < result.offset + result.length + 1) {
       assert false : "Not supposed to happen; performance bug";
@@ -154,7 +146,7 @@ public abstract class LegacyCell implements Cell {
   /**
    * Performant implementations are expected to implement this efficiently by
    * considering the current cell's boundary.
-   * <p/>
+   * <p>
    * Precondition: Never called when getLevel() == maxLevel.
    * Precondition: this.getShape().relate(p) != DISJOINT.
    */
@@ -169,7 +161,7 @@ public abstract class LegacyCell implements Cell {
   protected abstract Collection<Cell> getSubCells();
 
   /**
-   * {@link #getSubCells()}.size() -- usually a constant. Should be >=2
+   * {@link #getSubCells()}.size() -- usually a constant. Should be &gt;=2
    */
   public abstract int getSubCellsSize();
 
@@ -210,7 +202,7 @@ public abstract class LegacyCell implements Cell {
 
   /** Copied from {@link BytesRef#compareTo(BytesRef)}.
    * This is to avoid creating a BytesRef. */
-  private static int compare(byte[] aBytes, int aUpto, int a_length, byte[] bBytes, int bUpto, int b_length) {
+  protected static int compare(byte[] aBytes, int aUpto, int a_length, byte[] bBytes, int bUpto, int b_length) {
     final int aStop = aUpto + Math.min(a_length, b_length);
     while(aUpto < aStop) {
       int aByte = aBytes[aUpto++] & 0xff;

@@ -67,14 +67,26 @@ public class TestICUTokenizer extends BaseTokenStreamTestCase {
     assertTokenStreamContents(tokenizer, expected);
   }
   
-  private Analyzer a = new Analyzer() {
-    @Override
-    protected TokenStreamComponents createComponents(String fieldName) {
-      Tokenizer tokenizer = new ICUTokenizer(newAttributeFactory(), new DefaultICUTokenizerConfig(false));
-      TokenFilter filter = new ICUNormalizer2Filter(tokenizer);
-      return new TokenStreamComponents(tokenizer, filter);
-    }
-  };
+  private Analyzer a; 
+  
+  @Override
+  public void setUp() throws Exception {
+    super.setUp();
+    a = new Analyzer() {
+      @Override
+      protected TokenStreamComponents createComponents(String fieldName) {
+        Tokenizer tokenizer = new ICUTokenizer(newAttributeFactory(), new DefaultICUTokenizerConfig(false));
+        TokenFilter filter = new ICUNormalizer2Filter(tokenizer);
+        return new TokenStreamComponents(tokenizer, filter);
+      }
+    };
+  }
+  
+  @Override
+  public void tearDown() throws Exception {
+    a.close();
+    super.tearDown();
+  }
 
   public void testArmenian() throws Exception {
     assertAnalyzesTo(a, "Վիքիպեդիայի 13 միլիոն հոդվածները (4,600` հայերեն վիքիպեդիայում) գրվել են կամավորների կողմից ու համարյա բոլոր հոդվածները կարող է խմբագրել ցանկաց մարդ ով կարող է բացել Վիքիպեդիայի կայքը։",
@@ -120,6 +132,10 @@ public class TestICUTokenizer extends BaseTokenStreamTestCase {
   public void testLao() throws Exception {
     assertAnalyzesTo(a, "ກວ່າດອກ", new String[] { "ກວ່າ", "ດອກ" });
     assertAnalyzesTo(a, "ພາສາລາວ", new String[] { "ພາສາ", "ລາວ"}, new String[] { "<ALPHANUM>", "<ALPHANUM>" });
+  }
+  
+  public void testMyanmar() throws Exception {
+    assertAnalyzesTo(a, "သက်ဝင်လှုပ်ရှားစေပြီး", new String[] { "သက်ဝင်", "လှုပ်ရှား", "စေ", "ပြီး" });
   }
   
   public void testThai() throws Exception {

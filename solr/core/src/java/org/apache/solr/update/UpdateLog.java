@@ -24,6 +24,7 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FilenameFilter;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -68,6 +69,7 @@ import org.slf4j.LoggerFactory;
 
 /** @lucene.experimental */
 public class UpdateLog implements PluginInfoInitialized {
+  private static final long STATUS_TIME = TimeUnit.NANOSECONDS.convert(60, TimeUnit.SECONDS);
   public static String LOG_FILENAME_PATTERN = "%s.%019d";
   public static String TLOG_NAME="tlog";
 
@@ -128,7 +130,7 @@ public class UpdateLog implements PluginInfoInitialized {
 
   protected TransactionLog tlog;
   protected TransactionLog prevTlog;
-  protected Deque<TransactionLog> logs = new LinkedList<>();  // list of recent logs, newest first
+  protected final Deque<TransactionLog> logs = new LinkedList<>();  // list of recent logs, newest first
   protected LinkedList<TransactionLog> newestLogsOnStartup = new LinkedList<>();
   protected int numOldRecords;  // number of records in the recent logs
 
@@ -140,7 +142,8 @@ public class UpdateLog implements PluginInfoInitialized {
 
   protected final int numDeletesToKeep = 1000;
   protected final int numDeletesByQueryToKeep = 100;
-  public final int numRecordsToKeep = 100;
+  protected int numRecordsToKeep;
+  protected int maxNumLogsToKeep;
 
   // keep track of deletes only... this is not updated on an add
   protected LinkedHashMap<BytesRef, LogPtr> oldDeletes = new LinkedHashMap<BytesRef, LogPtr>(numDeletesToKeep) {
@@ -195,7 +198,7 @@ public class UpdateLog implements PluginInfoInitialized {
 
   public long getTotalLogsSize() {
     long size = 0;
-    synchronized (logs) {
+    synchronized (this) {
       for (TransactionLog log : logs) {
         size += log.getLogSize();
       }
@@ -204,17 +207,40 @@ public class UpdateLog implements PluginInfoInitialized {
   }
 
   public long getTotalLogsNumber() {
-    return logs.size();
+    synchronized (this) {
+      return logs.size();
+    }
   }
 
   public VersionInfo getVersionInfo() {
     return versionInfo;
   }
 
+  public int getNumRecordsToKeep() {
+    return numRecordsToKeep;
+  }
+
+  public int getMaxNumLogsToKeep() {
+    return maxNumLogsToKeep;
+  }
+
+  protected static int objToInt(Object obj, int def) {
+    if (obj != null) {
+      return Integer.parseInt(obj.toString());
+    }
+    else return def;
+  }
+
   @Override
   public void init(PluginInfo info) {
     dataDir = (String)info.initArgs.get("dir");
     defaultSyncLevel = SyncLevel.getSyncLevel((String)info.initArgs.get("syncLevel"));
+
+    numRecordsToKeep = objToInt(info.initArgs.get("numRecordsToKeep"), 100);
+    maxNumLogsToKeep = objToInt(info.initArgs.get("maxNumLogsToKeep"), 10);
+
+    log.info("Initializing UpdateLog: dataDir={} defaultSyncLevel={} numRecordsToKeep={} maxNumLogsToKeep={}",
+        dataDir, defaultSyncLevel, numRecordsToKeep, maxNumLogsToKeep);
   }
 
   /* Note, when this is called, uhandler is not completely constructed.
@@ -313,9 +339,9 @@ public class UpdateLog implements PluginInfoInitialized {
   }
 
   /* Takes over ownership of the log, keeping it until no longer needed
-     and then decrementing it's reference and dropping it.
+     and then decrementing its reference and dropping it.
    */
-  protected void addOldLog(TransactionLog oldLog, boolean removeOld) {
+  protected synchronized void addOldLog(TransactionLog oldLog, boolean removeOld) {
     if (oldLog == null) return;
 
     numOldRecords += oldLog.numRecords();
@@ -331,7 +357,7 @@ public class UpdateLog implements PluginInfoInitialized {
       int nrec = log.numRecords();
       // remove oldest log if we don't need it to keep at least numRecordsToKeep, or if
       // we already have the limit of 10 log files.
-      if (currRecords - nrec >= numRecordsToKeep || logs.size() >= 10) {
+      if (currRecords - nrec >= numRecordsToKeep || (maxNumLogsToKeep > 0 && logs.size() >= maxNumLogsToKeep)) {
         currRecords -= nrec;
         numOldRecords -= nrec;
         logs.removeLast().decref();  // dereference so it will be deleted when no longer in use
@@ -794,7 +820,7 @@ public class UpdateLog implements PluginInfoInitialized {
           continue;
         }
       } catch (IOException e) {
-        log.error("Error inspecting tlog " + ll);
+        log.error("Error inspecting tlog " + ll, e);
         ll.decref();
         continue;
       }
@@ -849,11 +875,7 @@ public class UpdateLog implements PluginInfoInitialized {
   
   public void close(boolean committed, boolean deleteOnClose) {
     synchronized (this) {
-      try {
-        ExecutorUtil.shutdownNowAndAwaitTermination(recoveryExecutor);
-      } catch (Exception e) {
-        SolrException.log(log, e);
-      }
+      recoveryExecutor.shutdown(); // no new tasks
 
       // Don't delete the old tlogs, we want to be able to replay from them and retrieve old versions
 
@@ -867,6 +889,11 @@ public class UpdateLog implements PluginInfoInitialized {
         log.forceClose();
       }
 
+      try {
+        ExecutorUtil.shutdownNowAndAwaitTermination(recoveryExecutor);
+      } catch (Exception e) {
+        SolrException.log(log, e);
+      }
     }
   }
 
@@ -1243,7 +1270,7 @@ public class UpdateLog implements PluginInfoInitialized {
     public void doReplay(TransactionLog translog) {
       try {
         loglog.warn("Starting log replay " + translog + " active="+activeLog + " starting pos=" + recoveryInfo.positionOfStart);
-
+        long lastStatusTime = System.nanoTime();
         tlogReader = translog.getReader(recoveryInfo.positionOfStart);
 
         // NOTE: we don't currently handle a core reload during recovery.  This would cause the core
@@ -1254,12 +1281,27 @@ public class UpdateLog implements PluginInfoInitialized {
 
         long commitVersion = 0;
         int operationAndFlags = 0;
+        long nextCount = 0;
 
         for(;;) {
           Object o = null;
           if (cancelApplyBufferUpdate) break;
           try {
             if (testing_logReplayHook != null) testing_logReplayHook.run();
+            if (nextCount++ % 1000 == 0) {
+              long now = System.nanoTime();
+              if (now - lastStatusTime > STATUS_TIME) {
+                lastStatusTime = now;
+                long cpos = tlogReader.currentPos();
+                long csize = tlogReader.currentSize();
+                loglog.info(
+                        "log replay status {} active={} starting pos={} current pos={} current size={} % read={}",
+                        translog, activeLog, recoveryInfo.positionOfStart, cpos, csize,
+                        Math.round(cpos / (double) csize * 100.));
+                
+              }
+            }
+            
             o = null;
             o = tlogReader.next();
             if (o == null && activeLog) {
@@ -1283,10 +1325,6 @@ public class UpdateLog implements PluginInfoInitialized {
                 // versionInfo.unblockUpdates();
               }
             }
-          } catch (InterruptedException e) {
-            SolrException.log(log,e);
-          } catch (IOException e) {
-            SolrException.log(log,e);
           } catch (Exception e) {
             SolrException.log(log,e);
           }
@@ -1420,7 +1458,7 @@ public class UpdateLog implements PluginInfoInitialized {
     this.cancelApplyBufferUpdate = true;
   }
 
-  ThreadPoolExecutor recoveryExecutor = new ThreadPoolExecutor(0,
+  ThreadPoolExecutor recoveryExecutor = new ExecutorUtil.MDCAwareThreadPoolExecutor(0,
       Integer.MAX_VALUE, 1, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(),
       new DefaultSolrThreadFactory("recoveryExecutor"));
 
@@ -1428,10 +1466,8 @@ public class UpdateLog implements PluginInfoInitialized {
   public static void deleteFile(File file) {
     boolean success = false;
     try {
-      success = file.delete();
-      if (!success) {
-        log.error("Error deleting file: " + file);
-      }
+      Files.deleteIfExists(file.toPath());
+      success = true;
     } catch (Exception e) {
       log.error("Error deleting file: " + file, e);
     }
@@ -1473,9 +1509,11 @@ public class UpdateLog implements PluginInfoInitialized {
       String[] files = getLogList(tlogDir);
       for (String file : files) {
         File f = new File(tlogDir, file);
-        boolean s = f.delete();
-        if (!s) {
-          log.error("Could not remove tlog file:" + f);
+        try {
+          Files.delete(f.toPath());
+        } catch (IOException cause) {
+          // NOTE: still throws SecurityException as before.
+          log.error("Could not remove tlog file:" + f, cause);
         }
       }
     }

@@ -75,7 +75,7 @@ class BytesStore extends DataOutput implements Accountable {
     nextWrite = blocks.get(blocks.size()-1).length;
   }
 
-  /** Absolute write byte; you must ensure dest is < max
+  /** Absolute write byte; you must ensure dest is &lt; max
    *  position written so far. */
   public void writeByte(int dest, byte b) {
     int blockIndex = dest >> blockBits;
@@ -481,4 +481,8 @@ class BytesStore extends DataOutput implements Accountable {
     return size;
   }
 
+  @Override
+  public String toString() {
+    return getClass().getSimpleName() + "(numBlocks=" + blocks.size() + ")";
+  }
 }

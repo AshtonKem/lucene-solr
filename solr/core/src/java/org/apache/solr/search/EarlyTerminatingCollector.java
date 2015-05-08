@@ -19,7 +19,7 @@ package org.apache.solr.search;
 
 import java.io.IOException;
 
-import org.apache.lucene.index.AtomicReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.search.LeafCollector;
 import org.apache.lucene.search.Collector;
 import org.apache.lucene.search.FilterLeafCollector;
@@ -56,22 +56,12 @@ public class EarlyTerminatingCollector extends FilterCollector {
   }
 
   @Override
-  public LeafCollector getLeafCollector(AtomicReaderContext context)
+  public LeafCollector getLeafCollector(LeafReaderContext context)
       throws IOException {
     prevReaderCumulativeSize += currentReaderSize; // not current any more
     currentReaderSize = context.reader().maxDoc() - 1;
 
     return new FilterLeafCollector(super.getLeafCollector(context)) {
-
-      /**
-       * This collector requires that docs be collected in order, otherwise
-       * the computed number of scanned docs in the resulting
-       * {@link EarlyTerminatingCollectorException} will be meaningless.
-       */
-      @Override
-      public boolean acceptsDocsOutOfOrder() {
-        return false;
-      }
 
       @Override
       public void collect(int doc) throws IOException {

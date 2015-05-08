@@ -41,7 +41,7 @@ import java.util.Iterator;
  * values (ie: <code>64, 128, 1024</code>) in the field 
  * <code>smallestFileSize</code> then only the smallest value 
  * (ie: <code>64</code>) will be kept in that field.
- * <p>
+ * <br>
  *
  * <pre class="prettyprint">
  *  &lt;processor class="solr.MinFieldValueUpdateProcessorFactory"&gt;
@@ -59,8 +59,9 @@ public final class MinFieldValueUpdateProcessorFactory extends FieldValueSubsetU
   public Collection pickSubset(Collection values) {
     Collection result = values;
     try {
-      result = Collections.singletonList
-        (Collections.min(values));
+      // NOTE: the extra cast to Object is needed to prevent compile
+      // errors on Eclipse Compiler (ecj) used for javadoc lint
+      result = Collections.singletonList((Object) Collections.min(values));
     } catch (ClassCastException e) {
       throw new SolrException
         (BAD_REQUEST, 

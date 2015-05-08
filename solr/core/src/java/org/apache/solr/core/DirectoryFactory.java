@@ -19,13 +19,14 @@ package org.apache.solr.core;
 
 import java.io.Closeable;
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.nio.file.NoSuchFileException;
+import java.util.Collection;
+import java.util.Collections;
 
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FlushInfo;
 import org.apache.lucene.store.IOContext;
+import org.apache.lucene.store.LockFactory;
 import org.apache.solr.common.SolrException;
 import org.apache.solr.core.CachingDirectoryFactory.CloseListener;
 import org.apache.solr.util.plugin.NamedListInitializedPlugin;
@@ -50,7 +51,7 @@ public abstract class DirectoryFactory implements NamedListInitializedPlugin,
   private static final Logger log = LoggerFactory.getLogger(DirectoryFactory.class.getName());
   
   /**
-   * Indicates a Directory will no longer be used, and when it's ref count
+   * Indicates a Directory will no longer be used, and when its ref count
    * hits 0, it can be closed. On close all directories will be closed
    * whether this has been called or not. This is simply to allow early cleanup.
    * 
@@ -76,7 +77,14 @@ public abstract class DirectoryFactory implements NamedListInitializedPlugin,
    * 
    * @throws IOException If there is a low-level I/O error.
    */
-  protected abstract Directory create(String path,  DirContext dirContext) throws IOException;
+  protected abstract Directory create(String path, LockFactory lockFactory, DirContext dirContext) throws IOException;
+  
+  /**
+   * Creates a new LockFactory for a given path.
+   * @param rawLockType A string value as passed in config. Every factory should at least support 'none' to disable locking.
+   * @throws IOException If there is a low-level I/O error.
+   */
+  protected abstract LockFactory createLockFactory(String rawLockType) throws IOException;
   
   /**
    * Returns true if a Directory exists for a given path.
@@ -134,7 +142,7 @@ public abstract class DirectoryFactory implements NamedListInitializedPlugin,
    * @throws IOException If there is a low-level I/O error.
    */
   public void move(Directory fromDir, Directory toDir, String fileName, IOContext ioContext) throws IOException {
-    fromDir.copy(toDir, fileName, fileName, ioContext);
+    toDir.copyFrom(fromDir, fileName, fileName, ioContext);
     fromDir.deleteFile(fileName);
   }
   
@@ -213,7 +221,8 @@ public abstract class DirectoryFactory implements NamedListInitializedPlugin,
   public static long sizeOf(Directory directory, String file) throws IOException {
     try {
       return directory.fileLength(file);
-    } catch (FileNotFoundException | NoSuchFileException e) {
+    } catch (IOException e) {
+      // could be a race, file no longer exists, access denied, is a directory, etc.
       return 0;
     }
   }
@@ -254,5 +263,12 @@ public abstract class DirectoryFactory implements NamedListInitializedPlugin,
     // by default, we go off the instance directory
     String instanceDir = new File(cd.getInstanceDir()).getAbsolutePath();
     return normalize(SolrResourceLoader.normalizeDir(instanceDir) + cd.getDataDir());
+  }
+
+  /**
+   * Optionally allow the DirectoryFactory to request registration of some MBeans.
+   */
+  public Collection<SolrInfoMBean> offerMBeans() {
+    return Collections.emptySet();
   }
 }

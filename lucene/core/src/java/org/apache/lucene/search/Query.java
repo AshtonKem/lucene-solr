@@ -19,10 +19,7 @@ package org.apache.lucene.search;
 
 import java.io.IOException;
 
-import java.util.Set;
-
 import org.apache.lucene.index.IndexReader;
-import org.apache.lucene.index.Term;
 
 /** The abstract base class for queries.
     <p>Instantiable subclasses are:
@@ -66,17 +63,19 @@ public abstract class Query implements Cloneable {
 
   /** Prints a query to a string. */
   @Override
-  public String toString() {
+  public final String toString() {
     return toString("");
   }
 
   /**
    * Expert: Constructs an appropriate Weight implementation for this query.
-   * 
    * <p>
    * Only implemented by primitive queries, which re-write to themselves.
+   *
+   * @param needsScores   True if document scores ({@link Scorer#score}) or match
+   *                      frequencies ({@link Scorer#freq}) are needed.
    */
-  public Weight createWeight(IndexSearcher searcher) throws IOException {
+  public Weight createWeight(IndexSearcher searcher, boolean needsScores) throws IOException {
     throw new UnsupportedOperationException("Query " + this + " does not implement createWeight");
   }
 
@@ -86,17 +85,6 @@ public abstract class Query implements Cloneable {
    */
   public Query rewrite(IndexReader reader) throws IOException {
     return this;
-  }
-  
-  /**
-   * Expert: adds all terms occurring in this query to the terms set. Only
-   * works if this query is in its {@link #rewrite rewritten} form.
-   * 
-   * @throws UnsupportedOperationException if this query is not yet rewritten
-   */
-  public void extractTerms(Set<Term> terms) {
-    // needs to be implemented by query subclasses
-    throw new UnsupportedOperationException();
   }
 
   /** Returns a clone of this query. */
@@ -111,10 +99,7 @@ public abstract class Query implements Cloneable {
 
   @Override
   public int hashCode() {
-    final int prime = 31;
-    int result = 1;
-    result = prime * result + Float.floatToIntBits(boost);
-    return result;
+    return Float.floatToIntBits(getBoost()) ^ getClass().hashCode();
   }
 
   @Override

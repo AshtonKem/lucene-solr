@@ -27,13 +27,12 @@ import java.util.regex.Pattern;
  * A {@link Transformer} implementation which uses Regular Expressions to extract, split
  * and replace data in fields.
  * </p>
- * <p/>
  * <p>
  * Refer to <a
  * href="http://wiki.apache.org/solr/DataImportHandler">http://wiki.apache.org/solr/DataImportHandler</a>
  * for more details.
  * </p>
- * <p/>
+ * <p>
  * <b>This API is experimental and may change in the future.</b>
  *
  * @since solr 1.3
@@ -122,7 +121,7 @@ public class RegexTransformer extends Transformer {
     } else if (replaceWith != null) {
       Pattern p = getPattern(reStr);
       Matcher m = p.matcher(value);
-      return m.find()? m.replaceAll(replaceWith): null;
+      return m.find() ? m.replaceAll(replaceWith) : value;
     } else {
       return readfromRegExp(reStr, value, col, groupNames);
     }

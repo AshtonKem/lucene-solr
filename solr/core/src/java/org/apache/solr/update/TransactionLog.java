@@ -24,6 +24,7 @@ import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -39,6 +40,7 @@ import org.apache.solr.common.util.DataInputInputStream;
 import org.apache.solr.common.util.FastInputStream;
 import org.apache.solr.common.util.FastOutputStream;
 import org.apache.solr.common.util.JavaBinCodec;
+import org.apache.solr.common.util.ObjectReleaseTracker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -166,9 +168,10 @@ public class TransactionLog {
         }
       } else {
         if (start > 0) {
-          log.error("New transaction log already exists:" + tlogFile + " size=" + raf.length());
+          log.warn("New transaction log already exists:" + tlogFile + " size=" + raf.length());
+          return;
         }
-        assert start==0;
+       
         if (start > 0) {
           raf.setLength(0);
         }
@@ -176,6 +179,8 @@ public class TransactionLog {
       }
 
       success = true;
+      
+      assert ObjectReleaseTracker.track(this);
 
     } catch (IOException e) {
       throw new SolrException(SolrException.ErrorCode.SERVER_ERROR, e);
@@ -543,10 +548,17 @@ public class TransactionLog {
       }
 
       if (deleteOnClose) {
-        tlogFile.delete();
+        try {
+          Files.deleteIfExists(tlogFile.toPath());
+        } catch (IOException e) {
+          // TODO: should this class care if a file couldnt be deleted?
+          // this just emulates previous behavior, where only SecurityException would be handled.
+        }
       }
     } catch (IOException e) {
       throw new SolrException(SolrException.ErrorCode.SERVER_ERROR, e);
+    } finally {
+      assert ObjectReleaseTracker.release(this);
     }
   }
   
@@ -645,6 +657,18 @@ public class TransactionLog {
       synchronized (TransactionLog.this) {
         return "LogReader{" + "file=" + tlogFile + ", position=" + fis.position() + ", end=" + fos.size() + "}";
       }
+    }
+
+    // returns best effort current position
+    // for info purposes
+    public long currentPos() {
+      return fis.position();
+    }
+    
+    // returns best effort current size
+    // for info purposes
+    public long currentSize() throws IOException {
+      return channel.size();
     }
 
   }

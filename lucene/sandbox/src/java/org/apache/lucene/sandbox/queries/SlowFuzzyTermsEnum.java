@@ -90,7 +90,7 @@ public final class SlowFuzzyTermsEnum extends FuzzyTermsEnum {
      * @throws IOException If there is a low-level I/O error.
      */
     public LinearFuzzyTermsEnum() throws IOException {
-      super(terms.iterator(null));
+      super(terms.iterator());
 
       this.text = new int[termLength - realPrefixLength];
       System.arraycopy(termText, realPrefixLength, text, 0, text.length);
@@ -110,7 +110,7 @@ public final class SlowFuzzyTermsEnum extends FuzzyTermsEnum {
      * <p>The termCompare method in FuzzyTermEnum uses Levenshtein distance to 
      * calculate the distance between the given term and the comparing term. 
      * </p>
-     * <p>If the minSimilarity is >= 1.0, this uses the maxEdits as the comparison.
+     * <p>If the minSimilarity is &gt;= 1.0, this uses the maxEdits as the comparison.
      * Otherwise, this method uses the following logic to calculate similarity.
      * <pre>
      *   similarity = 1 - ((float)distance / (float) (prefixLength + Math.min(textlen, targetlen)));

@@ -35,11 +35,10 @@ import org.apache.lucene.analysis.ja.dict.ConnectionCosts;
 import org.apache.lucene.analysis.ja.dict.UserDictionary;
 import org.apache.lucene.analysis.ja.tokenattributes.*;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
+import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.TestUtil;
 import org.apache.lucene.util.UnicodeUtil;
-import org.apache.lucene.util.LuceneTestCase.Slow;
 
-@Slow
 public class TestJapaneseTokenizer extends BaseTokenStreamTestCase {
 
   public static UserDictionary readDict() {
@@ -58,38 +57,47 @@ public class TestJapaneseTokenizer extends BaseTokenStreamTestCase {
       throw new RuntimeException(ioe);
     }
   }
-
-  private Analyzer analyzer = new Analyzer() {
-    @Override
-    protected TokenStreamComponents createComponents(String fieldName) {
-      Tokenizer tokenizer = new JapaneseTokenizer(newAttributeFactory(), readDict(), false, Mode.SEARCH);
-      return new TokenStreamComponents(tokenizer, tokenizer);
-    }
-  };
-
-  private Analyzer analyzerNormal = new Analyzer() {
-    @Override
-    protected TokenStreamComponents createComponents(String fieldName) {
-      Tokenizer tokenizer = new JapaneseTokenizer(newAttributeFactory(), readDict(), false, Mode.NORMAL);
-      return new TokenStreamComponents(tokenizer, tokenizer);
-    }
-  };
-
-  private Analyzer analyzerNoPunct = new Analyzer() {
-    @Override
-    protected TokenStreamComponents createComponents(String fieldName) {
-      Tokenizer tokenizer = new JapaneseTokenizer(newAttributeFactory(), readDict(), true, Mode.SEARCH);
-      return new TokenStreamComponents(tokenizer, tokenizer);
-    }
-  };
-
-  private Analyzer extendedModeAnalyzerNoPunct = new Analyzer() {
-    @Override
-    protected TokenStreamComponents createComponents(String fieldName) {
-      Tokenizer tokenizer = new JapaneseTokenizer(newAttributeFactory(), readDict(), true, Mode.EXTENDED);
-      return new TokenStreamComponents(tokenizer, tokenizer);
-    }
-  };
+  
+  private Analyzer analyzer, analyzerNormal, analyzerNoPunct, extendedModeAnalyzerNoPunct;
+  
+  @Override
+  public void setUp() throws Exception {
+    super.setUp();
+    analyzer = new Analyzer() {
+      @Override
+      protected TokenStreamComponents createComponents(String fieldName) {
+        Tokenizer tokenizer = new JapaneseTokenizer(newAttributeFactory(), readDict(), false, Mode.SEARCH);
+        return new TokenStreamComponents(tokenizer, tokenizer);
+      }
+    };
+    analyzerNormal = new Analyzer() {
+      @Override
+      protected TokenStreamComponents createComponents(String fieldName) {
+        Tokenizer tokenizer = new JapaneseTokenizer(newAttributeFactory(), readDict(), false, Mode.NORMAL);
+        return new TokenStreamComponents(tokenizer, tokenizer);
+      }
+    };
+    analyzerNoPunct = new Analyzer() {
+      @Override
+      protected TokenStreamComponents createComponents(String fieldName) {
+        Tokenizer tokenizer = new JapaneseTokenizer(newAttributeFactory(), readDict(), true, Mode.SEARCH);
+        return new TokenStreamComponents(tokenizer, tokenizer);
+      }
+    };
+    extendedModeAnalyzerNoPunct = new Analyzer() {
+      @Override
+      protected TokenStreamComponents createComponents(String fieldName) {
+        Tokenizer tokenizer = new JapaneseTokenizer(newAttributeFactory(), readDict(), true, Mode.EXTENDED);
+        return new TokenStreamComponents(tokenizer, tokenizer);
+      }
+    };
+  }
+  
+  @Override
+  public void tearDown() throws Exception {
+    IOUtils.close(analyzer, analyzerNormal, analyzerNoPunct, extendedModeAnalyzerNoPunct);
+    super.tearDown();
+  }
 
   public void testNormalMode() throws Exception {
     assertAnalyzesTo(analyzerNormal,
@@ -184,34 +192,34 @@ public class TestJapaneseTokenizer extends BaseTokenStreamTestCase {
 
   /** blast some random strings through the analyzer */
   public void testRandomStrings() throws Exception {
-    checkRandomData(random(), analyzer, 1000*RANDOM_MULTIPLIER);
-    checkRandomData(random(), analyzerNoPunct, 1000*RANDOM_MULTIPLIER);
+    checkRandomData(random(), analyzer, 500*RANDOM_MULTIPLIER);
+    checkRandomData(random(), analyzerNoPunct, 500*RANDOM_MULTIPLIER);
   }
   
   /** blast some random large strings through the analyzer */
   public void testRandomHugeStrings() throws Exception {
     Random random = random();
-    checkRandomData(random, analyzer, 100*RANDOM_MULTIPLIER, 8192);
-    checkRandomData(random, analyzerNoPunct, 100*RANDOM_MULTIPLIER, 8192);
+    checkRandomData(random, analyzer, 20*RANDOM_MULTIPLIER, 8192);
+    checkRandomData(random, analyzerNoPunct, 20*RANDOM_MULTIPLIER, 8192);
   }
 
   public void testRandomHugeStringsMockGraphAfter() throws Exception {
     // Randomly inject graph tokens after JapaneseTokenizer:
     Random random = random();
-    checkRandomData(random,
-                    new Analyzer() {
-                      @Override
-                      protected TokenStreamComponents createComponents(String fieldName) {
-                        Tokenizer tokenizer = new JapaneseTokenizer(newAttributeFactory(), readDict(), false, Mode.SEARCH);
-                        TokenStream graph = new MockGraphTokenFilter(random(), tokenizer);
-                        return new TokenStreamComponents(tokenizer, graph);
-                      }
-                    },
-                    100*RANDOM_MULTIPLIER, 8192);
+    Analyzer analyzer = new Analyzer() {
+      @Override
+      protected TokenStreamComponents createComponents(String fieldName) {
+        Tokenizer tokenizer = new JapaneseTokenizer(newAttributeFactory(), readDict(), false, Mode.SEARCH);
+        TokenStream graph = new MockGraphTokenFilter(random(), tokenizer);
+        return new TokenStreamComponents(tokenizer, graph);
+      }
+    };
+    checkRandomData(random, analyzer, 20*RANDOM_MULTIPLIER, 8192);
+    analyzer.close();
   }
 
   public void testLargeDocReliability() throws Exception {
-    for (int i = 0; i < 100; i++) {
+    for (int i = 0; i < 10; i++) {
       String s = TestUtil.randomUnicodeString(random(), 10000);
       try (TokenStream ts = analyzer.tokenStream("foo", s)) {
         ts.reset();
@@ -368,6 +376,7 @@ public class TestJapaneseTokenizer extends BaseTokenStreamTestCase {
                      surfaceForms);
     
     assertTrue(gv2.finish().indexOf("22.0") != -1);
+    analyzer.close();
   }
 
   private void assertReadings(String input, String... readings) throws IOException {

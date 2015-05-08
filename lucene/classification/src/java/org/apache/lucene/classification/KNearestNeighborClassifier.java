@@ -16,8 +16,17 @@
  */
 package org.apache.lucene.classification;
 
+import java.io.IOException;
+import java.io.StringReader;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
 import org.apache.lucene.analysis.Analyzer;
-import org.apache.lucene.index.AtomicReader;
+import org.apache.lucene.index.LeafReader;
+import org.apache.lucene.index.StorableField;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.queries.mlt.MoreLikeThis;
 import org.apache.lucene.search.BooleanClause;
@@ -29,11 +38,6 @@ import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.search.WildcardQuery;
 import org.apache.lucene.util.BytesRef;
 
-import java.io.IOException;
-import java.io.StringReader;
-import java.util.HashMap;
-import java.util.Map;
-
 /**
  * A k-Nearest Neighbor classifier (see <code>http://en.wikipedia.org/wiki/K-nearest_neighbors</code>) based
  * on {@link MoreLikeThis}
@@ -42,46 +46,86 @@ import java.util.Map;
  */
 public class KNearestNeighborClassifier implements Classifier<BytesRef> {
 
-  private MoreLikeThis mlt;
-  private String[] textFieldNames;
-  private String classFieldName;
-  private IndexSearcher indexSearcher;
+  private final MoreLikeThis mlt;
+  private final String[] textFieldNames;
+  private final String classFieldName;
+  private final IndexSearcher indexSearcher;
   private final int k;
-  private Query query;
-
-  private int minDocsFreq;
-  private int minTermFreq;
+  private final Query query;
 
   /**
-   * Create a {@link Classifier} using kNN algorithm
+   * Creates a {@link KNearestNeighborClassifier}.
    *
-   * @param k the number of neighbors to analyze as an <code>int</code>
+   * @param leafReader     the reader on the index to be used for classification
+   * @param analyzer       an {@link Analyzer} used to analyze unseen text
+   * @param query          a {@link Query} to eventually filter the docs used for training the classifier, or {@code null}
+   *                       if all the indexed docs should be used
+   * @param k              the no. of docs to select in the MLT results to find the nearest neighbor
+   * @param minDocsFreq    {@link MoreLikeThis#minDocFreq} parameter
+   * @param minTermFreq    {@link MoreLikeThis#minTermFreq} parameter
+   * @param classFieldName the name of the field used as the output for the classifier
+   * @param textFieldNames the name of the fields used as the inputs for the classifier
    */
-  public KNearestNeighborClassifier(int k) {
+  public KNearestNeighborClassifier(LeafReader leafReader, Analyzer analyzer, Query query, int k, int minDocsFreq,
+                                    int minTermFreq, String classFieldName, String... textFieldNames) {
+    this.textFieldNames = textFieldNames;
+    this.classFieldName = classFieldName;
+    this.mlt = new MoreLikeThis(leafReader);
+    this.mlt.setAnalyzer(analyzer);
+    this.mlt.setFieldNames(textFieldNames);
+    this.indexSearcher = new IndexSearcher(leafReader);
+    if (minDocsFreq > 0) {
+      mlt.setMinDocFreq(minDocsFreq);
+    }
+    if (minTermFreq > 0) {
+      mlt.setMinTermFreq(minTermFreq);
+    }
+    this.query = query;
     this.k = k;
   }
 
-  /**
-   * Create a {@link Classifier} using kNN algorithm
-   *
-   * @param k           the number of neighbors to analyze as an <code>int</code>
-   * @param minDocsFreq the minimum number of docs frequency for MLT to be set with {@link MoreLikeThis#setMinDocFreq(int)}
-   * @param minTermFreq the minimum number of term frequency for MLT to be set with {@link MoreLikeThis#setMinTermFreq(int)}
-   */
-  public KNearestNeighborClassifier(int k, int minDocsFreq, int minTermFreq) {
-    this.k = k;
-    this.minDocsFreq = minDocsFreq;
-    this.minTermFreq = minTermFreq;
-  }
 
   /**
    * {@inheritDoc}
    */
   @Override
   public ClassificationResult<BytesRef> assignClass(String text) throws IOException {
-    if (mlt == null) {
-      throw new IOException("You must first call Classifier#train");
+    TopDocs topDocs = knnSearch(text);
+    List<ClassificationResult<BytesRef>> doclist = buildListFromTopDocs(topDocs);
+    ClassificationResult<BytesRef> retval = null;
+    double maxscore = -Double.MAX_VALUE;
+    for (ClassificationResult<BytesRef> element : doclist) {
+      if (element.getScore() > maxscore) {
+        retval = element;
+        maxscore = element.getScore();
+      }
     }
+    return retval;
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public List<ClassificationResult<BytesRef>> getClasses(String text) throws IOException {
+    TopDocs topDocs = knnSearch(text);
+    List<ClassificationResult<BytesRef>> doclist = buildListFromTopDocs(topDocs);
+    Collections.sort(doclist);
+    return doclist;
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public List<ClassificationResult<BytesRef>> getClasses(String text, int max) throws IOException {
+    TopDocs topDocs = knnSearch(text);
+    List<ClassificationResult<BytesRef>> doclist = buildListFromTopDocs(topDocs);
+    Collections.sort(doclist);
+    return doclist.subList(0, max);
+  }
+
+  private TopDocs knnSearch(String text) throws IOException {
     BooleanQuery mltQuery = new BooleanQuery();
     for (String textFieldName : textFieldNames) {
       mltQuery.add(new BooleanClause(mlt.like(textFieldName, new StringReader(text)), BooleanClause.Occur.SHOULD));
@@ -91,68 +135,41 @@ public class KNearestNeighborClassifier implements Classifier<BytesRef> {
     if (query != null) {
       mltQuery.add(query, BooleanClause.Occur.MUST);
     }
-    TopDocs topDocs = indexSearcher.search(mltQuery, k);
-    return selectClassFromNeighbors(topDocs);
+    return indexSearcher.search(mltQuery, k);
   }
 
-  private ClassificationResult<BytesRef> selectClassFromNeighbors(TopDocs topDocs) throws IOException {
-    // TODO : improve the nearest neighbor selection
+  private List<ClassificationResult<BytesRef>> buildListFromTopDocs(TopDocs topDocs) throws IOException {
     Map<BytesRef, Integer> classCounts = new HashMap<>();
     for (ScoreDoc scoreDoc : topDocs.scoreDocs) {
-      BytesRef cl = new BytesRef(indexSearcher.doc(scoreDoc.doc).getField(classFieldName).stringValue());
-      Integer count = classCounts.get(cl);
-      if (count != null) {
-        classCounts.put(cl, count + 1);
-      } else {
-        classCounts.put(cl, 1);
+      StorableField storableField = indexSearcher.doc(scoreDoc.doc).getField(classFieldName);
+      if (storableField != null) {
+        BytesRef cl = new BytesRef(storableField.stringValue());
+        Integer count = classCounts.get(cl);
+        if (count != null) {
+          classCounts.put(cl, count + 1);
+        } else {
+          classCounts.put(cl, 1);
+        }
       }
     }
-    double max = 0;
-    BytesRef assignedClass = new BytesRef();
+    List<ClassificationResult<BytesRef>> returnList = new ArrayList<>();
+    List<ClassificationResult<BytesRef>> temporaryList = new ArrayList<>();
+    int sumdoc = 0;
     for (Map.Entry<BytesRef, Integer> entry : classCounts.entrySet()) {
       Integer count = entry.getValue();
-      if (count > max) {
-        max = count;
-        assignedClass = entry.getKey().clone();
+      temporaryList.add(new ClassificationResult<>(entry.getKey().clone(), count / (double) k));
+      sumdoc += count;
+    }
+
+    //correction
+    if (sumdoc < k) {
+      for (ClassificationResult<BytesRef> cr : temporaryList) {
+        returnList.add(new ClassificationResult<>(cr.getAssignedClass(), cr.getScore() * k / (double) sumdoc));
       }
+    } else {
+      returnList = temporaryList;
     }
-    double score = max / (double) k;
-    return new ClassificationResult<>(assignedClass, score);
+    return returnList;
   }
 
-  /**
-   * {@inheritDoc}
-   */
-  @Override
-  public void train(AtomicReader atomicReader, String textFieldName, String classFieldName, Analyzer analyzer) throws IOException {
-    train(atomicReader, textFieldName, classFieldName, analyzer, null);
-  }
-
-  /**
-   * {@inheritDoc}
-   */
-  @Override
-  public void train(AtomicReader atomicReader, String textFieldName, String classFieldName, Analyzer analyzer, Query query) throws IOException {
-    train(atomicReader, new String[]{textFieldName}, classFieldName, analyzer, query);
-  }
-
-  /**
-   * {@inheritDoc}
-   */
-  @Override
-  public void train(AtomicReader atomicReader, String[] textFieldNames, String classFieldName, Analyzer analyzer, Query query) throws IOException {
-    this.textFieldNames = textFieldNames;
-    this.classFieldName = classFieldName;
-    mlt = new MoreLikeThis(atomicReader);
-    mlt.setAnalyzer(analyzer);
-    mlt.setFieldNames(textFieldNames);
-    indexSearcher = new IndexSearcher(atomicReader);
-    if (minDocsFreq > 0) {
-      mlt.setMinDocFreq(minDocsFreq);
-    }
-    if (minTermFreq > 0) {
-      mlt.setMinTermFreq(minTermFreq);
-    }
-    this.query = query;
-  }
 }

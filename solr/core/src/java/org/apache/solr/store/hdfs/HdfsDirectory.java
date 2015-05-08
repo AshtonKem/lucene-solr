@@ -25,6 +25,7 @@ import java.util.List;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.fs.FileContext;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -33,7 +34,7 @@ import org.apache.lucene.store.BaseDirectory;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.store.IndexOutput;
-import org.apache.lucene.store.NoLockFactory;
+import org.apache.lucene.store.LockFactory;
 import org.apache.solr.store.blockcache.CustomBufferedIndexInput;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,18 +45,23 @@ public class HdfsDirectory extends BaseDirectory {
   public static final int BUFFER_SIZE = 8192;
   
   private static final String LF_EXT = ".lf";
-  protected static final String SEGMENTS_GEN = "segments.gen";
-  protected Path hdfsDirPath;
-  protected Configuration configuration;
+  protected final Path hdfsDirPath;
+  protected final Configuration configuration;
   
   private final FileSystem fileSystem;
+  private final FileContext fileContext;
   
-  public HdfsDirectory(Path hdfsDirPath, Configuration configuration)
+  public HdfsDirectory(Path hdfsDirPath, Configuration configuration) throws IOException {
+    this(hdfsDirPath, HdfsLockFactory.INSTANCE, configuration);
+  }
+
+  public HdfsDirectory(Path hdfsDirPath, LockFactory lockFactory, Configuration configuration)
       throws IOException {
-    setLockFactory(NoLockFactory.getNoLockFactory());
+    super(lockFactory);
     this.hdfsDirPath = hdfsDirPath;
     this.configuration = configuration;
-    fileSystem = FileSystem.newInstance(hdfsDirPath.toUri(), configuration);
+    fileSystem = FileSystem.get(hdfsDirPath.toUri(), configuration);
+    fileContext = FileContext.getFileContext(hdfsDirPath.toUri(), configuration);
     
     while (true) {
       try {
@@ -79,11 +85,11 @@ public class HdfsDirectory extends BaseDirectory {
           }
           continue;
         }
-        org.apache.solr.util.IOUtils.closeQuietly(fileSystem);
+        org.apache.solr.common.util.IOUtils.closeQuietly(fileSystem);
         throw new RuntimeException(
             "Problem creating directory: " + hdfsDirPath, e);
       } catch (Exception e) {
-        org.apache.solr.util.IOUtils.closeQuietly(fileSystem);
+        org.apache.solr.common.util.IOUtils.closeQuietly(fileSystem);
         throw new RuntimeException(
             "Problem creating directory: " + hdfsDirPath, e);
       }
@@ -98,9 +104,6 @@ public class HdfsDirectory extends BaseDirectory {
   
   @Override
   public IndexOutput createOutput(String name, IOContext context) throws IOException {
-    if (SEGMENTS_GEN.equals(name)) {
-      return new NullIndexOutput();
-    }
     return new HdfsFileWriter(getFileSystem(), new Path(hdfsDirPath, name));
   }
   
@@ -139,6 +142,13 @@ public class HdfsDirectory extends BaseDirectory {
   }
   
   @Override
+  public void renameFile(String source, String dest) throws IOException {
+    Path sourcePath = new Path(hdfsDirPath, source);
+    Path destPath = new Path(hdfsDirPath, dest);
+    fileContext.rename(sourcePath, destPath);
+  }
+
+  @Override
   public long fileLength(String name) throws IOException {
     return HdfsFileReader.getLength(getFileSystem(),
         new Path(hdfsDirPath, name));
@@ -158,13 +168,11 @@ public class HdfsDirectory extends BaseDirectory {
       return new String[] {};
     }
     for (FileStatus status : listStatus) {
-      if (!status.isDirectory()) {
-        files.add(status.getPath().getName());
-      }
+      files.add(status.getPath().getName());
     }
     return getNormalNames(files);
   }
-  
+
   public Path getHdfsDirPath() {
     return hdfsDirPath;
   }

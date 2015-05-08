@@ -84,14 +84,14 @@ public class TestSegmentReader extends LuceneTestCase {
     for(FieldInfo fieldInfo : reader.getFieldInfos()) {
       final String name = fieldInfo.name;
       allFieldNames.add(name);
-      if (fieldInfo.isIndexed()) {
+      if (fieldInfo.getIndexOptions() != IndexOptions.NONE) {
         indexedFieldNames.add(name);
       } else {
         notIndexedFieldNames.add(name);
       }
       if (fieldInfo.hasVectors()) {
         tvFieldNames.add(name);
-      } else if (fieldInfo.isIndexed()) {
+      } else if (fieldInfo.getIndexOptions() != IndexOptions.NONE) {
         noTVFieldNames.add(name);
       }
     }
@@ -118,7 +118,7 @@ public class TestSegmentReader extends LuceneTestCase {
     for (String field : fields) {
       Terms terms = fields.terms(field);
       assertNotNull(terms);
-      TermsEnum termsEnum = terms.iterator(null);
+      TermsEnum termsEnum = terms.iterator();
       while(termsEnum.next() != null) {
         BytesRef term = termsEnum.term();
         assertTrue(term != null);
@@ -127,7 +127,7 @@ public class TestSegmentReader extends LuceneTestCase {
       }
     }
     
-    DocsEnum termDocs = TestUtil.docs(random(), reader,
+    PostingsEnum termDocs = TestUtil.docs(random(), reader,
         DocHelper.TEXT_FIELD_1_KEY,
         new BytesRef("field"),
         MultiFields.getLiveDocs(reader),
@@ -145,7 +145,7 @@ public class TestSegmentReader extends LuceneTestCase {
     assertTrue(termDocs.nextDoc() != DocIdSetIterator.NO_MORE_DOCS);
 
     
-    DocsAndPositionsEnum positions = MultiFields.getTermPositionsEnum(reader,
+    PostingsEnum positions = MultiFields.getTermPositionsEnum(reader,
                                                                       MultiFields.getLiveDocs(reader),
                                                                       DocHelper.TEXT_FIELD_1_KEY,
                                                                       new BytesRef("field"));
@@ -172,11 +172,11 @@ public class TestSegmentReader extends LuceneTestCase {
     checkNorms(reader);
   }
 
-  public static void checkNorms(AtomicReader reader) throws IOException {
+  public static void checkNorms(LeafReader reader) throws IOException {
     // test omit norms
     for (int i=0; i<DocHelper.fields.length; i++) {
       IndexableField f = DocHelper.fields[i];
-      if (f.fieldType().indexed()) {
+      if (f.fieldType().indexOptions() != IndexOptions.NONE) {
         assertEquals(reader.getNormValues(f.name()) != null, !f.fieldType().omitNorms());
         assertEquals(reader.getNormValues(f.name()) != null, !DocHelper.noNorms.containsKey(f.name()));
         if (reader.getNormValues(f.name()) == null) {
@@ -192,7 +192,7 @@ public class TestSegmentReader extends LuceneTestCase {
     Terms result = reader.getTermVectors(0).terms(DocHelper.TEXT_FIELD_2_KEY);
     assertNotNull(result);
     assertEquals(3, result.size());
-    TermsEnum termsEnum = result.iterator(null);
+    TermsEnum termsEnum = result.iterator();
     while(termsEnum.next() != null) {
       String term = termsEnum.term().utf8ToString();
       int freq = (int) termsEnum.totalTermFreq();

@@ -253,7 +253,7 @@ public class TestDocBuilder2 extends AbstractDataImportHandlerTestCase {
   @Test
   @Ignore("Fix Me. See SOLR-4103.")
   public void testFileListEntityProcessor_lastIndexTime() throws Exception  {
-    File tmpdir = File.createTempFile("test", "tmp", createTempDir());
+    File tmpdir = File.createTempFile("test", "tmp", createTempDir().toFile());
 
     Map<String, String> params = createMap("baseDir", tmpdir.getAbsolutePath());
 
@@ -324,7 +324,7 @@ public class TestDocBuilder2 extends AbstractDataImportHandlerTestCase {
     @Override
     public void onEvent(Context ctx) {
       executed = true;
-      lastException = ((ContextImpl) ctx).lastException;
+      lastException = ((ContextImpl) ctx).getLastException();
     }
   }
 

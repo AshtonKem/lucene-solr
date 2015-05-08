@@ -21,9 +21,10 @@ import java.io.File;
 import java.io.IOException;
 
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.store.LockFactory;
 import org.apache.lucene.store.MockDirectoryWrapper;
 import org.apache.lucene.store.NRTCachingDirectory;
-import org.apache.lucene.store.RateLimitedDirectoryWrapper;
+import org.apache.lucene.store.NoLockFactory;
 import org.apache.lucene.store.TrackingDirectoryWrapper;
 import org.apache.lucene.util.LuceneTestCase;
 
@@ -36,8 +37,13 @@ public class MockDirectoryFactory extends EphemeralDirectoryFactory {
   private boolean allowReadingFilesStillOpenForWrite = Boolean.getBoolean(SOLR_TESTS_ALLOW_READING_FILES_STILL_OPEN_FOR_WRITE);
 
   @Override
-  protected Directory create(String path, DirContext dirContext) throws IOException {
-    Directory dir = LuceneTestCase.newDirectory();
+  protected LockFactory createLockFactory(String rawLockType) throws IOException {
+    return NoLockFactory.INSTANCE; // dummy, actually unused
+  }
+
+  @Override
+  protected Directory create(String path, LockFactory lockFactory, DirContext dirContext) throws IOException {
+    Directory dir = LuceneTestCase.newDirectory(); // we ignore the given lock factory
     
     Directory cdir = reduce(dir);
     cdir = reduce(cdir);
@@ -63,6 +69,9 @@ public class MockDirectoryFactory extends EphemeralDirectoryFactory {
       // already been created.
       mockDirWrapper.setPreventDoubleWrite(false);
       
+      // IndexFetcher & co don't seem ready for this:
+      mockDirWrapper.setEnableVirusScanner(false);
+      
       if (allowReadingFilesStillOpenForWrite) {
         mockDirWrapper.setAllowReadingFilesStillOpenForWrite(true);
       }
@@ -75,9 +84,6 @@ public class MockDirectoryFactory extends EphemeralDirectoryFactory {
     Directory cdir = dir;
     if (dir instanceof NRTCachingDirectory) {
       cdir = ((NRTCachingDirectory)dir).getDelegate();
-    }
-    if (cdir instanceof RateLimitedDirectoryWrapper) {
-      cdir = ((RateLimitedDirectoryWrapper)dir).getDelegate();
     }
     if (cdir instanceof TrackingDirectoryWrapper) {
       cdir = ((TrackingDirectoryWrapper)dir).getDelegate();

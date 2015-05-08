@@ -19,11 +19,12 @@ package org.apache.lucene.search.spans;
 
 import org.apache.lucene.search.*;
 
+import static org.apache.lucene.search.spans.SpanTestUtil.*;
 
 /**
  * TestExplanations subclass focusing on span queries
  */
-public class TestSpanExplanations extends TestExplanations {
+public class TestSpanExplanations extends BaseExplanationTestCase {
 
   /* simple SpanTermQueries */
   

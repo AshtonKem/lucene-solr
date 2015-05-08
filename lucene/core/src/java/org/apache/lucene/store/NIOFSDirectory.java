@@ -17,12 +17,12 @@ package org.apache.lucene.store;
  * the License.
  */
 
-import java.io.File;
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException; // javadoc @link
 import java.nio.channels.FileChannel;
+import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.concurrent.Future; // javadoc
 
@@ -41,44 +41,45 @@ import java.util.concurrent.Future; // javadoc
  * for details.
  * </p>
  * <p>
- * <font color="red"><b>NOTE:</b> Accessing this class either directly or
+ * <b>NOTE:</b> Accessing this class either directly or
  * indirectly from a thread while it's interrupted can close the
  * underlying file descriptor immediately if at the same time the thread is
  * blocked on IO. The file descriptor will remain closed and subsequent access
  * to {@link NIOFSDirectory} will throw a {@link ClosedChannelException}. If
  * your application uses either {@link Thread#interrupt()} or
- * {@link Future#cancel(boolean)} you should use {@link SimpleFSDirectory} in
- * favor of {@link NIOFSDirectory}.</font>
+ * {@link Future#cancel(boolean)} you should use the legacy {@code RAFDirectory}
+ * from the Lucene {@code misc} module in favor of {@link NIOFSDirectory}.
  * </p>
  */
 public class NIOFSDirectory extends FSDirectory {
 
   /** Create a new NIOFSDirectory for the named location.
+   *  The directory is created at the named location if it does not yet exist.
    * 
    * @param path the path of the directory
-   * @param lockFactory the lock factory to use, or null for the default
-   * ({@link NativeFSLockFactory});
+   * @param lockFactory the lock factory to use
    * @throws IOException if there is a low-level I/O error
    */
-  public NIOFSDirectory(File path, LockFactory lockFactory) throws IOException {
+  public NIOFSDirectory(Path path, LockFactory lockFactory) throws IOException {
     super(path, lockFactory);
   }
 
-  /** Create a new NIOFSDirectory for the named location and {@link NativeFSLockFactory}.
+  /** Create a new NIOFSDirectory for the named location and {@link FSLockFactory#getDefault()}.
+   *  The directory is created at the named location if it does not yet exist.
    *
    * @param path the path of the directory
    * @throws IOException if there is a low-level I/O error
    */
-  public NIOFSDirectory(File path) throws IOException {
-    super(path, null);
+  public NIOFSDirectory(Path path) throws IOException {
+    this(path, FSLockFactory.getDefault());
   }
 
   /** Creates an IndexInput for the file with the given name. */
   @Override
   public IndexInput openInput(String name, IOContext context) throws IOException {
     ensureOpen();
-    File path = new File(getDirectory(), name);
-    FileChannel fc = FileChannel.open(path.toPath(), StandardOpenOption.READ);
+    Path path = getDirectory().resolve(name);
+    FileChannel fc = FileChannel.open(path, StandardOpenOption.READ);
     return new NIOFSIndexInput("NIOFSIndexInput(path=\"" + path + "\")", fc, context);
   }
   
@@ -136,7 +137,7 @@ public class NIOFSDirectory extends FSDirectory {
       if (offset < 0 || length < 0 || offset + length > this.length()) {
         throw new IllegalArgumentException("slice() " + sliceDescription + " out of bounds: "  + this);
       }
-      return new NIOFSIndexInput(sliceDescription, channel, off + offset, length, getBufferSize());
+      return new NIOFSIndexInput(getFullSliceDescription(sliceDescription), channel, off + offset, length, getBufferSize());
     }
 
     @Override

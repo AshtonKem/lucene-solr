@@ -18,6 +18,14 @@
 
 package org.apache.solr.cloud;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.Set;
+import java.util.TreeMap;
+
 import org.apache.solr.common.SolrException;
 import org.apache.solr.common.SolrException.ErrorCode;
 import org.apache.solr.common.cloud.SolrZkClient;
@@ -28,32 +36,20 @@ import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.Watcher;
-import org.apache.zookeeper.ZooDefs;
-import org.apache.zookeeper.data.ACL;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.NoSuchElementException;
-import java.util.Set;
-import java.util.TreeMap;
 
 /**
  * A distributed queue from zk recipes.
  */
 public class DistributedQueue {
-  private static final Logger LOG = LoggerFactory
-      .getLogger(DistributedQueue.class);
+  private static final Logger LOG = LoggerFactory.getLogger(DistributedQueue.class);
   
   private static long DEFAULT_TIMEOUT = 5*60*1000;
   
   private final String dir;
   
   private SolrZkClient zookeeper;
-  private List<ACL> acl = ZooDefs.Ids.OPEN_ACL_UNSAFE;
   
   private final String prefix = "qn-";
   
@@ -61,11 +57,11 @@ public class DistributedQueue {
 
   private final Overseer.Stats stats;
   
-  public DistributedQueue(SolrZkClient zookeeper, String dir, List<ACL> acl) {
-    this(zookeeper, dir, acl, new Overseer.Stats());
+  public DistributedQueue(SolrZkClient zookeeper, String dir) {
+    this(zookeeper, dir, new Overseer.Stats());
   }
 
-  public DistributedQueue(SolrZkClient zookeeper, String dir, List<ACL> acl, Overseer.Stats stats) {
+  public DistributedQueue(SolrZkClient zookeeper, String dir, Overseer.Stats stats) {
     this.dir = dir;
 
     ZkCmdExecutor cmdExecutor = new ZkCmdExecutor(zookeeper.getZkClientTimeout());
@@ -78,9 +74,6 @@ public class DistributedQueue {
       throw new SolrException(ErrorCode.SERVER_ERROR, e);
     }
 
-    if (acl != null) {
-      this.acl = acl;
-    }
     this.zookeeper = zookeeper;
     this.stats = stats;
   }
@@ -97,6 +90,7 @@ public class DistributedQueue {
     TreeMap<Long,String> orderedChildren = new TreeMap<>();
 
     List<String> childNames = zookeeper.getChildren(dir, watcher, true);
+    stats.setQueueLength(childNames.size());
     for (String childName : childNames) {
       try {
         // Check format
@@ -124,13 +118,17 @@ public class DistributedQueue {
       throws KeeperException, InterruptedException {
 
     List<String> childNames = zookeeper.getChildren(dir, null, true);
+    stats.setQueueLength(childNames.size());
     for (String childName : childNames) {
       if (childName != null) {
         try {
-          ZkNodeProps message = ZkNodeProps.load(zookeeper.getData(dir + "/" + childName, null, null, true));
-          if (message.containsKey(OverseerCollectionProcessor.ASYNC)) {
-            LOG.info(">>>> {}", message.get(OverseerCollectionProcessor.ASYNC));
-            if(message.get(OverseerCollectionProcessor.ASYNC).equals(requestId)) return true;
+          byte[] data = zookeeper.getData(dir + "/" + childName, null, null, true);
+          if (data != null) {
+            ZkNodeProps message = ZkNodeProps.load(data);
+            if (message.containsKey(OverseerCollectionProcessor.ASYNC)) {
+              LOG.debug(">>>> {}", message.get(OverseerCollectionProcessor.ASYNC));
+              if(message.get(OverseerCollectionProcessor.ASYNC).equals(requestId)) return true;
+            }
           }
         } catch (KeeperException.NoNodeException e) {
           // Another client removed the node first, try next
@@ -235,38 +233,50 @@ public class DistributedQueue {
       time.stop();
     }
   }
-  
-  
-  private class LatchChildWatcher implements Watcher {
-    
-    final Object lock;
-    private WatchedEvent event = null;
-    
-    public LatchChildWatcher() {
-      this.lock = new Object();
+
+  /**
+   * Watcher that blocks until a WatchedEvent occurs for a znode.
+   */
+  private final class LatchWatcher implements Watcher {
+
+    private final Object lock;
+    private WatchedEvent event;
+    private Event.EventType latchEventType;
+
+    LatchWatcher(Object lock) {
+      this(lock, null);
     }
 
-    public LatchChildWatcher(Object lock) {
-      this.lock = lock;
+    LatchWatcher(Event.EventType eventType) {
+      this(new Object(), eventType);
     }
-    
+
+    LatchWatcher(Object lock, Event.EventType eventType) {
+      this.lock = lock;
+      this.latchEventType = eventType;
+    }
+
     @Override
     public void process(WatchedEvent event) {
-      LOG.info("LatchChildWatcher fired on path: " + event.getPath() + " state: "
-          + event.getState() + " type " + event.getType());
-      synchronized (lock) {
-        this.event = event;
-        lock.notifyAll();
+      Event.EventType eventType = event.getType();
+      // None events are ignored
+      // If latchEventType is not null, only fire if the type matches
+      if (eventType != Event.EventType.None && (latchEventType == null || eventType == latchEventType)) {
+        LOG.info("{} fired on path {} state {}", eventType, event.getPath(), event.getState());
+        synchronized (lock) {
+          this.event = event;
+          lock.notifyAll();
+        }
       }
     }
-    
+
     public void await(long timeout) throws InterruptedException {
       synchronized (lock) {
         if (this.event != null) return;
         lock.wait(timeout);
       }
     }
-    
+
     public WatchedEvent getWatchedEvent() {
       return event;
     }
@@ -274,13 +284,13 @@ public class DistributedQueue {
 
   // we avoid creating *many* watches in some cases
   // by saving the childrenWatcher and the children associated - see SOLR-6336
-  private LatchChildWatcher childrenWatcher;
+  private LatchWatcher childrenWatcher;
   private TreeMap<Long,String> fetchedChildren;
   private final Object childrenWatcherLock = new Object();
 
   private Map<Long, String> getChildren(long wait) throws InterruptedException, KeeperException
   {
-    LatchChildWatcher watcher;
+    LatchWatcher watcher;
     TreeMap<Long,String> children;
     synchronized (childrenWatcherLock) {
       watcher = childrenWatcher;
@@ -288,13 +298,14 @@ public class DistributedQueue {
     }
 
     if (watcher == null ||  watcher.getWatchedEvent() != null) {
-      watcher = new LatchChildWatcher();
+      // this watcher is only interested in child change events
+      watcher = new LatchWatcher(Watcher.Event.EventType.NodeChildrenChanged);
       while (true) {
         try {
           children = orderedChildren(watcher);
           break;
         } catch (KeeperException.NoNodeException e) {
-          zookeeper.create(dir, new byte[0], acl, CreateMode.PERSISTENT, true);
+          zookeeper.create(dir, new byte[0], CreateMode.PERSISTENT, true);
           // go back to the loop and try again
         }
       }
@@ -366,10 +377,10 @@ public class DistributedQueue {
       throws KeeperException, InterruptedException {
     for (;;) {
       try {
-        return zookeeper.create(path, data, acl, mode, true);
+        return zookeeper.create(path, data, mode, true);
       } catch (KeeperException.NoNodeException e) {
         try {
-          zookeeper.create(dir, new byte[0], acl, CreateMode.PERSISTENT, true);
+          zookeeper.create(dir, new byte[0], CreateMode.PERSISTENT, true);
         } catch (KeeperException.NodeExistsException ne) {
           // someone created it
         }
@@ -390,8 +401,9 @@ public class DistributedQueue {
       String watchID = createData(
           dir + "/" + response_prefix + path.substring(path.lastIndexOf("-") + 1),
           null, CreateMode.EPHEMERAL);
+
       Object lock = new Object();
-      LatchChildWatcher watcher = new LatchChildWatcher(lock);
+      LatchWatcher watcher = new LatchWatcher(lock);
       synchronized (lock) {
         if (zookeeper.exists(watchID, watcher, true) != null) {
           watcher.await(timeout);

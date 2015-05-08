@@ -17,14 +17,6 @@ package org.apache.lucene.spatial.prefix.tree;
  * limitations under the License.
  */
 
-import com.spatial4j.core.context.SpatialContext;
-import com.spatial4j.core.shape.Point;
-import com.spatial4j.core.shape.Rectangle;
-import com.spatial4j.core.shape.Shape;
-import com.spatial4j.core.shape.SpatialRelation;
-
-import org.apache.lucene.util.BytesRef;
-
 import java.io.PrintStream;
 import java.text.NumberFormat;
 import java.util.ArrayList;
@@ -32,6 +24,13 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
+
+import com.spatial4j.core.context.SpatialContext;
+import com.spatial4j.core.shape.Point;
+import com.spatial4j.core.shape.Rectangle;
+import com.spatial4j.core.shape.Shape;
+import com.spatial4j.core.shape.SpatialRelation;
+import org.apache.lucene.util.BytesRef;
 
 /**
  * A {@link SpatialPrefixTree} which uses a
@@ -63,14 +62,14 @@ public class QuadPrefixTree extends LegacyPrefixTree {
   public static final int MAX_LEVELS_POSSIBLE = 50;//not really sure how big this should be
 
   public static final int DEFAULT_MAX_LEVELS = 12;
-  private final double xmin;
-  private final double xmax;
-  private final double ymin;
-  private final double ymax;
-  private final double xmid;
-  private final double ymid;
+  protected final double xmin;
+  protected final double xmax;
+  protected final double ymin;
+  protected final double ymax;
+  protected final double xmid;
+  protected final double ymid;
 
-  private final double gridW;
+  protected final double gridW;
   public final double gridH;
 
   final double[] levelW;
@@ -179,7 +178,7 @@ public class QuadPrefixTree extends LegacyPrefixTree {
     // if we actually use the range property in the query, this could be useful
   }
 
-  private void checkBattenberg(
+  protected void checkBattenberg(
       char c,
       double cx,
       double cy,
@@ -216,7 +215,7 @@ public class QuadPrefixTree extends LegacyPrefixTree {
     str.length = strlen;
   }
 
-  private class QuadCell extends LegacyCell {
+  protected class QuadCell extends LegacyCell {
 
     QuadCell(byte[] bytes, int off, int len) {
       super(bytes, off, len);
@@ -231,6 +230,9 @@ public class QuadPrefixTree extends LegacyPrefixTree {
     protected QuadPrefixTree getGrid() { return QuadPrefixTree.this; }
 
     @Override
+    protected int getMaxLevels() { return maxLevels; }
+
+    @Override
     protected Collection<Cell> getSubCells() {
       BytesRef source = getTokenBytesNoLeaf(null);
 
@@ -242,7 +244,7 @@ public class QuadPrefixTree extends LegacyPrefixTree {
       return cells;
     }
 
-    private BytesRef concat(BytesRef source, byte b) {
+    protected BytesRef concat(BytesRef source, byte b) {
       //+2 for new char + potential leaf
       final byte[] buffer = Arrays.copyOfRange(source.bytes, source.offset, source.offset + source.length + 2);
       BytesRef target = new BytesRef(buffer);
@@ -268,7 +270,7 @@ public class QuadPrefixTree extends LegacyPrefixTree {
       return shape;
     }
 
-    private Rectangle makeShape() {
+    protected Rectangle makeShape() {
       BytesRef token = getTokenBytesNoLeaf(null);
       double xmin = QuadPrefixTree.this.xmin;
       double ymin = QuadPrefixTree.this.ymin;

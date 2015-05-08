@@ -20,9 +20,7 @@ package org.apache.lucene.analysis.ngram;
 import org.apache.lucene.analysis.Tokenizer;
 import org.apache.lucene.analysis.util.TokenizerFactory;
 import org.apache.lucene.util.AttributeFactory;
-import org.apache.lucene.util.Version;
 
-import java.io.Reader;
 import java.util.Map;
 
 /**
@@ -50,9 +48,6 @@ public class EdgeNGramTokenizerFactory extends TokenizerFactory {
   
   @Override
   public Tokenizer create(AttributeFactory factory) {
-    if (luceneMatchVersion.onOrAfter(Version.LUCENE_4_4)) {
-      return new EdgeNGramTokenizer(factory, minGramSize, maxGramSize);
-    }
-    return new Lucene43NGramTokenizer(factory, minGramSize, maxGramSize);
+    return new EdgeNGramTokenizer(factory, minGramSize, maxGramSize);
   }
 }

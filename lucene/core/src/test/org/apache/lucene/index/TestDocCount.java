@@ -58,9 +58,6 @@ public class TestDocCount extends LuceneTestCase {
   
   private void verifyCount(IndexReader ir) throws Exception {
     Fields fields = MultiFields.getFields(ir);
-    if (fields == null) {
-      return;
-    }
     for (String field : fields) {
       Terms terms = fields.terms(field);
       if (terms == null) {
@@ -68,9 +65,9 @@ public class TestDocCount extends LuceneTestCase {
       }
       int docCount = terms.getDocCount();
       FixedBitSet visited = new FixedBitSet(ir.maxDoc());
-      TermsEnum te = terms.iterator(null);
+      TermsEnum te = terms.iterator();
       while (te.next() != null) {
-        DocsEnum de = TestUtil.docs(random(), te, null, null, DocsEnum.FLAG_NONE);
+        PostingsEnum de = TestUtil.docs(random(), te, null, null, PostingsEnum.NONE);
         while (de.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
           visited.set(de.docID());
         }

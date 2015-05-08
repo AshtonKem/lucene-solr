@@ -18,7 +18,6 @@ package org.apache.lucene.codecs.simpletext;
  */
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 
 import org.apache.lucene.codecs.StoredFieldsReader;
 import org.apache.lucene.index.FieldInfo;
@@ -40,14 +39,13 @@ import org.apache.lucene.util.CharsRefBuilder;
 import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.RamUsageEstimator;
 import org.apache.lucene.util.StringHelper;
-import org.apache.lucene.util.UnicodeUtil;
 
 import static org.apache.lucene.codecs.simpletext.SimpleTextStoredFieldsWriter.*;
 
 /**
  * reads plaintext stored fields
  * <p>
- * <b><font color="red">FOR RECREATIONAL USE ONLY</font></B>
+ * <b>FOR RECREATIONAL USE ONLY</b>
  * @lucene.experimental
  */
 public class SimpleTextStoredFieldsReader extends StoredFieldsReader {
@@ -76,7 +74,7 @@ public class SimpleTextStoredFieldsReader extends StoredFieldsReader {
         } catch (Throwable t) {} // ensure we throw our original exception
       }
     }
-    readIndex(si.getDocCount());
+    readIndex(si.maxDoc());
   }
   
   // used by clone
@@ -154,7 +152,9 @@ public class SimpleTextStoredFieldsReader extends StoredFieldsReader {
     readLine();
     assert StringHelper.startsWith(scratch.get(), VALUE);
     if (type == TYPE_STRING) {
-      visitor.stringField(fieldInfo, new String(scratch.bytes(), VALUE.length, scratch.length()-VALUE.length, StandardCharsets.UTF_8));
+      byte[] bytes = new byte[scratch.length() - VALUE.length];
+      System.arraycopy(scratch.bytes(), VALUE.length, bytes, 0, bytes.length);
+      visitor.stringField(fieldInfo, bytes);
     } else if (type == TYPE_BINARY) {
       byte[] copy = new byte[scratch.length()-VALUE.length];
       System.arraycopy(scratch.bytes(), VALUE.length, copy, 0, copy.length);
@@ -210,6 +210,11 @@ public class SimpleTextStoredFieldsReader extends StoredFieldsReader {
   public long ramBytesUsed() {
     return BASE_RAM_BYTES_USED + RamUsageEstimator.sizeOf(offsets)
         + RamUsageEstimator.sizeOf(scratch.bytes()) + RamUsageEstimator.sizeOf(scratchUTF16.chars());
+  }
+
+  @Override
+  public String toString() {
+    return getClass().getSimpleName();
   }
 
   @Override

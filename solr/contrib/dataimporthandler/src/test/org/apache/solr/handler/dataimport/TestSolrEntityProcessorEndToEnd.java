@@ -17,19 +17,11 @@ package org.apache.solr.handler.dataimport;
  * limitations under the License.
  */
 
-import java.io.File;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
-
 import org.apache.commons.io.FileUtils;
-import org.apache.lucene.util.TestUtil;
+import org.apache.lucene.util.IOUtils;
 import org.apache.solr.client.solrj.SolrServerException;
 import org.apache.solr.client.solrj.embedded.JettySolrRunner;
-import org.apache.solr.client.solrj.impl.HttpSolrServer;
+import org.apache.solr.client.solrj.impl.HttpSolrClient;
 import org.apache.solr.common.SolrInputDocument;
 import org.junit.After;
 import org.junit.AfterClass;
@@ -37,6 +29,15 @@ import org.junit.Before;
 import org.junit.BeforeClass;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
 
 /**
  * End-to-end test of SolrEntityProcessor. "Real" test using embedded Solr
@@ -94,7 +95,7 @@ public class TestSolrEntityProcessorEndToEnd extends AbstractDataImportHandlerTe
   }
   
   private String getSourceUrl() {
-    return buildUrl(jetty.getLocalPort(), "/solr");
+    return buildUrl(jetty.getLocalPort(), "/solr/collection1");
   }
   
   //TODO: fix this test to close its directories
@@ -279,15 +280,12 @@ public class TestSolrEntityProcessorEndToEnd extends AbstractDataImportHandlerTe
       }
       sidl.add(sd);
     }
-    
-    HttpSolrServer solrServer = new HttpSolrServer(getSourceUrl());
-    try {
+
+    try (HttpSolrClient solrServer = new HttpSolrClient(getSourceUrl())) {
       solrServer.setConnectionTimeout(15000);
       solrServer.setSoTimeout(30000);
       solrServer.add(sidl);
       solrServer.commit(true, true);
-    } finally {
-      solrServer.shutdown();
     }
   }
   
@@ -316,7 +314,7 @@ public class TestSolrEntityProcessorEndToEnd extends AbstractDataImportHandlerTe
     }
 
     public void setUp() throws Exception {
-      homeDir = createTempDir();
+      homeDir = createTempDir().toFile();
       initCoreDataDir = new File(homeDir + "/collection1", "data");
       confDir = new File(homeDir + "/collection1", "conf");
       
@@ -332,15 +330,17 @@ public class TestSolrEntityProcessorEndToEnd extends AbstractDataImportHandlerTe
       FileUtils.copyFile(getFile(getSchemaFile()), f);
       f = new File(confDir, "data-config.xml");
       FileUtils.copyFile(getFile(SOURCE_CONF_DIR + "dataconfig-contentstream.xml"), f);
+
+      Files.createFile(confDir.toPath().resolve("../core.properties"));
     }
 
     public void tearDown() throws Exception {
-      TestUtil.rm(homeDir);
+      IOUtils.rm(homeDir.toPath());
     }
   }
   
   private JettySolrRunner createJetty(SolrInstance instance) throws Exception {
-    JettySolrRunner jetty = new JettySolrRunner(instance.getHomeDir(), "/solr", 0, null, null, true, null, sslConfig);
+    JettySolrRunner jetty = new JettySolrRunner(instance.getHomeDir(), buildJettyConfig("/solr"));
     jetty.setDataDir(instance.getDataDir());
     jetty.start();
     return jetty;

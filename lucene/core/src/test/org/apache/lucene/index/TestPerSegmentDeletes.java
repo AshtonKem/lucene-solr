@@ -224,18 +224,18 @@ public class TestPerSegmentDeletes extends LuceneTestCase {
       throws IOException {
     Fields fields = MultiFields.getFields(reader);
     Terms cterms = fields.terms(term.field);
-    TermsEnum ctermsEnum = cterms.iterator(null);
+    TermsEnum ctermsEnum = cterms.iterator();
     if (ctermsEnum.seekExact(new BytesRef(term.text()))) {
-      DocsEnum docsEnum = TestUtil.docs(random(), ctermsEnum, bits, null, DocsEnum.FLAG_NONE);
-      return toArray(docsEnum);
+      PostingsEnum postingsEnum = TestUtil.docs(random(), ctermsEnum, bits, null, PostingsEnum.NONE);
+      return toArray(postingsEnum);
     }
     return null;
   }
 
-  public static int[] toArray(DocsEnum docsEnum) throws IOException {
+  public static int[] toArray(PostingsEnum postingsEnum) throws IOException {
     List<Integer> docs = new ArrayList<>();
-    while (docsEnum.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
-      int docID = docsEnum.docID();
+    while (postingsEnum.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
+      int docID = postingsEnum.docID();
       docs.add(docID);
     }
     return ArrayUtil.toIntArray(docs);

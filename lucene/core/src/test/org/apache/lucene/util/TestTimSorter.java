@@ -27,5 +27,4 @@ public class TestTimSorter extends BaseSortTestCase {
   public Sorter newSorter(Entry[] arr) {
     return new ArrayTimSorter<>(arr, ArrayUtil.<Entry>naturalComparator(), TestUtil.nextInt(random(), 0, arr.length));
   }
-
 }

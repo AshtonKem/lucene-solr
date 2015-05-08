@@ -42,11 +42,12 @@ import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.MockDirectoryWrapper;
-import org.apache.lucene.store.RAMDirectory;
 import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.LuceneTestCase;
+import org.apache.lucene.util.LuceneTestCase.SuppressCodecs;
 import org.apache.lucene.util.TestUtil;
 
+@SuppressCodecs("SimpleText") // too slow here
 public class TestIndexWriterDelete extends LuceneTestCase {
 
   // test the simple case
@@ -472,7 +473,7 @@ public class TestIndexWriterDelete extends LuceneTestCase {
   private int getHitCount(Directory dir, Term term) throws IOException {
     IndexReader reader = DirectoryReader.open(dir);
     IndexSearcher searcher = newSearcher(reader);
-    int hitCount = searcher.search(new TermQuery(term), null, 1000).totalHits;
+    int hitCount = searcher.search(new TermQuery(term), 1000).totalHits;
     reader.close();
     return hitCount;
   }
@@ -499,6 +500,8 @@ public class TestIndexWriterDelete extends LuceneTestCase {
     MockDirectoryWrapper startDir = newMockDirectory();
     // TODO: find the resource leak that only occurs sometimes here.
     startDir.setNoDeleteOpenFile(false);
+    // test uses IW unref'ed helper which is unaware of retries
+    startDir.setEnableVirusScanner(false);
     IndexWriter writer = new IndexWriter(startDir, newIndexWriterConfig(new MockAnalyzer(random(), MockTokenizer.WHITESPACE, false)));
     for (int i = 0; i < 157; i++) {
       Document d = new Document();
@@ -521,9 +524,11 @@ public class TestIndexWriterDelete extends LuceneTestCase {
       if (VERBOSE) {
         System.out.println("TEST: cycle");
       }
-      MockDirectoryWrapper dir = new MockDirectoryWrapper(random(), new RAMDirectory(startDir, newIOContext(random())));
+      MockDirectoryWrapper dir = new MockDirectoryWrapper(random(), TestUtil.ramCopyOf(startDir));
       dir.setPreventDoubleWrite(false);
       dir.setAllowRandomFileNotFoundException(false);
+      // test uses IW unref'ed helper which is unaware of retries
+      dir.setEnableVirusScanner(false);
       IndexWriter modifier = new IndexWriter(dir,
                                              newIndexWriterConfig(new MockAnalyzer(random(), MockTokenizer.WHITESPACE, false))
                                              .setMaxBufferedDocs(1000)
@@ -626,11 +631,9 @@ public class TestIndexWriterDelete extends LuceneTestCase {
           modifier.rollback();
         }
 
-        // If the close() succeeded, make sure there are
-        // no unreferenced files.
+        // If the close() succeeded, make sure index is OK:
         if (success) {
           TestUtil.checkIndex(dir);
-          TestIndexWriter.assertNoUnreferencedFiles(dir, "after writer.close");
         }
         dir.setRandomIOExceptionRate(randomIOExceptionRate);
         dir.setMaxSizeInBytes(maxSizeInBytes);
@@ -653,7 +656,7 @@ public class TestIndexWriterDelete extends LuceneTestCase {
         IndexSearcher searcher = newSearcher(newReader);
         ScoreDoc[] hits = null;
         try {
-          hits = searcher.search(new TermQuery(searchTerm), null, 1000).scoreDocs;
+          hits = searcher.search(new TermQuery(searchTerm), 1000).scoreDocs;
         }
         catch (IOException e) {
           e.printStackTrace();
@@ -737,7 +740,7 @@ public class TestIndexWriterDelete extends LuceneTestCase {
                 System.out.println("TEST: mock failure: now fail");
                 new Throwable().printStackTrace(System.out);
               }
-              throw new IOException("fail after applyDeletes");
+              throw new RuntimeException("fail after applyDeletes");
             }
           }
           if (!failed) {
@@ -785,7 +788,7 @@ public class TestIndexWriterDelete extends LuceneTestCase {
       doc.add(newTextField("city", text[i], Field.Store.YES));
       modifier.addDocument(doc);
     }
-    // flush (and commit if ac)
+    // flush
 
     if (VERBOSE) {
       System.out.println("TEST: now full merge");
@@ -814,7 +817,7 @@ public class TestIndexWriterDelete extends LuceneTestCase {
 
     modifier.deleteDocuments(term);
 
-    // add a doc (needed for the !ac case; see below)
+    // add a doc
     // doc remains buffered
 
     if (VERBOSE) {
@@ -841,7 +844,7 @@ public class TestIndexWriterDelete extends LuceneTestCase {
         System.out.println("TEST: now commit for failure");
       }
       modifier.commit();
-    } catch (IOException ioe) {
+    } catch (RuntimeException ioe) {
       // expected
       failed = true;
     }
@@ -892,6 +895,8 @@ public class TestIndexWriterDelete extends LuceneTestCase {
     String[] text = { "Amsterdam", "Venice" };
 
     MockDirectoryWrapper dir = newMockDirectory();
+    // test uses IW unref'ed helper which is unaware of retries
+    dir.setEnableVirusScanner(false);
     IndexWriter modifier = new IndexWriter(dir, newIndexWriterConfig(new MockAnalyzer(random(), MockTokenizer.WHITESPACE, false)));
     modifier.commit();
     dir.failOn(failure.reset());
@@ -914,8 +919,8 @@ public class TestIndexWriterDelete extends LuceneTestCase {
         break;
       }
     }
+    assertTrue(modifier.deleter.isClosed());
 
-    modifier.close();
     TestIndexWriter.assertNoUnreferencedFiles(dir, "docsWriter.abort() failed to delete unreferenced files");
     dir.close();
   }
@@ -1125,7 +1130,9 @@ public class TestIndexWriterDelete extends LuceneTestCase {
                                        .setRAMBufferSizeMB(0.5)
                                        .setMaxBufferedDocs(-1)
                                        .setMergePolicy(NoMergePolicy.INSTANCE)
-                                       .setReaderPooling(false)) {
+                                       .setReaderPooling(false)
+                                       // always use CFS so we don't use tons of file handles in the test
+                                       .setUseCompoundFile(true)) {
         @Override
         public void doAfterFlush() {
           assertTrue("only " + docsInSegment.get() + " in segment", closing.get() || docsInSegment.get() >= 7);
@@ -1188,6 +1195,7 @@ public class TestIndexWriterDelete extends LuceneTestCase {
     checker.setInfoStream(new PrintStream(bos, false, IOUtils.UTF_8), false);
     CheckIndex.Status indexStatus = checker.checkIndex(null);
     assertTrue(indexStatus.clean);
+    checker.close();
     String s = bos.toString(IOUtils.UTF_8);
 
     // Segment should have deletions:
@@ -1198,9 +1206,11 @@ public class TestIndexWriterDelete extends LuceneTestCase {
     w.close();
 
     bos = new ByteArrayOutputStream(1024);
+    checker = new CheckIndex(dir);
     checker.setInfoStream(new PrintStream(bos, false, IOUtils.UTF_8), false);
     indexStatus = checker.checkIndex(null);
     assertTrue(indexStatus.clean);
+    checker.close();
     s = bos.toString(IOUtils.UTF_8);
     assertFalse(s.contains("has deletions"));
     dir.close();
@@ -1232,5 +1242,123 @@ public class TestIndexWriterDelete extends LuceneTestCase {
     assertNotNull(MultiFields.getLiveDocs(r));
     r.close();
     d.close();
+  }
+
+  public void testOnlyDeletesTriggersMergeOnClose() throws Exception {
+    Directory dir = newDirectory();
+    IndexWriterConfig iwc = new IndexWriterConfig(new MockAnalyzer(random()));
+    iwc.setMaxBufferedDocs(2);
+    LogDocMergePolicy mp = new LogDocMergePolicy();
+    mp.setMinMergeDocs(1);
+    iwc.setMergePolicy(mp);
+    iwc.setMergeScheduler(new SerialMergeScheduler());
+    IndexWriter w = new IndexWriter(dir, iwc);
+    for(int i=0;i<38;i++) {
+      Document doc = new Document();
+      doc.add(newStringField("id", ""+i, Field.Store.NO));
+      w.addDocument(doc);
+    }
+    w.commit();
+
+    for(int i=0;i<18;i++) {
+      w.deleteDocuments(new Term("id", ""+i));
+    }
+
+    w.close();
+    DirectoryReader r = DirectoryReader.open(dir);
+    assertEquals(1, r.leaves().size());
+    r.close();
+
+    dir.close();
+  }
+
+  public void testOnlyDeletesTriggersMergeOnGetReader() throws Exception {
+    Directory dir = newDirectory();
+    IndexWriterConfig iwc = new IndexWriterConfig(new MockAnalyzer(random()));
+    iwc.setMaxBufferedDocs(2);
+    LogDocMergePolicy mp = new LogDocMergePolicy();
+    mp.setMinMergeDocs(1);
+    iwc.setMergePolicy(mp);
+    iwc.setMergeScheduler(new SerialMergeScheduler());
+    IndexWriter w = new IndexWriter(dir, iwc);
+    for(int i=0;i<38;i++) {
+      Document doc = new Document();
+      doc.add(newStringField("id", ""+i, Field.Store.NO));
+      w.addDocument(doc);
+    }
+    w.commit();
+
+    for(int i=0;i<18;i++) {
+      w.deleteDocuments(new Term("id", ""+i));
+    }
+
+    // First one triggers, but does not reflect, the merge:
+    DirectoryReader.open(w, true).close();
+    IndexReader r =DirectoryReader.open(w, true);
+    assertEquals(1, r.leaves().size());
+    r.close();
+
+    w.close();
+    dir.close();
+  }
+
+  public void testOnlyDeletesTriggersMergeOnFlush() throws Exception {
+    Directory dir = newDirectory();
+    IndexWriterConfig iwc = new IndexWriterConfig(new MockAnalyzer(random()));
+    iwc.setMaxBufferedDocs(2);
+    LogDocMergePolicy mp = new LogDocMergePolicy();
+    mp.setMinMergeDocs(1);
+    iwc.setMergePolicy(mp);
+    iwc.setMergeScheduler(new SerialMergeScheduler());
+    iwc.setMaxBufferedDeleteTerms(18);
+    IndexWriter w = new IndexWriter(dir, iwc);
+    for(int i=0;i<38;i++) {
+      Document doc = new Document();
+      doc.add(newStringField("id", ""+i, Field.Store.NO));
+      w.addDocument(doc);
+    }
+    w.commit();
+
+    for(int i=0;i<18;i++) {
+      w.deleteDocuments(new Term("id", ""+i));
+    }
+    w.commit();
+
+    DirectoryReader r = DirectoryReader.open(dir);
+    assertEquals(1, r.leaves().size());
+    r.close();
+
+    w.close();
+    dir.close();
+  }
+
+  public void testOnlyDeletesDeleteAllDocs() throws Exception {
+    Directory dir = newDirectory();
+    IndexWriterConfig iwc = new IndexWriterConfig(new MockAnalyzer(random()));
+    iwc.setMaxBufferedDocs(2);
+    LogDocMergePolicy mp = new LogDocMergePolicy();
+    mp.setMinMergeDocs(1);
+    iwc.setMergePolicy(mp);
+    iwc.setMergeScheduler(new SerialMergeScheduler());
+    iwc.setMaxBufferedDeleteTerms(18);
+    IndexWriter w = new IndexWriter(dir, iwc);
+    for(int i=0;i<38;i++) {
+      Document doc = new Document();
+      doc.add(newStringField("id", ""+i, Field.Store.NO));
+      w.addDocument(doc);
+    }
+    w.commit();
+
+    for(int i=0;i<38;i++) {
+      w.deleteDocuments(new Term("id", ""+i));
+    }
+
+    DirectoryReader r = DirectoryReader.open(w, true);
+    assertEquals(0, r.leaves().size());
+    assertEquals(0, r.maxDoc());
+    r.close();
+
+    w.close();
+    dir.close();
   }
 }

@@ -33,16 +33,25 @@ import java.util.List;
  */
 public abstract class FilterDirectoryReader extends DirectoryReader {
 
+  /** Get the wrapped instance by <code>reader</code> as long as this reader is
+   *  an instance of {@link FilterDirectoryReader}.  */
+  public static DirectoryReader unwrap(DirectoryReader reader) {
+    while (reader instanceof FilterDirectoryReader) {
+      reader = ((FilterDirectoryReader) reader).in;
+    }
+    return reader;
+  }
+
   /**
    * Factory class passed to FilterDirectoryReader constructor that allows
    * subclasses to wrap the filtered DirectoryReader's subreaders.  You
    * can use this to, e.g., wrap the subreaders with specialised
-   * FilterAtomicReader implementations.
+   * FilterLeafReader implementations.
    */
   public static abstract class SubReaderWrapper {
 
-    private AtomicReader[] wrap(List<? extends AtomicReader> readers) {
-      AtomicReader[] wrapped = new AtomicReader[readers.size()];
+    private LeafReader[] wrap(List<? extends LeafReader> readers) {
+      LeafReader[] wrapped = new LeafReader[readers.size()];
       for (int i = 0; i < readers.size(); i++) {
         wrapped[i] = wrap(readers.get(i));
       }
@@ -55,37 +64,14 @@ public abstract class FilterDirectoryReader extends DirectoryReader {
     /**
      * Wrap one of the parent DirectoryReader's subreaders
      * @param reader the subreader to wrap
-     * @return a wrapped/filtered AtomicReader
+     * @return a wrapped/filtered LeafReader
      */
-    public abstract AtomicReader wrap(AtomicReader reader);
+    public abstract LeafReader wrap(LeafReader reader);
 
-  }
-
-  /**
-   * A no-op SubReaderWrapper that simply returns the parent
-   * DirectoryReader's original subreaders.
-   */
-  public static class StandardReaderWrapper extends SubReaderWrapper {
-
-    /** Constructor */
-    public StandardReaderWrapper() {}
-
-    @Override
-    public AtomicReader wrap(AtomicReader reader) {
-      return reader;
-    }
   }
 
   /** The filtered DirectoryReader */
   protected final DirectoryReader in;
-
-  /**
-   * Create a new FilterDirectoryReader that filters a passed in DirectoryReader.
-   * @param in the DirectoryReader to filter
-   */
-  public FilterDirectoryReader(DirectoryReader in) {
-    this(in, new StandardReaderWrapper());
-  }
 
   /**
    * Create a new FilterDirectoryReader that filters a passed in DirectoryReader,
@@ -93,7 +79,7 @@ public abstract class FilterDirectoryReader extends DirectoryReader {
    * @param in the DirectoryReader to filter
    * @param wrapper the SubReaderWrapper to use to wrap subreaders
    */
-  public FilterDirectoryReader(DirectoryReader in, SubReaderWrapper wrapper) {
+  public FilterDirectoryReader(DirectoryReader in, SubReaderWrapper wrapper) throws IOException {
     super(in.directory(), wrapper.wrap(in.getSequentialSubReaders()));
     this.in = in;
   }
@@ -107,9 +93,9 @@ public abstract class FilterDirectoryReader extends DirectoryReader {
    * @param in the DirectoryReader to wrap
    * @return the wrapped DirectoryReader
    */
-  protected abstract DirectoryReader doWrapDirectoryReader(DirectoryReader in);
+  protected abstract DirectoryReader doWrapDirectoryReader(DirectoryReader in) throws IOException;
 
-  private final DirectoryReader wrapDirectoryReader(DirectoryReader in) {
+  private final DirectoryReader wrapDirectoryReader(DirectoryReader in) throws IOException {
     return in == null ? null : doWrapDirectoryReader(in);
   }
 
@@ -148,4 +134,8 @@ public abstract class FilterDirectoryReader extends DirectoryReader {
     in.doClose();
   }
 
+  /** Returns the wrapped {@link DirectoryReader}. */
+  public DirectoryReader getDelegate() {
+    return in;
+  }
 }

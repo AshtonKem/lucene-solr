@@ -1,3 +1,5 @@
+package org.apache.lucene.util;
+
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -15,25 +17,24 @@
  * limitations under the License.
  */
 
-package org.apache.lucene.util;
-
 import java.io.IOException;
-import java.util.BitSet;
+import java.util.Random;
 
 import org.apache.lucene.search.DocIdSetIterator;
 
-public class TestFixedBitSet extends BaseDocIdSetTestCase<FixedBitSet> {
+public class TestFixedBitSet extends BaseBitSetTestCase<FixedBitSet> {
 
   @Override
   public FixedBitSet copyOf(BitSet bs, int length) throws IOException {
     final FixedBitSet set = new FixedBitSet(length);
-    for (int doc = bs.nextSetBit(0); doc != -1; doc = bs.nextSetBit(doc + 1)) {
+    for (int doc = bs.nextSetBit(0); doc != DocIdSetIterator.NO_MORE_DOCS; doc = doc + 1 >= length ? DocIdSetIterator.NO_MORE_DOCS : bs.nextSetBit(doc + 1)) {
       set.set(doc);
     }
     return set;
   }
 
-  void doGet(BitSet a, FixedBitSet b) {
+  void doGet(java.util.BitSet a, FixedBitSet b) {
+    assertEquals(a.cardinality(), b.cardinality());
     int max = b.length();
     for (int i=0; i<max; i++) {
       if (a.get(i) != b.get(i)) {
@@ -42,16 +43,22 @@ public class TestFixedBitSet extends BaseDocIdSetTestCase<FixedBitSet> {
     }
   }
 
-  void doNextSetBit(BitSet a, FixedBitSet b) {
-    int aa=-1,bb=-1;
+  void doNextSetBit(java.util.BitSet a, FixedBitSet b) {
+    assertEquals(a.cardinality(), b.cardinality());
+    int aa=-1;
+    int bb=-1;
     do {
       aa = a.nextSetBit(aa+1);
-      bb = bb < b.length()-1 ? b.nextSetBit(bb+1) : -1;
+      if (aa == -1) {
+        aa = DocIdSetIterator.NO_MORE_DOCS;
+      }
+      bb = bb < b.length()-1 ? b.nextSetBit(bb+1) : DocIdSetIterator.NO_MORE_DOCS;
       assertEquals(aa,bb);
-    } while (aa>=0);
+    } while (aa != DocIdSetIterator.NO_MORE_DOCS);
   }
 
-  void doPrevSetBit(BitSet a, FixedBitSet b) {
+  void doPrevSetBit(java.util.BitSet a, FixedBitSet b) {
+    assertEquals(a.cardinality(), b.cardinality());
     int aa = a.size() + random().nextInt(100);
     int bb = aa;
     do {
@@ -74,14 +81,15 @@ public class TestFixedBitSet extends BaseDocIdSetTestCase<FixedBitSet> {
   }
 
   // test interleaving different FixedBitSetIterator.next()/skipTo()
-  void doIterate(BitSet a, FixedBitSet b, int mode) throws IOException {
+  void doIterate(java.util.BitSet a, FixedBitSet b, int mode) throws IOException {
     if (mode==1) doIterate1(a, b);
     if (mode==2) doIterate2(a, b);
   }
 
-  void doIterate1(BitSet a, FixedBitSet b) throws IOException {
+  void doIterate1(java.util.BitSet a, FixedBitSet b) throws IOException {
+    assertEquals(a.cardinality(), b.cardinality());
     int aa=-1,bb=-1;
-    DocIdSetIterator iterator = b.iterator();
+    DocIdSetIterator iterator = new BitSetIterator(b, 0);
     do {
       aa = a.nextSetBit(aa+1);
       bb = (bb < b.length() && random().nextBoolean()) ? iterator.nextDoc() : iterator.advance(bb + 1);
@@ -89,9 +97,10 @@ public class TestFixedBitSet extends BaseDocIdSetTestCase<FixedBitSet> {
     } while (aa>=0);
   }
 
-  void doIterate2(BitSet a, FixedBitSet b) throws IOException {
+  void doIterate2(java.util.BitSet a, FixedBitSet b) throws IOException {
+    assertEquals(a.cardinality(), b.cardinality());
     int aa=-1,bb=-1;
-    DocIdSetIterator iterator = b.iterator();
+    DocIdSetIterator iterator = new BitSetIterator(b, 0);
     do {
       aa = a.nextSetBit(aa+1);
       bb = random().nextBoolean() ? iterator.nextDoc() : iterator.advance(bb + 1);
@@ -100,12 +109,12 @@ public class TestFixedBitSet extends BaseDocIdSetTestCase<FixedBitSet> {
   }
 
   void doRandomSets(int maxSize, int iter, int mode) throws IOException {
-    BitSet a0=null;
+    java.util.BitSet a0=null;
     FixedBitSet b0=null;
 
     for (int i=0; i<iter; i++) {
       int sz = TestUtil.nextInt(random(), 2, maxSize);
-      BitSet a = new BitSet(sz);
+      java.util.BitSet a = new java.util.BitSet(sz);
       FixedBitSet b = new FixedBitSet(sz);
 
       // test the various ways of setting bits
@@ -123,12 +132,12 @@ public class TestFixedBitSet extends BaseDocIdSetTestCase<FixedBitSet> {
           b.clear(idx);
           
           idx = random().nextInt(sz);
-          a.flip(idx);
+          a.flip(idx, idx+1);
           b.flip(idx, idx+1);
 
           idx = random().nextInt(sz);
           a.flip(idx);
-          b.flip(idx, idx+1);
+          b.flip(idx);
 
           boolean val2 = b.get(idx);
           boolean val = b.getAndSet(idx);
@@ -147,14 +156,14 @@ public class TestFixedBitSet extends BaseDocIdSetTestCase<FixedBitSet> {
       int fromIndex, toIndex;
       fromIndex = random().nextInt(sz/2);
       toIndex = fromIndex + random().nextInt(sz - fromIndex);
-      BitSet aa = (BitSet)a.clone(); aa.flip(fromIndex,toIndex);
+      java.util.BitSet aa = (java.util.BitSet)a.clone(); aa.flip(fromIndex,toIndex);
       FixedBitSet bb = b.clone(); bb.flip(fromIndex,toIndex);
 
       doIterate(aa,bb, mode);   // a problem here is from flip or doIterate
 
       fromIndex = random().nextInt(sz/2);
       toIndex = fromIndex + random().nextInt(sz - fromIndex);
-      aa = (BitSet)a.clone(); aa.clear(fromIndex,toIndex);
+      aa = (java.util.BitSet)a.clone(); aa.clear(fromIndex,toIndex);
       bb = b.clone(); bb.clear(fromIndex,toIndex);
 
       doNextSetBit(aa,bb); // a problem here is from clear() or nextSetBit
@@ -163,7 +172,7 @@ public class TestFixedBitSet extends BaseDocIdSetTestCase<FixedBitSet> {
 
       fromIndex = random().nextInt(sz/2);
       toIndex = fromIndex + random().nextInt(sz - fromIndex);
-      aa = (BitSet)a.clone(); aa.set(fromIndex,toIndex);
+      aa = (java.util.BitSet)a.clone(); aa.set(fromIndex,toIndex);
       bb = b.clone(); bb.set(fromIndex,toIndex);
 
       doNextSetBit(aa,bb); // a problem here is from set() or nextSetBit
@@ -173,10 +182,10 @@ public class TestFixedBitSet extends BaseDocIdSetTestCase<FixedBitSet> {
       if (b0 != null && b0.length() <= b.length()) {
         assertEquals(a.cardinality(), b.cardinality());
 
-        BitSet a_and = (BitSet)a.clone(); a_and.and(a0);
-        BitSet a_or = (BitSet)a.clone(); a_or.or(a0);
-        BitSet a_xor = (BitSet)a.clone(); a_xor.xor(a0);
-        BitSet a_andn = (BitSet)a.clone(); a_andn.andNot(a0);
+        java.util.BitSet a_and = (java.util.BitSet)a.clone(); a_and.and(a0);
+        java.util.BitSet a_or = (java.util.BitSet)a.clone(); a_or.or(a0);
+        java.util.BitSet a_xor = (java.util.BitSet)a.clone(); a_xor.xor(a0);
+        java.util.BitSet a_andn = (java.util.BitSet)a.clone(); a_andn.andNot(a0);
 
         FixedBitSet b_and = b.clone(); assertEquals(b,b_and); b_and.and(b0);
         FixedBitSet b_or = b.clone(); b_or.or(b0);
@@ -201,12 +210,13 @@ public class TestFixedBitSet extends BaseDocIdSetTestCase<FixedBitSet> {
       b0=b;
     }
   }
-  
+
   // large enough to flush obvious bugs, small enough to run in <.5 sec as part of a
   // larger testsuite.
   public void testSmall() throws IOException {
-    doRandomSets(atLeast(1200), atLeast(1000), 1);
-    doRandomSets(atLeast(1200), atLeast(1000), 2);
+    final int iters = TEST_NIGHTLY ? atLeast(1000) : 100;
+    doRandomSets(atLeast(1200), iters, 1);
+    doRandomSets(atLeast(1200), iters, 2);
   }
 
   // uncomment to run a bigger test (~2 minutes).
@@ -282,11 +292,7 @@ public class TestFixedBitSet extends BaseDocIdSetTestCase<FixedBitSet> {
     if (random().nextBoolean()) {
       int bits2words = FixedBitSet.bits2words(numBits);
       long[] words = new long[bits2words + random().nextInt(100)];
-      for (int i = bits2words; i < words.length; i++) {
-        words[i] = random().nextLong();
-      }
       bs = new FixedBitSet(words, numBits);
-
     } else {
       bs = new FixedBitSet(numBits);
     }
@@ -296,8 +302,8 @@ public class TestFixedBitSet extends BaseDocIdSetTestCase<FixedBitSet> {
     return bs;
   }
 
-  private BitSet makeBitSet(int[] a) {
-    BitSet bs = new BitSet();
+  private java.util.BitSet makeBitSet(int[] a) {
+    java.util.BitSet bs = new java.util.BitSet();
     for (int e: a) {
       bs.set(e);
     }
@@ -306,7 +312,7 @@ public class TestFixedBitSet extends BaseDocIdSetTestCase<FixedBitSet> {
 
   private void checkPrevSetBitArray(int [] a, int numBits) {
     FixedBitSet obs = makeFixedBitSet(a, numBits);
-    BitSet bs = makeBitSet(a);
+    java.util.BitSet bs = makeBitSet(a);
     doPrevSetBit(bs, obs);
   }
 
@@ -319,7 +325,7 @@ public class TestFixedBitSet extends BaseDocIdSetTestCase<FixedBitSet> {
   
   private void checkNextSetBitArray(int [] a, int numBits) {
     FixedBitSet obs = makeFixedBitSet(a, numBits);
-    BitSet bs = makeBitSet(a);
+    java.util.BitSet bs = makeBitSet(a);
     doNextSetBit(bs, obs);
   }
   
@@ -360,4 +366,131 @@ public class TestFixedBitSet extends BaseDocIdSetTestCase<FixedBitSet> {
     assertFalse(newBits.get(1));
   }
   
+  public void testBits2Words() {
+    assertEquals(0, FixedBitSet.bits2words(0));
+    assertEquals(1, FixedBitSet.bits2words(1));
+    // ...
+    assertEquals(1, FixedBitSet.bits2words(64));
+    assertEquals(2, FixedBitSet.bits2words(65));
+    // ...
+    assertEquals(2, FixedBitSet.bits2words(128));
+    assertEquals(3, FixedBitSet.bits2words(129));
+    // ...
+    assertEquals(1024, FixedBitSet.bits2words(65536));
+    assertEquals(1025, FixedBitSet.bits2words(65537));
+    // ...
+    assertEquals(1 << (31-6), FixedBitSet.bits2words(Integer.MAX_VALUE));
+  }
+  
+  private int[] makeIntArray(Random random, int count, int min, int max) {
+    int[] rv = new int[count];
+    
+    for (int i = 0; i < count; ++i) {
+      rv[i] = TestUtil.nextInt(random, min, max);
+    }
+    
+    return rv;
+  }
+  
+  // Demonstrates that the presence of ghost bits in the last used word can cause spurious failures
+  public void testIntersectionCount() {
+    Random random = random();
+    
+    int numBits1 = TestUtil.nextInt(random, 1000, 2000);
+    int numBits2 = TestUtil.nextInt(random, 1000, 2000);
+    
+    int count1 = TestUtil.nextInt(random, 0, numBits1 - 1);
+    int count2 = TestUtil.nextInt(random, 0, numBits2 - 1);
+
+    int[] bits1 = makeIntArray(random, count1, 0, numBits1 - 1);
+    int[] bits2 = makeIntArray(random, count2, 0, numBits2 - 1);
+    
+    FixedBitSet fixedBitSet1 = makeFixedBitSet(bits1, numBits1);
+    FixedBitSet fixedBitSet2 = makeFixedBitSet(bits2, numBits2);
+    
+    // If ghost bits are present, these may fail too, but that's not what we want to demonstrate here
+    //assertTrue(fixedBitSet1.cardinality() <= bits1.length);
+    //assertTrue(fixedBitSet2.cardinality() <= bits2.length);
+    
+    long intersectionCount = FixedBitSet.intersectionCount(fixedBitSet1, fixedBitSet2);
+    
+    java.util.BitSet bitSet1 = makeBitSet(bits1);
+    java.util.BitSet bitSet2 = makeBitSet(bits2);
+    
+    // If ghost bits are present, these may fail too, but that's not what we want to demonstrate here
+    //assertEquals(bitSet1.cardinality(), fixedBitSet1.cardinality());
+    //assertEquals(bitSet2.cardinality(), fixedBitSet2.cardinality());
+
+    bitSet1.and(bitSet2);
+    
+    assertEquals(bitSet1.cardinality(), intersectionCount);
+  }
+  
+  // Demonstrates that the presence of ghost bits in the last used word can cause spurious failures
+  public void testUnionCount() {
+    Random random = random();
+    
+    int numBits1 = TestUtil.nextInt(random, 1000, 2000);
+    int numBits2 = TestUtil.nextInt(random, 1000, 2000);
+    
+    int count1 = TestUtil.nextInt(random, 0, numBits1 - 1);
+    int count2 = TestUtil.nextInt(random, 0, numBits2 - 1);
+
+    int[] bits1 = makeIntArray(random, count1, 0, numBits1 - 1);
+    int[] bits2 = makeIntArray(random, count2, 0, numBits2 - 1);
+    
+    FixedBitSet fixedBitSet1 = makeFixedBitSet(bits1, numBits1);
+    FixedBitSet fixedBitSet2 = makeFixedBitSet(bits2, numBits2);
+    
+    // If ghost bits are present, these may fail too, but that's not what we want to demonstrate here
+    //assertTrue(fixedBitSet1.cardinality() <= bits1.length);
+    //assertTrue(fixedBitSet2.cardinality() <= bits2.length);
+    
+    long unionCount = FixedBitSet.unionCount(fixedBitSet1, fixedBitSet2);
+    
+    java.util.BitSet bitSet1 = makeBitSet(bits1);
+    java.util.BitSet bitSet2 = makeBitSet(bits2);
+    
+    // If ghost bits are present, these may fail too, but that's not what we want to demonstrate here
+    //assertEquals(bitSet1.cardinality(), fixedBitSet1.cardinality());
+    //assertEquals(bitSet2.cardinality(), fixedBitSet2.cardinality());
+
+    bitSet1.or(bitSet2);
+    
+    assertEquals(bitSet1.cardinality(), unionCount);
+  }
+  
+  // Demonstrates that the presence of ghost bits in the last used word can cause spurious failures
+  public void testAndNotCount() {
+    Random random = random();
+    
+    int numBits1 = TestUtil.nextInt(random, 1000, 2000);
+    int numBits2 = TestUtil.nextInt(random, 1000, 2000);
+    
+    int count1 = TestUtil.nextInt(random, 0, numBits1 - 1);
+    int count2 = TestUtil.nextInt(random, 0, numBits2 - 1);
+
+    int[] bits1 = makeIntArray(random, count1, 0, numBits1 - 1);
+    int[] bits2 = makeIntArray(random, count2, 0, numBits2 - 1);
+    
+    FixedBitSet fixedBitSet1 = makeFixedBitSet(bits1, numBits1);
+    FixedBitSet fixedBitSet2 = makeFixedBitSet(bits2, numBits2);
+    
+    // If ghost bits are present, these may fail too, but that's not what we want to demonstrate here
+    //assertTrue(fixedBitSet1.cardinality() <= bits1.length);
+    //assertTrue(fixedBitSet2.cardinality() <= bits2.length);
+    
+    long andNotCount = FixedBitSet.andNotCount(fixedBitSet1, fixedBitSet2);
+    
+    java.util.BitSet bitSet1 = makeBitSet(bits1);
+    java.util.BitSet bitSet2 = makeBitSet(bits2);
+    
+    // If ghost bits are present, these may fail too, but that's not what we want to demonstrate here
+    //assertEquals(bitSet1.cardinality(), fixedBitSet1.cardinality());
+    //assertEquals(bitSet2.cardinality(), fixedBitSet2.cardinality());
+
+    bitSet1.andNot(bitSet2);
+    
+    assertEquals(bitSet1.cardinality(), andNotCount);
+  }
 }

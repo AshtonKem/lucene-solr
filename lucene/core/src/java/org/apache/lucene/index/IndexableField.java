@@ -18,17 +18,13 @@ package org.apache.lucene.index;
  */
 
 import java.io.IOException;
-import java.io.Reader;
 
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.search.similarities.DefaultSimilarity; // javadocs
 import org.apache.lucene.search.similarities.Similarity; // javadocs
-import org.apache.lucene.util.BytesRef;
 
 // TODO: how to handle versioning here...?
-
-// TODO: we need to break out separate StoredField...
 
 /** Represents a single field for indexing.  IndexWriter
  *  consumes Iterable&lt;IndexableField&gt; as a document.
@@ -46,7 +42,7 @@ public interface IndexableField extends GeneralField {
    *              custom field types (like StringField and NumericField) that do not use
    *              the analyzer to still have good performance. Note: the passed-in type
    *              may be inappropriate, for example if you mix up different types of Fields
-   *              for the same field name. So its the responsibility of the implementation to
+   *              for the same field name. So it's the responsibility of the implementation to
    *              check.
    * @return TokenStream value for indexing the document.  Should always return
    *         a non-null value if the field is to be indexed
@@ -68,8 +64,8 @@ public interface IndexableField extends GeneralField {
    * the range of that encoding.
    * <p>
    * It is illegal to return a boost other than 1.0f for a field that is not
-   * indexed ({@link IndexableFieldType#indexed()} is false) or omits normalization values
-   * ({@link IndexableFieldType#omitNorms()} returns true).
+   * indexed ({@link IndexableFieldType#indexOptions()} is IndexOptions.NONE) or
+   * omits normalization values ({@link IndexableFieldType#omitNorms()} returns true).
    *
    * @see Similarity#computeNorm(FieldInvertState)
    * @see DefaultSimilarity#encodeNormValue(float)

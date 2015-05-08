@@ -26,6 +26,7 @@ import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.FieldInvertState;
+import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.RandomIndexWriter;
 import org.apache.lucene.index.Term;
@@ -111,7 +112,7 @@ public class TestSimilarityBase extends LuceneTestCase {
     for (int i = 0; i < docs.length; i++) {
       Document d = new Document();
       FieldType ft = new FieldType(TextField.TYPE_STORED);
-      ft.setIndexed(false);
+      ft.setIndexOptions(IndexOptions.NONE);
       d.add(newField(FIELD_ID, Integer.toString(i), ft));
       d.add(newTextField(FIELD_BODY, docs[i], Field.Store.YES));
       writer.addDocument(d);
@@ -193,7 +194,7 @@ public class TestSimilarityBase extends LuceneTestCase {
           toTermStats(stats));
       float score = sim.score(realStats, freq, docLen);
       float explScore = sim.explain(
-          realStats, 1, new Explanation(freq, "freq"), docLen).getValue();
+          realStats, 1, Explanation.match(freq, "freq"), docLen).getValue();
       assertFalse("Score infinite: " + sim.toString(), Float.isInfinite(score));
       assertFalse("Score NaN: " + sim.toString(), Float.isNaN(score));
       assertTrue("Score negative: " + sim.toString(), score >= 0);

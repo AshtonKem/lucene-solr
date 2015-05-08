@@ -20,12 +20,17 @@ package org.apache.lucene.codecs.compressing;
 import static org.apache.lucene.util.BitUtil.zigZagDecode;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
 
 import org.apache.lucene.index.CorruptIndexException;
 import org.apache.lucene.index.SegmentInfo;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.util.Accountable;
+import org.apache.lucene.util.Accountables;
 import org.apache.lucene.util.ArrayUtil;
 import org.apache.lucene.util.RamUsageEstimator;
 import org.apache.lucene.util.packed.PackedInts;
@@ -49,7 +54,7 @@ public final class CompressingStoredFieldsIndexReader implements Cloneable, Acco
   // It is the responsibility of the caller to close fieldsIndexIn after this constructor
   // has been called
   CompressingStoredFieldsIndexReader(IndexInput fieldsIndexIn, SegmentInfo si) throws IOException {
-    maxDoc = si.getDocCount();
+    maxDoc = si.maxDoc();
     int[] docBases = new int[16];
     long[] startPointers = new long[16];
     int[] avgChunkDocs = new int[16];
@@ -81,7 +86,7 @@ public final class CompressingStoredFieldsIndexReader implements Cloneable, Acco
       avgChunkDocs[blockCount] = fieldsIndexIn.readVInt();
       final int bitsPerDocBase = fieldsIndexIn.readVInt();
       if (bitsPerDocBase > 32) {
-        throw new CorruptIndexException("Corrupted bitsPerDocBase (resource=" + fieldsIndexIn + ")");
+        throw new CorruptIndexException("Corrupted bitsPerDocBase: " + bitsPerDocBase, fieldsIndexIn);
       }
       docBasesDeltas[blockCount] = PackedInts.getReaderNoHeader(fieldsIndexIn, PackedInts.Format.PACKED, packedIntsVersion, numChunks, bitsPerDocBase);
 
@@ -90,7 +95,7 @@ public final class CompressingStoredFieldsIndexReader implements Cloneable, Acco
       avgChunkSizes[blockCount] = fieldsIndexIn.readVLong();
       final int bitsPerStartPointer = fieldsIndexIn.readVInt();
       if (bitsPerStartPointer > 64) {
-        throw new CorruptIndexException("Corrupted bitsPerStartPointer (resource=" + fieldsIndexIn + ")");
+        throw new CorruptIndexException("Corrupted bitsPerStartPointer: " + bitsPerStartPointer, fieldsIndexIn);
       }
       startPointersDeltas[blockCount] = PackedInts.getReaderNoHeader(fieldsIndexIn, PackedInts.Format.PACKED, packedIntsVersion, numChunks, bitsPerStartPointer);
 
@@ -184,4 +189,27 @@ public final class CompressingStoredFieldsIndexReader implements Cloneable, Acco
     return res;
   }
 
+  @Override
+  public Collection<Accountable> getChildResources() {
+    List<Accountable> resources = new ArrayList<>();
+    
+    long docBaseDeltaBytes = RamUsageEstimator.shallowSizeOf(docBasesDeltas);
+    for (PackedInts.Reader r : docBasesDeltas) {
+      docBaseDeltaBytes += r.ramBytesUsed();
+    }
+    resources.add(Accountables.namedAccountable("doc base deltas", docBaseDeltaBytes));
+    
+    long startPointerDeltaBytes = RamUsageEstimator.shallowSizeOf(startPointersDeltas);
+    for (PackedInts.Reader r : startPointersDeltas) {
+      startPointerDeltaBytes += r.ramBytesUsed();
+    }
+    resources.add(Accountables.namedAccountable("start pointer deltas", startPointerDeltaBytes));
+    
+    return Collections.unmodifiableList(resources);
+  }
+
+  @Override
+  public String toString() {
+    return getClass().getSimpleName() + "(blocks=" + docBases.length + ")";
+  }
 }

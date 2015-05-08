@@ -17,7 +17,6 @@ package org.apache.lucene.analysis.icu.segmentation;
  * limitations under the License.
  */
 
-import java.io.Reader;
 import java.util.Random;
 
 import org.apache.lucene.analysis.Analyzer;
@@ -27,12 +26,24 @@ import org.apache.lucene.analysis.BaseTokenStreamTestCase;
  * test ICUTokenizer with dictionary-based CJ segmentation
  */
 public class TestICUTokenizerCJK extends BaseTokenStreamTestCase {
-  Analyzer a = new Analyzer() {
-    @Override
-    protected TokenStreamComponents createComponents(String fieldName) {
-      return new TokenStreamComponents(new ICUTokenizer(newAttributeFactory(), new DefaultICUTokenizerConfig(true)));
-    }
-  };
+  Analyzer a;
+  
+  @Override
+  public void setUp() throws Exception {
+    super.setUp();
+    a = new Analyzer() {
+      @Override
+      protected TokenStreamComponents createComponents(String fieldName) {
+        return new TokenStreamComponents(new ICUTokenizer(newAttributeFactory(), new DefaultICUTokenizerConfig(true)));
+      }
+    };
+  }
+  
+  @Override
+  public void tearDown() throws Exception {
+    a.close();
+    super.tearDown();
+  }
   
   /**
    * test stolen from smartcn
@@ -79,11 +90,13 @@ public class TestICUTokenizerCJK extends BaseTokenStreamTestCase {
   }
   
   /** blast some random strings through the analyzer */
+  @AwaitsFix(bugUrl = "https://issues.apache.org/jira/browse/LUCENE-5575")
   public void testRandomStrings() throws Exception {
     checkRandomData(random(), a, 10000*RANDOM_MULTIPLIER);
   }
   
   /** blast some random large strings through the analyzer */
+  @AwaitsFix(bugUrl = "https://issues.apache.org/jira/browse/LUCENE-5575")
   public void testRandomHugeStrings() throws Exception {
     Random random = random();
     checkRandomData(random, a, 100*RANDOM_MULTIPLIER, 8192);

@@ -35,7 +35,7 @@ import org.apache.lucene.util.BytesRef;
 public class PerThreadPKLookup {
 
   protected final TermsEnum[] termsEnums;
-  protected final DocsEnum[] docsEnums;
+  protected final PostingsEnum[] postingsEnums;
   protected final Bits[] liveDocs;
   protected final int[] docBases;
   protected final int numSegs;
@@ -43,34 +43,31 @@ public class PerThreadPKLookup {
 
   public PerThreadPKLookup(IndexReader r, String idFieldName) throws IOException {
 
-    List<AtomicReaderContext> leaves = new ArrayList<>(r.leaves());
+    List<LeafReaderContext> leaves = new ArrayList<>(r.leaves());
 
     // Larger segments are more likely to have the id, so we sort largest to smallest by numDocs:
-    Collections.sort(leaves, new Comparator<AtomicReaderContext>() {
+    Collections.sort(leaves, new Comparator<LeafReaderContext>() {
         @Override
-        public int compare(AtomicReaderContext c1, AtomicReaderContext c2) {
+        public int compare(LeafReaderContext c1, LeafReaderContext c2) {
           return c2.reader().numDocs() - c1.reader().numDocs();
         }
       });
 
     termsEnums = new TermsEnum[leaves.size()];
-    docsEnums = new DocsEnum[leaves.size()];
+    postingsEnums = new PostingsEnum[leaves.size()];
     liveDocs = new Bits[leaves.size()];
     docBases = new int[leaves.size()];
     int numSegs = 0;
     boolean hasDeletions = false;
     for(int i=0;i<leaves.size();i++) {
-      Fields fields = leaves.get(i).reader().fields();
-      if (fields != null) {
-        Terms terms = fields.terms(idFieldName);
-        if (terms != null) {
-          termsEnums[numSegs] = terms.iterator(null);
-          assert termsEnums[numSegs] != null;
-          docBases[numSegs] = leaves.get(i).docBase;
-          liveDocs[numSegs] = leaves.get(i).reader().getLiveDocs();
-          hasDeletions |= leaves.get(i).reader().hasDeletions();
-          numSegs++;
-        }
+      Terms terms = leaves.get(i).reader().terms(idFieldName);
+      if (terms != null) {
+        termsEnums[numSegs] = terms.iterator();
+        assert termsEnums[numSegs] != null;
+        docBases[numSegs] = leaves.get(i).docBase;
+        liveDocs[numSegs] = leaves.get(i).reader().getLiveDocs();
+        hasDeletions |= leaves.get(i).reader().hasDeletions();
+        numSegs++;
       }
     }
     this.numSegs = numSegs;
@@ -81,9 +78,9 @@ public class PerThreadPKLookup {
   public int lookup(BytesRef id) throws IOException {
     for(int seg=0;seg<numSegs;seg++) {
       if (termsEnums[seg].seekExact(id)) {
-        docsEnums[seg] = termsEnums[seg].docs(liveDocs[seg], docsEnums[seg], 0);
-        int docID = docsEnums[seg].nextDoc();
-        if (docID != DocsEnum.NO_MORE_DOCS) {
+        postingsEnums[seg] = termsEnums[seg].postings(liveDocs[seg], postingsEnums[seg], 0);
+        int docID = postingsEnums[seg].nextDoc();
+        if (docID != PostingsEnum.NO_MORE_DOCS) {
           return docBases[seg] + docID;
         }
         assert hasDeletions;

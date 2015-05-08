@@ -18,10 +18,11 @@ package org.apache.lucene.search;
  */
 
 import java.io.IOException;
+import java.util.Set;
 
-import org.apache.lucene.index.AtomicReader; // javadocs
-import org.apache.lucene.index.AtomicReaderContext;
-import org.apache.lucene.index.IndexReaderContext; // javadocs
+import org.apache.lucene.index.IndexReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.index.Term;
 import org.apache.lucene.search.similarities.Similarity;
 import org.apache.lucene.util.Bits;
 
@@ -32,17 +33,17 @@ import org.apache.lucene.util.Bits;
  * {@link Query}, so that a {@link Query} instance can be reused. <br>
  * {@link IndexSearcher} dependent state of the query should reside in the
  * {@link Weight}. <br>
- * {@link AtomicReader} dependent state should reside in the {@link Scorer}.
+ * {@link org.apache.lucene.index.LeafReader} dependent state should reside in the {@link Scorer}.
  * <p>
  * Since {@link Weight} creates {@link Scorer} instances for a given
- * {@link AtomicReaderContext} ({@link #scorer(AtomicReaderContext, Bits)})
+ * {@link org.apache.lucene.index.LeafReaderContext} ({@link #scorer(org.apache.lucene.index.LeafReaderContext, Bits)})
  * callers must maintain the relationship between the searcher's top-level
  * {@link IndexReaderContext} and the context used to create a {@link Scorer}. 
  * <p>
  * A <code>Weight</code> is used in the following way:
  * <ol>
  * <li>A <code>Weight</code> is constructed by a top-level query, given a
- * <code>IndexSearcher</code> ({@link Query#createWeight(IndexSearcher)}).
+ * <code>IndexSearcher</code> ({@link Query#createWeight(IndexSearcher, boolean)}).
  * <li>The {@link #getValueForNormalization()} method is called on the
  * <code>Weight</code> to compute the query normalization factor
  * {@link Similarity#queryNorm(float)} of the query clauses contained in the
@@ -50,12 +51,29 @@ import org.apache.lucene.util.Bits;
  * <li>The query normalization factor is passed to {@link #normalize(float, float)}. At
  * this point the weighting is complete.
  * <li>A <code>Scorer</code> is constructed by
- * {@link #scorer(AtomicReaderContext, Bits)}.
+ * {@link #scorer(org.apache.lucene.index.LeafReaderContext, Bits)}.
  * </ol>
  * 
  * @since 2.9
  */
 public abstract class Weight {
+
+  protected final Query parentQuery;
+
+  /** Sole constructor, typically invoked by sub-classes.
+   * @param query         the parent query
+   */
+  protected Weight(Query query) {
+    this.parentQuery = query;
+  }
+
+  /**
+   * Expert: adds all terms occurring in this query to the terms set. If the
+   * {@link Weight} was created with {@code needsScores == true} then this
+   * method will only extract terms which are used for scoring, otherwise it
+   * will extract all terms which are used for matching.
+   */
+  public abstract void extractTerms(Set<Term> terms);
 
   /**
    * An explanation of the score computation for the named document.
@@ -65,10 +83,12 @@ public abstract class Weight {
    * @return an Explanation for the score
    * @throws IOException if an {@link IOException} occurs
    */
-  public abstract Explanation explain(AtomicReaderContext context, int doc) throws IOException;
+  public abstract Explanation explain(LeafReaderContext context, int doc) throws IOException;
 
   /** The query that this concerns. */
-  public abstract Query getQuery();
+  public final Query getQuery() {
+    return parentQuery;
+  }
   
   /** The value for normalization of contained query clauses (e.g. sum of squared weights). */
   public abstract float getValueForNormalization() throws IOException;
@@ -80,16 +100,11 @@ public abstract class Weight {
    * Returns a {@link Scorer} which scores documents in/out-of order according
    * to <code>scoreDocsInOrder</code>.
    * <p>
-   * <b>NOTE:</b> even if <code>scoreDocsInOrder</code> is false, it is
-   * recommended to check whether the returned <code>Scorer</code> indeed scores
-   * documents out of order (i.e., call {@link #scoresDocsOutOfOrder()}), as
-   * some <code>Scorer</code> implementations will always return documents
-   * in-order.<br>
    * <b>NOTE:</b> null can be returned if no documents will be scored by this
    * query.
    * 
    * @param context
-   *          the {@link AtomicReaderContext} for which to return the {@link Scorer}.
+   *          the {@link org.apache.lucene.index.LeafReaderContext} for which to return the {@link Scorer}.
    * @param acceptDocs
    *          Bits that represent the allowable docs to match (typically deleted docs
    *          but possibly filtering other documents)
@@ -97,7 +112,7 @@ public abstract class Weight {
    * @return a {@link Scorer} which scores documents in/out-of order.
    * @throws IOException if there is a low-level I/O error
    */
-  public abstract Scorer scorer(AtomicReaderContext context, Bits acceptDocs) throws IOException;
+  public abstract Scorer scorer(LeafReaderContext context, Bits acceptDocs) throws IOException;
 
   /**
    * Optional method, to return a {@link BulkScorer} to
@@ -108,16 +123,7 @@ public abstract class Weight {
    * collects the resulting hits.
    *
    * @param context
-   *          the {@link AtomicReaderContext} for which to return the {@link Scorer}.
-   * @param scoreDocsInOrder
-   *          specifies whether in-order scoring of documents is required. Note
-   *          that if set to false (i.e., out-of-order scoring is required),
-   *          this method can return whatever scoring mode it supports, as every
-   *          in-order scorer is also an out-of-order one. However, an
-   *          out-of-order scorer may not support {@link Scorer#nextDoc()}
-   *          and/or {@link Scorer#advance(int)}, therefore it is recommended to
-   *          request an in-order scorer if use of these
-   *          methods is required.
+   *          the {@link org.apache.lucene.index.LeafReaderContext} for which to return the {@link Scorer}.
    * @param acceptDocs
    *          Bits that represent the allowable docs to match (typically deleted docs
    *          but possibly filtering other documents)
@@ -126,7 +132,7 @@ public abstract class Weight {
    * passes them to a collector.
    * @throws IOException if there is a low-level I/O error
    */
-  public BulkScorer bulkScorer(AtomicReaderContext context, boolean scoreDocsInOrder, Bits acceptDocs) throws IOException {
+  public BulkScorer bulkScorer(LeafReaderContext context, Bits acceptDocs) throws IOException {
 
     Scorer scorer = scorer(context, acceptDocs);
     if (scorer == null) {
@@ -151,7 +157,12 @@ public abstract class Weight {
     }
 
     @Override
-    public boolean score(LeafCollector collector, int max) throws IOException {
+    public long cost() {
+      return scorer.cost();
+    }
+
+    @Override
+    public int score(LeafCollector collector, int min, int max) throws IOException {
       // TODO: this may be sort of weird, when we are
       // embedded in a BooleanScorer, because we are
       // called for every chunk of 2048 documents.  But,
@@ -159,13 +170,13 @@ public abstract class Weight {
       // Collector doing something "interesting" in
       // setScorer will be forced to use BS2 anyways:
       collector.setScorer(scorer);
-      if (max == DocIdSetIterator.NO_MORE_DOCS) {
+      if (scorer.docID() == -1 && min == 0 && max == DocIdSetIterator.NO_MORE_DOCS) {
         scoreAll(collector, scorer);
-        return false;
+        return DocIdSetIterator.NO_MORE_DOCS;
       } else {
         int doc = scorer.docID();
-        if (doc < 0) {
-          doc = scorer.nextDoc();
+        if (doc < min) {
+          doc = scorer.advance(min);
         }
         return scoreRange(collector, scorer, doc, max);
       }
@@ -175,12 +186,12 @@ public abstract class Weight {
      *  separate this from {@link #scoreAll} to help out
      *  hotspot.
      *  See <a href="https://issues.apache.org/jira/browse/LUCENE-5487">LUCENE-5487</a> */
-    static boolean scoreRange(LeafCollector collector, Scorer scorer, int currentDoc, int end) throws IOException {
+    static int scoreRange(LeafCollector collector, Scorer scorer, int currentDoc, int end) throws IOException {
       while (currentDoc < end) {
         collector.collect(currentDoc);
         currentDoc = scorer.nextDoc();
       }
-      return currentDoc != DocIdSetIterator.NO_MORE_DOCS;
+      return currentDoc;
     }
     
     /** Specialized method to bulk-score all hits; we
@@ -188,25 +199,10 @@ public abstract class Weight {
      *  hotspot.
      *  See <a href="https://issues.apache.org/jira/browse/LUCENE-5487">LUCENE-5487</a> */
     static void scoreAll(LeafCollector collector, Scorer scorer) throws IOException {
-      int doc;
-      while ((doc = scorer.nextDoc()) != DocIdSetIterator.NO_MORE_DOCS) {
+      for (int doc = scorer.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS; doc = scorer.nextDoc()) {
         collector.collect(doc);
       }
     }
   }
 
-  /**
-   * Returns true iff this implementation scores docs only out of order. This
-   * method is used in conjunction with {@link Collector}'s
-   * {@link LeafCollector#acceptsDocsOutOfOrder() acceptsDocsOutOfOrder} and
-   * {@link #bulkScorer(AtomicReaderContext, boolean, Bits)} to
-   * create a matching {@link Scorer} instance for a given {@link Collector}, or
-   * vice versa.
-   * <p>
-   * <b>NOTE:</b> the default implementation returns <code>false</code>, i.e.
-   * the <code>Scorer</code> scores documents in-order.
-   */
-  public boolean scoresDocsOutOfOrder() {
-    return false;
-  }
 }

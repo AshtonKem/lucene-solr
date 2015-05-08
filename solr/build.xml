@@ -15,13 +15,16 @@
  See the License for the specific language governing permissions and
  limitations under the License.
 -->
-<project name="solr" default="usage" xmlns:ivy="antlib:org.apache.ivy.ant">
+<project name="solr" default="usage" 
+         xmlns:jacoco="antlib:org.jacoco.ant"
+         xmlns:ivy="antlib:org.apache.ivy.ant">
+
   <description>Solr</description>
   
   <target name="usage" description="Prints out instructions">
     <echo message="Welcome to the Solr project!" />
-    <echo message="Use 'ant example' to create a runnable example configuration." />
-    <echo message="Use 'ant run-example' to create and run the example." />
+    <echo message="Use 'ant server' to create the Solr server." />
+    <echo message="Use 'bin/solr' to run the Solr after it is created." />
     <echo message="And for developers:"/>
     <echo message="Use 'ant clean' to clean compiled files." />
     <echo message="Use 'ant compile' to compile the source code." />
@@ -38,11 +41,9 @@
   <!-- ========================================================================= -->
   <!-- ============================== USER TASKS =============================== -->
   <!-- ========================================================================= -->
- 
-  <target name="example" description="Creates a runnable example configuration."
-          depends="dist-contrib,dist-war">
-    <copy file="${dist}/${fullnamever}.war"
-          tofile="${example}/webapps/${ant.project.name}.war"/>
+
+  <target name="server" depends="dist-contrib,server-war"
+          description="Creates a Solr server">
     <jar destfile="${example}/exampledocs/post.jar"
          basedir="${dest}/solr-core/classes/java"
          includes="org/apache/solr/util/SimplePostTool*.class">
@@ -51,14 +52,14 @@
       </manifest>
     </jar>
     <delete includeemptydirs="true">
-      <fileset dir="${example}/solr-webapp" includes="**/*"/>
+      <fileset dir="${server.dir}/solr-webapp" includes="**/*"/>
     </delete>
-    <echo>See ${example}/README.txt for how to run the Solr example configuration.</echo>
+    <echo>See ${common-solr.dir}/README.txt for how to run the Solr server.</echo>
   </target>
   
-  <target name="run-example" depends="example"
+  <target name="run-example" depends="server"
           description="Run Solr interactively, via Jetty.  -Dexample.debug=true to enable JVM debugger">
-    <property name="example.solr.home" location="example/solr"/>
+    <property name="example.solr.home" location="${server.dir}/solr"/>
     <property name="example.debug.suspend" value="n"/>
     <property name="example.jetty.port" value="8983"/>
     <condition property="example.jvm.line" value="-Xdebug -Xrunjdwp:transport=dt_socket,server=y,suspend=${example.debug.suspend},address=5005">
@@ -66,10 +67,11 @@
     </condition>
     <property name="example.jvm.line" value=""/>
     <property name="example.heap.size" value="512M"/>
-    <java jar="${example}/start.jar" fork="true" dir="${example}" maxmemory="${example.heap.size}">
+    <java jar="${server.dir}/start.jar" fork="true" dir="${server.dir}" maxmemory="${example.heap.size}">
       <jvmarg line="${example.jvm.line}"/>
       <sysproperty key="solr.solr.home" file="${example.solr.home}"/>
       <sysproperty key="jetty.port" value="${example.jetty.port}"/>
+      <sysproperty key="jetty.home" value="${server.dir}"/>
     </java>
   </target>
  
@@ -131,11 +133,49 @@
 
   <target name="test" description="Validate, then run core, solrj, and contrib unit tests."
           depends="-init-totals, test-core, test-contrib, -check-totals"/>
+
+  <target name="jacoco" description="Generates JaCoCo code coverage reports." depends="-jacoco-install">
+    <!-- run jacoco for each module -->
+    <ant dir="${common-solr.dir}/core" target="jacoco" inheritAll="false">
+      <propertyset refid="uptodate.and.compiled.properties"/>
+    </ant>
+    <ant dir="solrj" target="jacoco" inheritAll="false">
+      <propertyset refid="uptodate.and.compiled.properties"/>
+    </ant>
+    <contrib-crawl target="jacoco" failonerror="false"/>
+
+    <!-- produce aggregate report -->
+    <property name="jacoco.output.dir" location="${jacoco.report.dir}/solr-all"/>
+    <!-- try to clean output dir to prevent any confusion -->
+    <delete dir="${jacoco.output.dir}" failonerror="false"/>
+    <mkdir dir="${jacoco.output.dir}"/>
+
+    <jacoco:report>
+      <executiondata>
+        <fileset dir="${common-solr.dir}/build" includes="**/jacoco.db"/>
+      </executiondata>
+      <structure name="${Name} aggregate JaCoCo coverage report">
+        <classfiles>
+          <fileset dir="${common-solr.dir}/build">
+             <include name="**/classes/java/**/*.class"/>
+             <exclude name="solr-test-framework/**"/>
+          </fileset>
+        </classfiles>
+        <!-- TODO: trying to specify source files could maybe work, but would
+             double the size of the reports -->
+      </structure>
+      <html destdir="${jacoco.output.dir}" footer="Copyright ${year} Apache Software Foundation.  All Rights Reserved."/>
+    </jacoco:report>
+  </target>
+
   <!-- "-clover.load" is *not* a useless dependency. do not remove -->
   <target name="test-core" description="Runs the core and solrj unit tests."
           depends="-clover.load, test-solr-core, test-solrj"/>
   <target name="pitest" description="Validate, then run core, solrj, and contrib unit tests."
           depends="pitest-core, pitest-contrib"/>
+  <target name="beast">
+    <fail message="The Beast only works inside of individual modules"/>
+  </target>
   <target name="compile-test" description="Compile core, solrj, and contrib unit tests, and solr-test-framework."
           depends="compile-solr-test-framework, compile-test-solr-core, compile-test-solrj, compile-test-contrib"/>
   <target name="javadocs" description="Calls javadocs-all, javadocs-solrj, and javadocs-test-framework"
@@ -153,7 +193,7 @@
       so we pass ourself (${ant.file}) here. The list of module build.xmls is given
       via string parameter, that must be splitted by the XSL at '|'.
     --> 
-    <xslt in="${ant.file}" out="${javadoc.dir}/index.html" style="site/xsl/index.xsl" force="true">
+    <xslt in="${ant.file}" out="${javadoc.dir}/index.html" style="site/index.xsl" force="true">
       <outputproperty name="method" value="html"/>
       <outputproperty name="version" value="4.0"/>
       <outputproperty name="encoding" value="UTF-8"/>
@@ -164,12 +204,12 @@
     </xslt>
     
     <pegdown todir="${javadoc.dir}">
-      <fileset dir="." includes="SYSTEM_REQUIREMENTS.txt"/>
-      <globmapper from="*.txt" to="*.html"/>
+      <fileset dir="site" includes="**/*.mdtext"/>
+      <globmapper from="*.mdtext" to="*.html"/>
     </pegdown>
 
     <copy todir="${javadoc.dir}">
-      <fileset dir="site/html" includes="**/*"/>
+      <fileset dir="site/assets" />
     </copy>
   </target>
 
@@ -237,14 +277,32 @@
   <target name="validate" depends="check-example-lucene-match-version,check-licenses,rat-sources,check-forbidden-apis" description="Validate stuff." />
 
   <target name="check-example-lucene-match-version">
-    <fail message="Some example solrconfig.xml files do not refer to the correct luceneMatchVersion: ${tests.luceneMatchVersion}">
+    <property name="configsets.dir" value="${server.dir}/solr/configsets"/>
+    <fail message="Some example solrconfig.xml files under ${configsets.dir} do not refer to the correct luceneMatchVersion: ${tests.luceneMatchVersion}">
       <condition>
         <resourcecount when="greater" count="0">
-          <fileset dir="${example}" includes="**/solrconfig.xml">
+          <fileset dir="${configsets.dir}" includes="**/solrconfig.xml">
             <not>
               <contains text="&lt;luceneMatchVersion&gt;${tests.luceneMatchVersion}&lt;" casesensitive="no"/>
             </not>
           </fileset>
+        </resourcecount>
+      </condition>
+    </fail>
+    <!-- Count the immediate sub-directories of the configsets dir to ensure all sub-dirs have a solrconfig.xml -->
+    <resourcecount property="count.subdirs">
+      <dirset dir="${configsets.dir}" includes="*"/>
+    </resourcecount>
+    <!-- Ensure there is at least one sub-directory -->
+    <fail message="No sub-directories found under ${configsets.dir}">
+      <condition>
+        <equals arg1="${count.subdirs}" arg2="0"/>
+      </condition>
+    </fail>
+    <fail message="At least one sub-directory under ${configsets.dir} does not have a solrconfig.xml file">
+      <condition>
+        <resourcecount when="ne" count="${count.subdirs}">
+          <fileset dir="${configsets.dir}" includes="**/solrconfig.xml"/>
         </resourcecount>
       </condition>
     </fail>
@@ -253,14 +311,14 @@
   <target name="check-licenses" depends="compile-tools,resolve,load-custom-tasks" description="Validate license stuff.">
     <license-check-macro dir="${basedir}" licensedir="${common-solr.dir}/licenses">
       <additional-excludes>
-        <!-- Exclude start.jar only (it'd be weird to have a license file there?) -->
-        <exclude name="example/start.jar" />
         <exclude name="example/exampledocs/post.jar" />
-        <exclude name="example/solr-webapp/**" />
+        <exclude name="server/solr-webapp/**" />
         <exclude name="package/**"/>
       </additional-excludes>
       <additional-filters>
         <replaceregex pattern="jetty([^/]+)$" replace="jetty" flags="gi" />
+        <!-- start.jar comes from jetty, .jar already stripped by checker defaults --> 
+        <replaceregex pattern="^start$" replace="jetty" flags="gi" />
         <replaceregex pattern="slf4j-([^/]+)$" replace="slf4j" flags="gi" />
         <replaceregex pattern="(bcmail|bcprov)-([^/]+)$" replace="\1" flags="gi" />
       </additional-filters>
@@ -295,14 +353,28 @@
     <delete dir="build" />
     <delete dir="dist" />
     <delete dir="package" />
+    <delete dir="server/solr/lib" />
     <delete dir="example/solr/lib" />
+    <delete dir="example/cloud" />
+    <delete dir="example/techproducts" />
+    <delete dir="example/schemaless" />
     <delete includeemptydirs="true">
+      <fileset dir="bin">
+        <include name="*.pid" />
+      </fileset>
       <fileset dir="example">
         <include name="**/data/**/*" />
+        <exclude name="**/.gitignore" />
+      </fileset>
+      <fileset dir="server">
+        <include name="**/data/**/*" />
+        <include name="solr/zoo_data/" />
+        <include name="start.jar" />
+        <include name="logs/*" />
         <include name="webapps/**/*" />
         <include name="solr-webapp/**/*" />
         <exclude name="**/.gitignore" />
-      </fileset>
+      </fileset>    	
     </delete>
   </target>
   
@@ -325,7 +397,7 @@
   
   <target name="dist"
           description="Creates the Solr distribution files."
-          depends="dist-solrj, dist-core, dist-test-framework, dist-contrib, dist-war" />
+          depends="dist-solrj, dist-core, dist-test-framework, dist-contrib" />
  
   <target name="dist-test-framework" depends="init-dist"
           description="Creates the Solr test-framework JAR.">
@@ -339,9 +411,9 @@
     <contrib-crawl target="dist" failonerror="true" />
   </target>
   
-  <target name="dist-war"
+  <target name="server-war"
           description="Creates the Solr WAR Distribution file.">
-    <ant dir="webapp" target="dist" inheritall="false">
+    <ant dir="webapp" target="server-war" inheritall="false">
       <propertyset refid="uptodate.and.compiled.properties"/>
     </ant>
   </target>
@@ -375,7 +447,7 @@
     <svn-export-source source.dir=".."/>
 
     <!-- Exclude javadoc package-list files under licenses incompatible with the ASL -->
-    <delete dir="${svn.export.dir}/lucene/tools/javadoc/java7"/>
+    <delete dir="${svn.export.dir}/lucene/tools/javadoc/java8"/>
     <!-- Exclude clover license files incompatible with the ASL -->
     <delete dir="${svn.export.dir}/lucene/tools/clover"/>
 
@@ -384,6 +456,9 @@
                    changes.product="SOLR"/>
 
     <tar destfile="${source.package.file}" compression="gzip" longfile="gnu">
+      <tarfileset dir="${svn.export.dir}/lucene"
+                  includes="CHANGES.txt"
+                  fullpath="${fullnamever}/solr/LUCENE_CHANGES.txt" />
       <tarfileset dir="${svn.export.dir}"
                   prefix="${fullnamever}"
                   excludes="solr/example/**/*.sh solr/example/**/bin/ solr/scripts/**"/>
@@ -413,7 +488,7 @@
       <tarfileset dir="." prefix="${fullnamever}" includes="LICENSE.txt NOTICE.txt"/>
       <tarfileset dir="." prefix="${fullnamever}/solr"
                   excludes="build/** ${package.dir.rel}/** ${dist.rel}/**
-                            example/webapps/*.war example/lib/**
+                            server/webapps/*.war example/lib/**
                             **/*.jar 
                             lib/README.committers.txt **/data/ **/logs/*
                             **/*.sh **/bin/ scripts/ 
@@ -435,12 +510,12 @@
       <param name="called.from.create-package" value="true"/>
       <target name="init-dist"/>
       <target name="dist"/>
-      <target name="example"/>
+      <target name="server"/>
       <target name="documentation"/>
     </antcall>
     <mkdir dir="${dest}/${fullnamever}"/>
     <delete includeemptydirs="true">
-      <fileset dir="${example}/solr-webapp" includes="**/*"/>
+      <fileset dir="${server.dir}/solr-webapp" includes="**/*"/>
       <fileset dir="${dest}/${fullnamever}" includes="**/*"/>
     </delete>
  
@@ -452,22 +527,26 @@
     <contrib-crawl target="add-lucene-libs-to-package"/>
  
     <tar destfile="${package.dir}/${fullnamever}.tgz" compression="gzip" longfile="gnu">
+      <tarfileset dir="../lucene"
+                  includes="CHANGES.txt"
+                  fullpath="${fullnamever}/LUCENE_CHANGES.txt" />
       <tarfileset dir="."
                   prefix="${fullnamever}"
                   includes="LICENSE.txt NOTICE.txt CHANGES.txt README.txt SYSTEM_REQUIREMENTS.txt
-                            example/** contrib/**/lib/** contrib/**/README.txt 
+                            bin/** server/** example/** contrib/**/lib/** contrib/**/README.txt 
                             licenses/**"
                   excludes="licenses/README.committers.txt **/data/ **/logs/* 
                             **/classes/ **/*.sh **/ivy.xml **/build.xml
                             **/bin/ **/*.iml **/*.ipr **/*.iws **/pom.xml 
-                            **/*pom.xml.template" />
+                            **/*pom.xml.template server/etc/test/" />
       <tarfileset dir="${dest}/contrib-lucene-libs-to-package"
                   prefix="${fullnamever}"
                   includes="**" />
       <tarfileset dir="."
                   filemode="755"
                   prefix="${fullnamever}"
-                  includes="bin/* example/**/*.sh example/**/bin/" />
+                  includes="bin/** server/**/*.sh example/**/*.sh example/**/bin/"
+                  excludes="server/etc/test/**" />
       <tarfileset dir="."
                   prefix="${fullnamever}"
                   includes="dist/*.jar
@@ -513,7 +592,7 @@
     <make-checksums file="${package.dir}/${fullnamever}.zip"/>
   </target>
 
-  <target name="changes-to-html">
+  <target name="changes-to-html" depends="define-lucene-javadoc-url">
     <build-changes changes.product="SOLR"/>
   </target>
  
@@ -521,7 +600,7 @@
     <sign-artifacts-macro artifacts.dir="${package.dir}"/>
   </target>
  
-  <target name="resolve" depends="resolve-example">
+  <target name="resolve" depends="resolve-example,resolve-server">
      <sequential>
      <ant dir="core" target="resolve" inheritall="false">
          <propertyset refid="uptodate.and.compiled.properties"/>
@@ -549,7 +628,7 @@
        <!-- NOTE: must currently exclude deprecated-list due to a javadocs bug (as of 1.7.0_09)
             javadocs generates invalid XML if you deprecate a method that takes a parameter
             with a generic type -->
-      <fileset dir="build/docs" includes="**/*.html" excludes="**/deprecated-list.html"/>
+      <fileset dir="build/docs" includes="**/*.html" excludes="**/deprecated-list.html,quickstart.html"/>
     </jtidy-macro>
     <echo message="Checking for broken links..."/>
     <check-broken-links dir="${javadoc.dir}"/>
@@ -557,7 +636,7 @@
     <!-- TODO: add missing docs for all classes and bump this to level=class -->
     <check-missing-javadocs dir="${javadoc.dir}" level="package"/>
   </target>
- 
+
   <target name="-ecj-javadoc-lint" depends="compile,compile-test,jar-test-framework,-ecj-javadoc-lint-unsupported,-ecj-resolve" if="ecj-javadoc-lint.supported">
     <subant target="-ecj-javadoc-lint" failonerror="true" inheritall="false">
       <propertyset refid="uptodate.and.compiled.properties"/>
@@ -719,5 +798,20 @@
     <ant dir="solrj" target="-append-module-dependencies-properties" inheritAll="false"/>
     <ant dir="test-framework" target="-append-module-dependencies-properties" inheritAll="false"/>
     <contrib-crawl target="-append-module-dependencies-properties"/>
+  </target>
+
+  <target name="example" depends="server">
+    <!-- no description so -p doesn't list it -->
+    <echo>
+
+    ! ! ! NOTICE NOTICE NOTICE ! ! !
+
+    'ant example' is no longer recomended
+
+    Use 'ant server' instead
+
+    'ant example' is going to be removed at some point
+
+    </echo>
   </target>
 </project>

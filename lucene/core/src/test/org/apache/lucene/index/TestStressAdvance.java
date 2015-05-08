@@ -74,19 +74,19 @@ public class TestStressAdvance extends LuceneTestCase {
           bDocIDs.add(docID);
         }
       }
-      final TermsEnum te = getOnlySegmentReader(r).fields().terms("field").iterator(null);
+      final TermsEnum te = getOnlySegmentReader(r).fields().terms("field").iterator();
       
-      DocsEnum de = null;
+      PostingsEnum de = null;
       for(int iter2=0;iter2<10;iter2++) {
         if (VERBOSE) {
           System.out.println("\nTEST: iter=" + iter + " iter2=" + iter2);
         }
         assertEquals(TermsEnum.SeekStatus.FOUND, te.seekCeil(new BytesRef("a")));
-        de = TestUtil.docs(random(), te, null, de, DocsEnum.FLAG_NONE);
+        de = TestUtil.docs(random(), te, null, de, PostingsEnum.NONE);
         testOne(de, aDocIDs);
 
         assertEquals(TermsEnum.SeekStatus.FOUND, te.seekCeil(new BytesRef("b")));
-        de = TestUtil.docs(random(), te, null, de, DocsEnum.FLAG_NONE);
+        de = TestUtil.docs(random(), te, null, de, PostingsEnum.NONE);
         testOne(de, bDocIDs);
       }
 
@@ -96,7 +96,7 @@ public class TestStressAdvance extends LuceneTestCase {
     }
   }
 
-  private void testOne(DocsEnum docs, List<Integer> expected) throws Exception {
+  private void testOne(PostingsEnum docs, List<Integer> expected) throws Exception {
     if (VERBOSE) {
       System.out.println("test");
     }

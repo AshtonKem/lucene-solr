@@ -125,18 +125,18 @@ public class TestBagOfPostings extends LuceneTestCase {
     iw.forceMerge(1);
     DirectoryReader ir = iw.getReader();
     assertEquals(1, ir.leaves().size());
-    AtomicReader air = ir.leaves().get(0).reader();
+    LeafReader air = ir.leaves().get(0).reader();
     Terms terms = air.terms("field");
     // numTerms-1 because there cannot be a term 0 with 0 postings:
     assertEquals(numTerms-1, terms.size());
-    TermsEnum termsEnum = terms.iterator(null);
+    TermsEnum termsEnum = terms.iterator();
     BytesRef term;
     while ((term = termsEnum.next()) != null) {
       int value = Integer.parseInt(term.utf8ToString());
       assertEquals(value, termsEnum.docFreq());
       // don't really need to check more than this, as CheckIndex
       // will verify that docFreq == actual number of documents seen
-      // from a docsAndPositionsEnum.
+      // from a postingsEnum.
     }
     ir.close();
     iw.close();

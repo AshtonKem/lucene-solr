@@ -36,7 +36,7 @@ import org.apache.lucene.queryparser.surround.query.SrndTruncQuery;
  *   c)</code> notation. </p>
  
  *  <p>The W and N operators express a positional relationship among their
- *  operands.  N is ordered, and W is unordered.  The distance is 1 by
+ *  operands.  W is ordered, and N is unordered.  The distance is 1 by
  *  default, meaning the operands are adjacent, or may be provided as a
  *  prefix from 2-99.  So, for example, 3W(a, b) means that terms a and b
  *  must appear within three positions of each other, or in other words, up
@@ -185,7 +185,7 @@ public class QueryParser implements QueryParserConstants {
           fieldName = jj_consume_token(TERM);
       jj_consume_token(COLON);
       if (fieldNames == null) {
-        fieldNames = new ArrayList<>();
+        fieldNames = new ArrayList<String>();
       }
       fieldNames.add(fieldName.image);
     }
@@ -211,7 +211,7 @@ public class QueryParser implements QueryParserConstants {
       oprt = jj_consume_token(OR);
                   /* keep only last used operator */
       if (queries == null) {
-        queries = new ArrayList<>();
+        queries = new ArrayList<SrndQuery>();
         queries.add(q);
       }
       q = AndQuery();
@@ -239,7 +239,7 @@ public class QueryParser implements QueryParserConstants {
       oprt = jj_consume_token(AND);
                    /* keep only last used operator */
       if (queries == null) {
-        queries = new ArrayList<>();
+        queries = new ArrayList<SrndQuery>();
         queries.add(q);
       }
       q = NotQuery();
@@ -267,7 +267,7 @@ public class QueryParser implements QueryParserConstants {
       oprt = jj_consume_token(NOT);
                     /* keep only last used operator */
       if (queries == null) {
-        queries = new ArrayList<>();
+        queries = new ArrayList<SrndQuery>();
         queries.add(q);
       }
       q = NQuery();
@@ -293,7 +293,7 @@ public class QueryParser implements QueryParserConstants {
         break label_5;
       }
       dt = jj_consume_token(N);
-      queries = new ArrayList<>();
+      queries = new ArrayList<SrndQuery>();
       queries.add(q); /* left associative */
 
       q = WQuery();
@@ -320,7 +320,7 @@ public class QueryParser implements QueryParserConstants {
         break label_6;
       }
       wt = jj_consume_token(W);
-      queries = new ArrayList<>();
+      queries = new ArrayList<SrndQuery>();
       queries.add(q); /* left associative */
 
       q = PrimaryQuery();
@@ -401,7 +401,7 @@ public class QueryParser implements QueryParserConstants {
 
   final public List<SrndQuery> FieldsQueryList() throws ParseException {
   SrndQuery q;
-  ArrayList<SrndQuery> queries = new ArrayList<>();
+  ArrayList<SrndQuery> queries = new ArrayList<SrndQuery>();
     jj_consume_token(LPAREN);
     q = FieldsQuery();
                      queries.add(q);
@@ -644,7 +644,7 @@ public class QueryParser implements QueryParserConstants {
       return (jj_ntk = jj_nt.kind);
   }
 
-  private java.util.List<int[]> jj_expentries = new java.util.ArrayList<>();
+  private java.util.List<int[]> jj_expentries = new java.util.ArrayList<int[]>();
   private int[] jj_expentry;
   private int jj_kind = -1;
   private int[] jj_lasttokens = new int[100];

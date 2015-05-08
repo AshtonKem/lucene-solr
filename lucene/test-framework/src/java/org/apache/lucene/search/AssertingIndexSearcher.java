@@ -22,10 +22,10 @@ import java.util.List;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
 
-import org.apache.lucene.index.AtomicReaderContext;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexReaderContext;
-import org.apache.lucene.util.TestUtil;
+import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.util.Bits;
 
 /**
  * Helper class that adds some extra checks to ensure correct
@@ -55,8 +55,8 @@ public class AssertingIndexSearcher extends IndexSearcher {
   
   /** Ensures, that the returned {@code Weight} is not normalized again, which may produce wrong scores. */
   @Override
-  public Weight createNormalizedWeight(Query query) throws IOException {
-    final Weight w = super.createNormalizedWeight(query);
+  public Weight createNormalizedWeight(Query query, boolean needsScores) throws IOException {
+    final Weight w = super.createNormalizedWeight(query, needsScores);
     return new AssertingWeight(random, w) {
 
       @Override
@@ -73,6 +73,12 @@ public class AssertingIndexSearcher extends IndexSearcher {
   }
 
   @Override
+  public Weight createWeight(Query query, boolean needsScores) throws IOException {
+    // this adds assertions to the inner weights/scorers too
+    return new AssertingWeight(random, super.createWeight(query, needsScores));
+  }
+
+  @Override
   public Query rewrite(Query original) throws IOException {
     // TODO: use the more sophisticated QueryUtils.check sometimes!
     QueryUtils.check(original);
@@ -82,16 +88,9 @@ public class AssertingIndexSearcher extends IndexSearcher {
   }
 
   @Override
-  protected Query wrapFilter(Query query, Filter filter) {
-    if (random.nextBoolean())
-      return super.wrapFilter(query, filter);
-    return (filter == null) ? query : new FilteredQuery(query, filter, TestUtil.randomFilterStrategy(random));
-  }
-
-  @Override
-  protected void search(List<AtomicReaderContext> leaves, Weight weight, Collector collector) throws IOException {
+  protected void search(List<LeafReaderContext> leaves, Weight weight, Collector collector) throws IOException {
     // TODO: shouldn't we AssertingCollector.wrap(collector) here?
-    super.search(leaves, AssertingWeight.wrap(random, weight), collector);
+    super.search(leaves, AssertingWeight.wrap(random, weight), AssertingCollector.wrap(random, collector));
   }
 
   @Override

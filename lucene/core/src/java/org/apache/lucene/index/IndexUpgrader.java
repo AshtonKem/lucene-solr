@@ -20,12 +20,14 @@ package org.apache.lucene.index;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.apache.lucene.util.CommandLineUtil;
-import org.apache.lucene.util.Constants;
 import org.apache.lucene.util.InfoStream;
 import org.apache.lucene.util.PrintStreamInfoStream;
+import org.apache.lucene.util.SuppressForbidden;
+import org.apache.lucene.util.Version;
 
-import java.io.File;
 import java.io.IOException;
+import java.nio.file.Paths;
+import java.nio.file.Path;
 import java.util.Collection;
 
 /**
@@ -51,6 +53,7 @@ import java.util.Collection;
   */
 public final class IndexUpgrader {
 
+  @SuppressForbidden(reason = "System.out required: command line tool")
   private static void printUsage() {
     System.err.println("Upgrades an index so all segments created with a previous Lucene version are rewritten.");
     System.err.println("Usage:");
@@ -72,6 +75,8 @@ public final class IndexUpgrader {
   public static void main(String[] args) throws IOException {
     parseArgs(args).upgrade();
   }
+  
+  @SuppressForbidden(reason = "System.out required: command line tool")
   static IndexUpgrader parseArgs(String[] args) throws IOException {
     String path = null;
     boolean deletePriorCommits = false;
@@ -102,11 +107,12 @@ public final class IndexUpgrader {
       printUsage();
     }
     
+    Path p = Paths.get(path);
     Directory dir = null;
     if (dirImpl == null) {
-      dir = FSDirectory.open(new File(path));
+      dir = FSDirectory.open(p);
     } else {
-      dir = CommandLineUtil.newFSDirectory(dirImpl, new File(path));
+      dir = CommandLineUtil.newFSDirectory(dirImpl, p);
     }
     return new IndexUpgrader(dir, out, deletePriorCommits);
   }
@@ -160,11 +166,11 @@ public final class IndexUpgrader {
     try {
       InfoStream infoStream = iwc.getInfoStream();
       if (infoStream.isEnabled("IndexUpgrader")) {
-        infoStream.message("IndexUpgrader", "Upgrading all pre-" + Constants.LUCENE_MAIN_VERSION + " segments of index directory '" + dir + "' to version " + Constants.LUCENE_MAIN_VERSION + "...");
+        infoStream.message("IndexUpgrader", "Upgrading all pre-" + Version.LATEST + " segments of index directory '" + dir + "' to version " + Version.LATEST + "...");
       }
       w.forceMerge(1);
       if (infoStream.isEnabled("IndexUpgrader")) {
-        infoStream.message("IndexUpgrader", "All segments upgraded to version " + Constants.LUCENE_MAIN_VERSION);
+        infoStream.message("IndexUpgrader", "All segments upgraded to version " + Version.LATEST);
       }
     } finally {
       w.close();

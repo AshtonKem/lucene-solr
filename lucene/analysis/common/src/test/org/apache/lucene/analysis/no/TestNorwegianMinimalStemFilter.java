@@ -17,9 +17,8 @@ package org.apache.lucene.analysis.no;
  * limitations under the License.
  */
 
-import java.io.FileInputStream;
 import java.io.IOException;
-import java.io.Reader;
+import java.nio.file.Files;
 import java.util.Random;
 
 import org.apache.lucene.analysis.Analyzer;
@@ -39,17 +38,29 @@ import static org.apache.lucene.analysis.no.NorwegianLightStemmer.NYNORSK;
  * Simple tests for {@link NorwegianMinimalStemFilter}
  */
 public class TestNorwegianMinimalStemFilter extends BaseTokenStreamTestCase {
-  private Analyzer analyzer = new Analyzer() {
-    @Override
-    protected TokenStreamComponents createComponents(String fieldName) {
-      Tokenizer source = new MockTokenizer(MockTokenizer.WHITESPACE, false);
-      return new TokenStreamComponents(source, new NorwegianMinimalStemFilter(source, BOKMAAL));
-    }
-  };
+  private Analyzer analyzer;
+  
+  @Override
+  public void setUp() throws Exception {
+    super.setUp();
+    analyzer = new Analyzer() {
+      @Override
+      protected TokenStreamComponents createComponents(String fieldName) {
+        Tokenizer source = new MockTokenizer(MockTokenizer.WHITESPACE, false);
+        return new TokenStreamComponents(source, new NorwegianMinimalStemFilter(source, BOKMAAL));
+      }
+    };
+  }
+  
+  @Override
+  public void tearDown() throws Exception {
+    analyzer.close();
+    super.tearDown();
+  }
   
   /** Test against a Bokmål vocabulary file */
   public void testVocabulary() throws IOException {
-    assertVocabulary(analyzer, new FileInputStream(getDataFile("nb_minimal.txt")));
+    assertVocabulary(analyzer, Files.newInputStream(getDataPath("nb_minimal.txt")));
   }
   
   /** Test against a Nynorsk vocabulary file */
@@ -61,7 +72,8 @@ public class TestNorwegianMinimalStemFilter extends BaseTokenStreamTestCase {
         return new TokenStreamComponents(source, new NorwegianMinimalStemFilter(source, NYNORSK));
       }
     };
-    assertVocabulary(analyzer, new FileInputStream(getDataFile("nn_minimal.txt")));
+    assertVocabulary(analyzer, Files.newInputStream(getDataPath("nn_minimal.txt")));
+    analyzer.close();
   }
   
   public void testKeyword() throws IOException {
@@ -75,6 +87,7 @@ public class TestNorwegianMinimalStemFilter extends BaseTokenStreamTestCase {
       }
     };
     checkOneTerm(a, "sekretæren", "sekretæren");
+    a.close();
   }
 
   /** blast some random strings through the analyzer */
@@ -92,5 +105,6 @@ public class TestNorwegianMinimalStemFilter extends BaseTokenStreamTestCase {
       }
     };
     checkOneTerm(a, "", "");
+    a.close();
   }
 }

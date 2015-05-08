@@ -18,10 +18,9 @@
 package org.apache.lucene.benchmark.byTask;
 
 import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.text.Collator;
 import java.util.List;
 import java.util.Locale;
@@ -41,7 +40,7 @@ import org.apache.lucene.benchmark.byTask.tasks.WriteLineDocTask;
 import org.apache.lucene.collation.CollationKeyAnalyzer;
 import org.apache.lucene.facet.taxonomy.TaxonomyReader;
 import org.apache.lucene.index.DirectoryReader;
-import org.apache.lucene.index.DocsEnum;
+import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.Fields;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
@@ -383,7 +382,7 @@ public class TestPerfTasksLogic extends BenchmarkTestCase {
    * Test WriteLineDoc and LineDocSource.
    */
   public void testLineDocFile() throws Exception {
-    File lineFile = createTempFile("test.reuters.lines", ".txt");
+    Path lineFile = createTempFile("test.reuters.lines", ".txt");
 
     // We will call WriteLineDocs this many times
     final int NUM_TRY_DOCS = 50;
@@ -393,7 +392,7 @@ public class TestPerfTasksLogic extends BenchmarkTestCase {
       "# ----- properties ",
       "content.source=org.apache.lucene.benchmark.byTask.feeds.SingleDocSource",
       "content.source.forever=true",
-      "line.file.out=" + lineFile.getAbsolutePath().replace('\\', '/'),
+      "line.file.out=" + lineFile.toAbsolutePath().toString().replace('\\', '/'),
       "# ----- alg ",
       "{WriteLineDoc()}:" + NUM_TRY_DOCS,
     };
@@ -401,9 +400,7 @@ public class TestPerfTasksLogic extends BenchmarkTestCase {
     // Run algo
     Benchmark benchmark = execBenchmark(algLines1);
 
-    BufferedReader r = new BufferedReader(
-        new InputStreamReader(
-            new FileInputStream(lineFile), StandardCharsets.UTF_8));
+    BufferedReader r = Files.newBufferedReader(lineFile, StandardCharsets.UTF_8);
     int numLines = 0;
     String line;
     while((line = r.readLine()) != null) {
@@ -420,7 +417,7 @@ public class TestPerfTasksLogic extends BenchmarkTestCase {
       "# ----- properties ",
       "analyzer=org.apache.lucene.analysis.core.WhitespaceAnalyzer",
       "content.source=org.apache.lucene.benchmark.byTask.feeds.LineDocSource",
-      "docs.file=" + lineFile.getAbsolutePath().replace('\\', '/'),
+      "docs.file=" + lineFile.toAbsolutePath().toString().replace('\\', '/'),
       "content.source.forever=false",
       "doc.reuse.fields=false",
       "ram.flush.mb=4",
@@ -444,7 +441,7 @@ public class TestPerfTasksLogic extends BenchmarkTestCase {
     assertEquals(numLines + " lines were created but " + ir.numDocs() + " docs are in the index", numLines, ir.numDocs());
     ir.close();
 
-    lineFile.delete();
+    Files.delete(lineFile);
   }
   
   /**
@@ -499,10 +496,10 @@ public class TestPerfTasksLogic extends BenchmarkTestCase {
       if (terms == null) {
         continue;
       }
-      TermsEnum termsEnum = terms.iterator(null);
-      DocsEnum docs = null;
+      TermsEnum termsEnum = terms.iterator();
+      PostingsEnum docs = null;
       while(termsEnum.next() != null) {
-        docs = TestUtil.docs(random(), termsEnum, MultiFields.getLiveDocs(reader), docs, DocsEnum.FLAG_FREQS);
+        docs = TestUtil.docs(random(), termsEnum, MultiFields.getLiveDocs(reader), docs, PostingsEnum.FREQS);
         while(docs.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
           totalTokenCount2 += docs.freq();
         }
@@ -535,7 +532,6 @@ public class TestPerfTasksLogic extends BenchmarkTestCase {
         "{ [ AddDoc]: 4} : * ",
         "ResetInputs ",
         "{ [ AddDoc]: 4} : * ",
-        "WaitForMerges",
         "CloseIndex",
     };
     
@@ -571,7 +567,6 @@ public class TestPerfTasksLogic extends BenchmarkTestCase {
         "  ResetSystemErase",
         "  CreateIndex",
         "  { \"AddDocs\"  AddDoc > : * ",
-        "  WaitForMerges",
         "  CloseIndex",
         "} : 2",
     };
@@ -836,8 +831,7 @@ public class TestPerfTasksLogic extends BenchmarkTestCase {
     ir.close();
 
     // Make sure we have 3 segments:
-    SegmentInfos infos = new SegmentInfos();
-    infos.read(benchmark.getRunData().getDirectory());
+    SegmentInfos infos = SegmentInfos.readLatestCommit(benchmark.getRunData().getDirectory());
     assertEquals(3, infos.size());
   }
   
@@ -1063,7 +1057,7 @@ public class TestPerfTasksLogic extends BenchmarkTestCase {
     String algLines[] = {
         "content.source=org.apache.lucene.benchmark.byTask.feeds.LineDocSource",
         "docs.file=" + getReuters20LinesFile(),
-        "work.dir=" + getWorkDir().getAbsolutePath().replaceAll("\\\\", "/"), // Fix Windows path
+        "work.dir=" + getWorkDir().toAbsolutePath().toString().replaceAll("\\\\", "/"), // Fix Windows path
         "content.source.forever=false",
         "directory=RAMDirectory",
         "AnalyzerFactory(name:'" + singleQuoteEscapedName + "', " + params + ")",

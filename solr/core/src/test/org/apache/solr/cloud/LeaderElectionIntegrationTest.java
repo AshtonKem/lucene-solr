@@ -23,6 +23,7 @@ import org.apache.solr.common.cloud.SolrZkClient;
 import org.apache.solr.common.cloud.ZkNodeProps;
 import org.apache.solr.common.cloud.ZkStateReader;
 import org.apache.solr.core.CoreContainer;
+import org.apache.solr.core.CoreDescriptor;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -79,7 +80,7 @@ public class LeaderElectionIntegrationTest extends SolrTestCaseJ4 {
     
     System.setProperty("zkClientTimeout", "8000");
     
-    zkDir = createTempDir("zkData").getAbsolutePath();
+    zkDir = createTempDir("zkData").toFile().getAbsolutePath();
     zkServer = new ZkTestServer(zkDir);
     zkServer.run();
     System.setProperty("zkHost", zkServer.getZkAddress());
@@ -132,7 +133,7 @@ public class LeaderElectionIntegrationTest extends SolrTestCaseJ4 {
      
   private void setupContainer(int port, String shard) throws IOException,
       ParserConfigurationException, SAXException {
-    File data = createTempDir();
+    File data = createTempDir().toFile();
     
     System.setProperty("hostPort", Integer.toString(port));
     System.setProperty("shard", shard);
@@ -146,8 +147,7 @@ public class LeaderElectionIntegrationTest extends SolrTestCaseJ4 {
     ports.add(port);
     CoreContainer container = new CoreContainer();
     container.load();
-    assertTrue("Container " + port + " has no cores!", container.getCores()
-        .size() > 0);
+    container.create(new CoreDescriptor(container, "collection1", "collection1", "collection", "collection1"));
     containerMap.put(port, container);
     System.clearProperty("solr.solr.home");
     System.clearProperty("hostPort");
@@ -212,7 +212,10 @@ public class LeaderElectionIntegrationTest extends SolrTestCaseJ4 {
     String leader = getLeader();
     int leaderPort = getLeaderPort(leader);
     ZkController zkController = containerMap.get(leaderPort).getZkController();
-    zkController.getZkClient().getSolrZooKeeper().pauseCnxn(zkController.getClientTimeout() + 100);
+
+    zkController.getZkClient().getSolrZooKeeper().closeCnxn();
+    long sessionId = zkClient.getSolrZooKeeper().getSessionId();
+    zkServer.expire(sessionId);
     
     for (int i = 0; i < 60; i++) { // wait till leader is changed
       if (leaderPort != getLeaderPort(getLeader())) {

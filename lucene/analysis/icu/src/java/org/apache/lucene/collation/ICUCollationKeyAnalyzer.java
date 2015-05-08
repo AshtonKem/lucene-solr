@@ -71,11 +71,10 @@ public final class ICUCollationKeyAnalyzer extends Analyzer {
 
   /**
    * Create a new ICUCollationKeyAnalyzer, using the specified collator.
-   * 
-   * @param matchVersion compatibility version
+   *
    * @param collator CollationKey generator
    */
-  public ICUCollationKeyAnalyzer(Version matchVersion, Collator collator) {
+  public ICUCollationKeyAnalyzer(Collator collator) {
     this.factory = new ICUCollationAttributeFactory(collator);
   }
 

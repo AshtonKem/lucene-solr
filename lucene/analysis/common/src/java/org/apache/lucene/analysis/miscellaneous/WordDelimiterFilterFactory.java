@@ -63,7 +63,6 @@ public class WordDelimiterFilterFactory extends TokenFilterFactory implements Re
   /** Creates a new WordDelimiterFilterFactory */
   public WordDelimiterFilterFactory(Map<String, String> args) {
     super(args);
-    assureMatchVersion();
     int flags = 0;
     if (getInt(args, "generateWordParts", 1) != 0) {
       flags |= GENERATE_WORD_PARTS;
@@ -118,13 +117,8 @@ public class WordDelimiterFilterFactory extends TokenFilterFactory implements Re
 
   @Override
   public TokenFilter create(TokenStream input) {
-    if (luceneMatchVersion.onOrAfter(Version.LUCENE_4_8)) {
-      return new WordDelimiterFilter(input, typeTable == null ? WordDelimiterIterator.DEFAULT_WORD_DELIM_TABLE : typeTable,
+    return new WordDelimiterFilter(input, typeTable == null ? WordDelimiterIterator.DEFAULT_WORD_DELIM_TABLE : typeTable,
                                    flags, protectedWords);
-    } else {
-      return new Lucene47WordDelimiterFilter(input, typeTable == null ? WordDelimiterIterator.DEFAULT_WORD_DELIM_TABLE : typeTable,
-                                  flags, protectedWords);
-    }
   }
   
   // source => type

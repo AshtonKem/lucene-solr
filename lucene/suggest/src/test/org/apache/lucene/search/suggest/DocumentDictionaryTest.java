@@ -5,11 +5,13 @@ import java.util.AbstractMap.SimpleEntry;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 
+import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.MockAnalyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
@@ -25,6 +27,7 @@ import org.apache.lucene.index.Term;
 import org.apache.lucene.search.spell.Dictionary;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.util.BytesRef;
+import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.LuceneTestCase;
 import org.junit.Test;
 
@@ -52,7 +55,7 @@ public class DocumentDictionaryTest extends LuceneTestCase {
   static final String PAYLOAD_FIELD_NAME = "p1";
   static final String CONTEXT_FIELD_NAME = "c1";
   
-  /** Returns Pair(list of invalid document terms, Map of document term -> document) */
+  /** Returns Pair(list of invalid document terms, Map of document term -&gt; document) */
   private Map.Entry<List<String>, Map<String, Document>> generateIndexDocuments(int ndocs, boolean requiresPayload, boolean requiresContexts) {
     Map<String, Document> docs = new HashMap<>();
     List<String> invalidDocTerms = new ArrayList<>();
@@ -112,7 +115,8 @@ public class DocumentDictionaryTest extends LuceneTestCase {
   @Test
   public void testEmptyReader() throws IOException {
     Directory dir = newDirectory();
-    IndexWriterConfig iwc = newIndexWriterConfig(new MockAnalyzer(random()));
+    Analyzer analyzer = new MockAnalyzer(random());
+    IndexWriterConfig iwc = newIndexWriterConfig(analyzer);
     iwc.setMergePolicy(newLogMergePolicy());
     // Make sure the index is created?
     RandomIndexWriter writer = new RandomIndexWriter(random(), dir, iwc);
@@ -126,14 +130,14 @@ public class DocumentDictionaryTest extends LuceneTestCase {
     assertEquals(inputIterator.weight(), 0);
     assertNull(inputIterator.payload());
     
-    ir.close();
-    dir.close();
+    IOUtils.close(ir, analyzer, dir);
   }
   
   @Test
   public void testBasic() throws IOException {
     Directory dir = newDirectory();
-    IndexWriterConfig iwc = newIndexWriterConfig(new MockAnalyzer(random()));
+    Analyzer analyzer = new MockAnalyzer(random());
+    IndexWriterConfig iwc = newIndexWriterConfig(analyzer);
     iwc.setMergePolicy(newLogMergePolicy());
     RandomIndexWriter writer = new RandomIndexWriter(random(), dir, iwc);
     Map.Entry<List<String>, Map<String, Document>> res = generateIndexDocuments(atLeast(1000), true, false);
@@ -161,14 +165,14 @@ public class DocumentDictionaryTest extends LuceneTestCase {
     }
     assertTrue(docs.isEmpty());
     
-    ir.close();
-    dir.close();
+    IOUtils.close(ir, analyzer, dir);
   }
  
   @Test
   public void testWithoutPayload() throws IOException {
     Directory dir = newDirectory();
-    IndexWriterConfig iwc = newIndexWriterConfig(new MockAnalyzer(random()));
+    Analyzer analyzer = new MockAnalyzer(random());
+    IndexWriterConfig iwc = newIndexWriterConfig(analyzer);
     iwc.setMergePolicy(newLogMergePolicy());
     RandomIndexWriter writer = new RandomIndexWriter(random(), dir, iwc);
     Map.Entry<List<String>, Map<String, Document>> res = generateIndexDocuments(atLeast(1000), false, false);
@@ -197,14 +201,14 @@ public class DocumentDictionaryTest extends LuceneTestCase {
     
     assertTrue(docs.isEmpty());
     
-    ir.close();
-    dir.close();
+    IOUtils.close(ir, analyzer, dir);
   }
   
   @Test
   public void testWithContexts() throws IOException {
     Directory dir = newDirectory();
-    IndexWriterConfig iwc = newIndexWriterConfig(new MockAnalyzer(random()));
+    Analyzer analyzer = new MockAnalyzer(random());
+    IndexWriterConfig iwc = newIndexWriterConfig(analyzer);
     iwc.setMergePolicy(newLogMergePolicy());
     RandomIndexWriter writer = new RandomIndexWriter(random(), dir, iwc);
     Map.Entry<List<String>, Map<String, Document>> res = generateIndexDocuments(atLeast(1000), true, true);
@@ -238,14 +242,14 @@ public class DocumentDictionaryTest extends LuceneTestCase {
     }
     assertTrue(docs.isEmpty());
     
-    ir.close();
-    dir.close();
+    IOUtils.close(ir, analyzer, dir);
   }
   
   @Test
   public void testWithDeletions() throws IOException {
     Directory dir = newDirectory();
-    IndexWriterConfig iwc = newIndexWriterConfig(new MockAnalyzer(random()));
+    Analyzer analyzer = new MockAnalyzer(random());
+    IndexWriterConfig iwc = newIndexWriterConfig(analyzer);
     iwc.setMergePolicy(newLogMergePolicy());
     RandomIndexWriter writer = new RandomIndexWriter(random(), dir, iwc);
     Map.Entry<List<String>, Map<String, Document>> res = generateIndexDocuments(atLeast(1000), false, false);
@@ -295,7 +299,91 @@ public class DocumentDictionaryTest extends LuceneTestCase {
     }
     assertTrue(docs.isEmpty());
     
-    ir.close();
-    dir.close();
+    IOUtils.close(ir, analyzer, dir);
   }
+
+  @Test
+  public void testMultiValuedField() throws IOException {
+    Directory dir = newDirectory();
+    Analyzer analyzer = new MockAnalyzer(random());
+    IndexWriterConfig iwc = newIndexWriterConfig(random(), analyzer);
+    iwc.setMergePolicy(newLogMergePolicy());
+    RandomIndexWriter writer = new RandomIndexWriter(random(), dir, iwc);
+
+    List<Suggestion> suggestions = indexMultiValuedDocuments(atLeast(1000), writer);
+    writer.commit();
+    writer.close();
+
+    IndexReader ir = DirectoryReader.open(dir);
+    Dictionary dictionary = new DocumentDictionary(ir, FIELD_NAME, WEIGHT_FIELD_NAME, PAYLOAD_FIELD_NAME, CONTEXT_FIELD_NAME);
+    InputIterator inputIterator = dictionary.getEntryIterator();
+    BytesRef f;
+    Iterator<Suggestion> suggestionsIter = suggestions.iterator();
+    while((f = inputIterator.next())!=null) {
+      Suggestion nextSuggestion = suggestionsIter.next();
+      assertTrue(f.equals(nextSuggestion.term));
+      long weight = nextSuggestion.weight;
+      assertEquals(inputIterator.weight(), (weight != -1) ? weight : 0);
+      assertTrue(inputIterator.payload().equals(nextSuggestion.payload));
+      assertTrue(inputIterator.contexts().equals(nextSuggestion.contexts));
+    }
+    assertFalse(suggestionsIter.hasNext());
+    IOUtils.close(ir, analyzer, dir);
+  }
+
+  private List<Suggestion> indexMultiValuedDocuments(int numDocs, RandomIndexWriter writer) throws IOException {
+    List<Suggestion> suggestionList = new ArrayList<>(numDocs);
+
+    for(int i=0; i<numDocs; i++) {
+      Document doc = new Document();
+      Field field;
+      BytesRef payloadValue;
+      Set<BytesRef> contextValues = new HashSet<>();
+      long numericValue = -1; //-1 for missing weight
+      BytesRef term;
+
+      payloadValue = new BytesRef("payload_" + i);
+      field = new StoredField(PAYLOAD_FIELD_NAME, payloadValue);
+      doc.add(field);
+
+      if (usually()) {
+        numericValue = 100 + i;
+        field = new NumericDocValuesField(WEIGHT_FIELD_NAME, numericValue);
+        doc.add(field);
+      }
+
+      int numContexts = atLeast(1);
+      for (int j=0; j<numContexts; j++) {
+        BytesRef contextValue = new BytesRef("context_" + i + "_" + j);
+        field = new StoredField(CONTEXT_FIELD_NAME, contextValue);
+        doc.add(field);
+        contextValues.add(contextValue);
+      }
+
+      int numSuggestions = atLeast(2);
+      for (int j=0; j<numSuggestions; j++) {
+        term = new BytesRef("field_" + i + "_" + j);
+        field = new StoredField(FIELD_NAME, term);
+        doc.add(field);
+
+        Suggestion suggestionValue = new Suggestion();
+        suggestionValue.payload = payloadValue;
+        suggestionValue.contexts = contextValues;
+        suggestionValue.weight = numericValue;
+        suggestionValue.term = term;
+        suggestionList.add(suggestionValue);
+      }
+      writer.addDocument(doc);
+    }
+    return suggestionList;
+  }
+
+  private class Suggestion {
+    private long weight;
+    private BytesRef payload;
+    private Set<BytesRef> contexts;
+    private BytesRef term;
+  }
+
+
 }

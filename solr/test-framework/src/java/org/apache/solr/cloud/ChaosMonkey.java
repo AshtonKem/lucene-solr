@@ -18,9 +18,10 @@ package org.apache.solr.cloud;
  */
 
 import org.apache.lucene.util.LuceneTestCase;
-import org.apache.solr.client.solrj.SolrServer;
+import org.apache.solr.client.solrj.SolrClient;
 import org.apache.solr.client.solrj.embedded.JettySolrRunner;
 import org.apache.solr.cloud.AbstractFullDistribZkTestBase.CloudJettyRunner;
+import org.apache.solr.common.cloud.Replica;
 import org.apache.solr.common.cloud.Slice;
 import org.apache.solr.common.cloud.SolrZkClient;
 import org.apache.solr.common.cloud.ZkNodeProps;
@@ -73,7 +74,7 @@ public class ChaosMonkey {
   private AtomicInteger expires = new AtomicInteger();
   private AtomicInteger connloss = new AtomicInteger();
   
-  private Map<String,List<SolrServer>> shardToClient;
+  private Map<String,List<SolrClient>> shardToClient;
   private boolean expireSessions;
   private boolean causeConnectionLoss;
   private boolean aggressivelyKillLeaders;
@@ -124,34 +125,12 @@ public class ChaosMonkey {
     if (solrDispatchFilter != null) {
       CoreContainer cores = solrDispatchFilter.getCores();
       if (cores != null) {
-        causeConnectionLoss(jetty, cores.getZkController().getClientTimeout() + 200);
+        causeConnectionLoss(jetty);
+        long sessionId = cores.getZkController().getZkClient()
+            .getSolrZooKeeper().getSessionId();
+        zkServer.expire(sessionId);
       }
     }
-    
-
-//    Thread thread = new Thread() {
-//      {
-//        setDaemon(true);
-//      }
-//      public void run() {
-//        SolrDispatchFilter solrDispatchFilter = (SolrDispatchFilter) jetty.getDispatchFilter().getFilter();
-//        if (solrDispatchFilter != null) {
-//          CoreContainer cores = solrDispatchFilter.getCores();
-//          if (cores != null) {
-//            try {
-//              Thread.sleep(ZkTestServer.TICK_TIME * 2 + 800);
-//            } catch (InterruptedException e) {
-//              // we act as only connection loss
-//              return;
-//            }
-//            long sessionId = cores.getZkController().getZkClient().getSolrZooKeeper().getSessionId();
-//            zkServer.expire(sessionId);
-//          }
-//        }
-//      }
-//    };
-//    thread.start();
-
   }
   
   public void expireRandomSession() throws KeeperException, InterruptedException {
@@ -176,18 +155,13 @@ public class ChaosMonkey {
   }
   
   public static void causeConnectionLoss(JettySolrRunner jetty) {
-    causeConnectionLoss(jetty, ZkTestServer.TICK_TIME * 2 + 200);
-  }
-  
-  public static void causeConnectionLoss(JettySolrRunner jetty, int pauseTime) {
     SolrDispatchFilter solrDispatchFilter = (SolrDispatchFilter) jetty
         .getDispatchFilter().getFilter();
     if (solrDispatchFilter != null) {
       CoreContainer cores = solrDispatchFilter.getCores();
       if (cores != null) {
         SolrZkClient zkClient = cores.getZkController().getZkClient();
-        // must be at least double tick time...
-        zkClient.getSolrZooKeeper().pauseCnxn(pauseTime);
+        zkClient.getSolrZooKeeper().closeCnxn();
       }
     }
   }
@@ -245,9 +219,11 @@ public class ChaosMonkey {
       if (filter != null) {
         CoreContainer cores = ((SolrDispatchFilter) filter).getCores();
         if (cores != null) {
-          int zklocalport = ((InetSocketAddress) cores.getZkController()
-              .getZkClient().getSolrZooKeeper().getSocketAddress()).getPort();
-          IpTables.blockPort(zklocalport);
+          if (cores.isZooKeeperAware()) {
+            int zklocalport = ((InetSocketAddress) cores.getZkController()
+                .getZkClient().getSolrZooKeeper().getSocketAddress()).getPort();
+            IpTables.blockPort(zklocalport);
+          }
         }
       }
     }
@@ -423,8 +399,7 @@ public class ChaosMonkey {
     return cjetty;
   }
 
-  private int checkIfKillIsLegal(String slice, int numActive)
-      throws KeeperException, InterruptedException {
+  private int checkIfKillIsLegal(String slice, int numActive) throws KeeperException, InterruptedException {
     for (CloudJettyRunner cloudJetty : shardToJetty.get(slice)) {
       
       // get latest cloud state
@@ -438,11 +413,11 @@ public class ChaosMonkey {
         throw new RuntimeException("shard name " + cloudJetty.coreNodeName + " not found in " + theShards.getReplicasMap().keySet());
       }
       
-      String state = props.getStr(ZkStateReader.STATE_PROP);
-      String nodeName = props.getStr(ZkStateReader.NODE_NAME_PROP);
+      final Replica.State state = Replica.State.getState(props.getStr(ZkStateReader.STATE_PROP));
+      final String nodeName = props.getStr(ZkStateReader.NODE_NAME_PROP);
       
       if (cloudJetty.jetty.isRunning()
-          && state.equals(ZkStateReader.ACTIVE)
+          && state == Replica.State.ACTIVE
           && zkStateReader.getClusterState().liveNodesContain(nodeName)) {
         numActive++;
       }
@@ -450,14 +425,14 @@ public class ChaosMonkey {
     return numActive;
   }
   
-  public SolrServer getRandomClient(String slice) throws KeeperException, InterruptedException {
+  public SolrClient getRandomClient(String slice) throws KeeperException, InterruptedException {
     // get latest cloud state
     zkStateReader.updateClusterState(true);
 
     // get random shard
-    List<SolrServer> clients = shardToClient.get(slice);
+    List<SolrClient> clients = shardToClient.get(slice);
     int index = LuceneTestCase.random().nextInt(clients.size() - 1);
-    SolrServer client = clients.get(index);
+    SolrClient client = clients.get(index);
 
     return client;
   }
@@ -618,9 +593,11 @@ public class ChaosMonkey {
       if (filter != null) {
         CoreContainer cores = ((SolrDispatchFilter) filter).getCores();
         if (cores != null) {
-          int zklocalport = ((InetSocketAddress) cores.getZkController()
-              .getZkClient().getSolrZooKeeper().getSocketAddress()).getPort();
-          IpTables.unblockPort(zklocalport);
+          if (cores.isZooKeeperAware()) {
+            int zklocalport = ((InetSocketAddress) cores.getZkController()
+                .getZkClient().getSolrZooKeeper().getSocketAddress()).getPort();
+            IpTables.unblockPort(zklocalport);
+          }
         }
       }
     }

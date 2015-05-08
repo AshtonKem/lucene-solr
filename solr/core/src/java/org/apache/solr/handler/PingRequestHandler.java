@@ -19,6 +19,7 @@ package org.apache.solr.handler;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.util.Date;
 import java.util.Locale;
 
@@ -49,7 +50,7 @@ import org.slf4j.LoggerFactory;
  * </p>
  * 
  * <p> 
- * In it's simplest form, the PingRequestHandler should be
+ * In its simplest form, the PingRequestHandler should be
  * configured with some defaults indicating a request that should be
  * executed.  If the request succeeds, then the PingRequestHandler
  * will respond back with a simple "OK" status.  If the request fails,
@@ -280,10 +281,12 @@ public class PingRequestHandler extends RequestHandlerBase implements SolrCoreAw
                                 "Unable to write healthcheck flag file", e);
       }
     } else {
-      if (healthcheck.exists() && !healthcheck.delete()){
+      try {
+        Files.deleteIfExists(healthcheck.toPath());
+      } catch (Throwable cause) {
         throw new SolrException(SolrException.ErrorCode.NOT_FOUND,
                                 "Did not successfully delete healthcheck file: "
-                                +healthcheck.getAbsolutePath());
+                                +healthcheck.getAbsolutePath(), cause);
       }
     }
   }

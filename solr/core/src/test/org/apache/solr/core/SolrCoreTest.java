@@ -18,6 +18,7 @@
 package org.apache.solr.core;
 
 import org.apache.solr.SolrTestCaseJ4;
+import org.apache.solr.common.util.ExecutorUtil;
 import org.apache.solr.handler.RequestHandlerBase;
 import org.apache.solr.handler.component.QueryComponent;
 import org.apache.solr.handler.component.SpellCheckComponent;
@@ -51,35 +52,6 @@ public class SolrCoreTest extends SolrTestCaseJ4 {
     deleteCore();
     super.tearDown();
   }
-  
-  @Test
-  public void testRemoveThenAddDefaultCore() throws Exception {
-    final CoreContainer cores = h.getCoreContainer();
-    SolrCore core = cores.getCore("");
-
-    assertEquals(COLLECTION1, cores.getDefaultCoreName());
-    
-    cores.unload("");
-    core.close();
-
-    CoreDescriptor cd = new CoreDescriptor(cores, COLLECTION1, "collection1",
-                                            CoreDescriptor.CORE_DATADIR, createTempDir("dataDir2").getAbsolutePath());
-    
-    cores.create(cd);
-    
-    assertEquals(COLLECTION1, cores.getDefaultCoreName());
-    
-    // so we should be able to get a core with collection1
-    core = cores.getCore(COLLECTION1);
-    assertNotNull(core);
-    core.close();
-    
-    // and with ""
-    core = cores.getCore("");
-    assertNotNull(core);
-    
-    core.close();
-  }
 
   @Test
   public void testRequestHandlerRegistry() {
@@ -100,7 +72,7 @@ public class SolrCoreTest extends SolrTestCaseJ4 {
   @Test
   public void testClose() throws Exception {
     final CoreContainer cores = h.getCoreContainer();
-    SolrCore core = cores.getCore("");
+    SolrCore core = cores.getCore(SolrTestCaseJ4.DEFAULT_TEST_CORENAME);
 
     ClosingRequestHandler handler1 = new ClosingRequestHandler();
     handler1.inform( core );
@@ -120,7 +92,7 @@ public class SolrCoreTest extends SolrTestCaseJ4 {
     assertTrue("Refcount != 1", core.getOpenCount() == 1);
     
     final CoreContainer cores = h.getCoreContainer();
-    SolrCore c1 = cores.getCore("");
+    SolrCore c1 = cores.getCore(SolrTestCaseJ4.DEFAULT_TEST_CORENAME);
     assertTrue("Refcount != 2", core.getOpenCount() == 2);
 
     ClosingRequestHandler handler1 = new ClosingRequestHandler();
@@ -131,12 +103,12 @@ public class SolrCoreTest extends SolrTestCaseJ4 {
     assertNull( old ); // should not be anything...
     assertEquals( core.getRequestHandlers().get( path ), handler1 );
    
-    SolrCore c2 = cores.getCore("");
+    SolrCore c2 = cores.getCore(SolrTestCaseJ4.DEFAULT_TEST_CORENAME);
     c1.close();
     assertTrue("Refcount < 1", core.getOpenCount() >= 1);
     assertTrue("Handler is closed", handler1.closed == false);
     
-    c1 = cores.getCore("");
+    c1 = cores.getCore(SolrTestCaseJ4.DEFAULT_TEST_CORENAME);
     assertTrue("Refcount < 2", core.getOpenCount() >= 2);
     assertTrue("Handler is closed", handler1.closed == false);
     
@@ -165,7 +137,7 @@ public class SolrCoreTest extends SolrTestCaseJ4 {
 
     final int LOOP = 100;
     final int MT = 16;
-    ExecutorService service = Executors.newFixedThreadPool(MT, new DefaultSolrThreadFactory("refCountMT"));
+    ExecutorService service = ExecutorUtil.newMDCAwareFixedThreadPool(MT, new DefaultSolrThreadFactory("refCountMT"));
     List<Callable<Integer>> callees = new ArrayList<>(MT);
     final CoreContainer cores = h.getCoreContainer();
     for (int i = 0; i < MT; ++i) {
@@ -184,7 +156,7 @@ public class SolrCoreTest extends SolrTestCaseJ4 {
           try {
             for (int l = 0; l < LOOP; ++l) {
               r += 1;
-              core = cores.getCore("");
+              core = cores.getCore(SolrTestCaseJ4.DEFAULT_TEST_CORENAME);
               // sprinkle concurrency hinting...
               yield(l);
               assertTrue("Refcount < 1", core.getOpenCount() >= 1);              
@@ -236,6 +208,14 @@ public class SolrCoreTest extends SolrTestCaseJ4 {
     //try a Req Handler, which are stored by name, not clas
     bean = infoRegistry.get("standard");
     assertNotNull("bean not registered", bean);
+  }
+
+  @Test
+  public void testConfiguration() throws Exception {
+    assertEquals("wrong config for slowQueryThresholdMillis", 2000, solrConfig.slowQueryThresholdMillis);
+    assertEquals("wrong config for maxBooleanClauses", 1024, solrConfig.booleanQueryMaxClauseCount);
+    assertEquals("wrong config for enableLazyFieldLoading", true, solrConfig.enableLazyFieldLoading);
+    assertEquals("wrong config for queryResultWindowSize", 10, solrConfig.queryResultWindowSize);
   }
 
 }

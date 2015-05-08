@@ -19,7 +19,6 @@ package org.apache.lucene.index;
 
 import org.apache.lucene.store.*;
 import org.apache.lucene.analysis.*;
-import org.apache.lucene.codecs.lucene41.Lucene41PostingsFormat;
 import org.apache.lucene.document.*;
 import org.apache.lucene.util.*;
 
@@ -53,7 +52,7 @@ public class TestFlex extends LuceneTestCase {
 
       IndexReader r = w.getReader();
       
-      TermsEnum terms = MultiFields.getTerms(r, "field3").iterator(null);
+      TermsEnum terms = MultiFields.getTerms(r, "field3").iterator();
       assertEquals(TermsEnum.SeekStatus.END, terms.seekCeil(new BytesRef("abc")));
       r.close();
     }
@@ -65,13 +64,13 @@ public class TestFlex extends LuceneTestCase {
   public void testTermOrd() throws Exception {
     Directory d = newDirectory();
     IndexWriter w = new IndexWriter(d, newIndexWriterConfig(new MockAnalyzer(random()))
-                                         .setCodec(TestUtil.alwaysPostingsFormat(new Lucene41PostingsFormat())));
+                                         .setCodec(TestUtil.alwaysPostingsFormat(TestUtil.getDefaultPostingsFormat())));
     Document doc = new Document();
     doc.add(newTextField("f", "a b c", Field.Store.NO));
     w.addDocument(doc);
     w.forceMerge(1);
     DirectoryReader r = w.getReader();
-    TermsEnum terms = getOnlySegmentReader(r).fields().terms("f").iterator(null);
+    TermsEnum terms = getOnlySegmentReader(r).fields().terms("f").iterator();
     assertTrue(terms.next() != null);
     try {
       assertEquals(0, terms.ord());

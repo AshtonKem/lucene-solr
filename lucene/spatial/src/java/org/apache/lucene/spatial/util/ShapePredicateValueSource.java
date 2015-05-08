@@ -18,7 +18,8 @@ package org.apache.lucene.spatial.util;
  */
 
 import com.spatial4j.core.shape.Shape;
-import org.apache.lucene.index.AtomicReaderContext;
+
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.queries.function.FunctionValues;
 import org.apache.lucene.queries.function.ValueSource;
 import org.apache.lucene.queries.function.docvalues.BoolDocValues;
@@ -27,6 +28,9 @@ import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.spatial.query.SpatialOperation;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -42,7 +46,7 @@ public class ShapePredicateValueSource extends ValueSource {
 
   /**
    *
-   * @param shapeValuesource Must yield {@link Shape} instances from it's objectVal(doc). If null
+   * @param shapeValuesource Must yield {@link Shape} instances from its objectVal(doc). If null
    *                         then the result is false. This is the left-hand (indexed) side.
    * @param op the predicate
    * @param queryShape The shape on the right-hand (query) side.
@@ -64,7 +68,7 @@ public class ShapePredicateValueSource extends ValueSource {
   }
 
   @Override
-  public FunctionValues getValues(Map context, AtomicReaderContext readerContext) throws IOException {
+  public FunctionValues getValues(Map context, LeafReaderContext readerContext) throws IOException {
     final FunctionValues shapeValues = shapeValuesource.getValues(context, readerContext);
 
     return new BoolDocValues(this) {
@@ -79,8 +83,9 @@ public class ShapePredicateValueSource extends ValueSource {
       @Override
       public Explanation explain(int doc) {
         Explanation exp = super.explain(doc);
-        exp.addDetail(shapeValues.explain(doc));
-        return exp;
+        List<Explanation> details = new ArrayList<>(Arrays.asList(exp.getDetails()));
+        details.add(shapeValues.explain(doc));
+        return Explanation.match(exp.getValue(), exp.getDescription(), details);
       }
     };
   }

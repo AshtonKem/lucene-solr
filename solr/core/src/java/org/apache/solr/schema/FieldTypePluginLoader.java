@@ -17,28 +17,37 @@
 
 package org.apache.solr.schema;
 
-import org.apache.lucene.analysis.Analyzer;
-import org.apache.lucene.analysis.core.KeywordAnalyzer;
-import org.apache.lucene.analysis.core.KeywordTokenizerFactory;
-import org.apache.lucene.analysis.util.*;
-import org.apache.lucene.util.Version;
-import org.apache.solr.analysis.TokenizerChain;
-import org.apache.solr.common.SolrException;
-import org.apache.solr.util.DOMUtil;
-import org.apache.solr.core.Config;
-import org.apache.solr.core.SolrResourceLoader;
-import org.apache.solr.util.plugin.AbstractPluginLoader;
-import org.w3c.dom.*;
-
 import javax.xml.xpath.XPath;
 import javax.xml.xpath.XPathConstants;
 import javax.xml.xpath.XPathExpressionException;
 import javax.xml.xpath.XPathFactory;
-import java.util.*;
-import java.lang.reflect.Constructor;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
 
+import org.apache.lucene.analysis.Analyzer;
+import org.apache.lucene.analysis.core.KeywordAnalyzer;
+import org.apache.lucene.analysis.core.KeywordTokenizerFactory;
+import org.apache.lucene.analysis.util.AbstractAnalysisFactory;
+import org.apache.lucene.analysis.util.CharFilterFactory;
+import org.apache.lucene.analysis.util.MultiTermAwareComponent;
+import org.apache.lucene.analysis.util.TokenFilterFactory;
+import org.apache.lucene.analysis.util.TokenizerFactory;
+import org.apache.lucene.util.Version;
+import org.apache.solr.analysis.TokenizerChain;
+import org.apache.solr.common.SolrException;
+import org.apache.solr.core.Config;
+import org.apache.solr.core.SolrResourceLoader;
+import org.apache.solr.util.DOMUtil;
+import org.apache.solr.util.plugin.AbstractPluginLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.w3c.dom.NamedNodeMap;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+
+import static org.apache.solr.common.params.CommonParams.NAME;
 
 public final class FieldTypePluginLoader 
   extends AbstractPluginLoader<FieldType> {
@@ -137,7 +146,7 @@ public final class FieldTypePluginLoader
   @Override
   protected void init(FieldType plugin, Node node) throws Exception {
 
-    Map<String,String> params = DOMUtil.toMapExcept( node.getAttributes(), "name");
+    Map<String, String> params = DOMUtil.toMapExcept(node.getAttributes(), NAME);
     plugin.setArgs(schema, params);
   }
 
@@ -399,10 +408,10 @@ public final class FieldTypePluginLoader
     Version version = (configuredVersion != null) ?
             Config.parseLuceneVersionString(configuredVersion) : schema.getDefaultLuceneMatchVersion();
 
-    if (!version.onOrAfter(Version.LUCENE_4_0)) {
+    if (!version.onOrAfter(Version.LUCENE_6_0_0)) {
       log.warn(pluginClassName + " is using deprecated " + version +
-        " emulation. You should at some point declare and reindex to at least 4.0, because " +
-        "3.x emulation is deprecated and will be removed in 5.0");
+        " emulation. You should at some point declare and reindex to at least 6.0, because " +
+        "5.x emulation is deprecated and will be removed in 7.0");
     }
     return version;
   }

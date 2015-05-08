@@ -18,11 +18,12 @@ package org.apache.lucene.search;
  */
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 
-import org.apache.lucene.index.AtomicReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
 
 /**
  * A {@link Rescorer} that re-sorts according to a provided
@@ -51,9 +52,9 @@ public class SortRescorer extends Rescorer {
                   }
                 });
 
-    List<AtomicReaderContext> leaves = searcher.getIndexReader().leaves();
+    List<LeafReaderContext> leaves = searcher.getIndexReader().leaves();
 
-    TopFieldCollector collector = TopFieldCollector.create(sort, topN, true, true, true, false);
+    TopFieldCollector collector = TopFieldCollector.create(sort, topN, true, true, true);
 
     // Now merge sort docIDs from hits, with reader's leaves:
     int hitUpto = 0;
@@ -61,12 +62,13 @@ public class SortRescorer extends Rescorer {
     int endDoc = 0;
     int docBase = 0;
 
+    LeafCollector leafCollector = null;
     FakeScorer fakeScorer = new FakeScorer();
 
     while (hitUpto < hits.length) {
       ScoreDoc hit = hits[hitUpto];
       int docID = hit.doc;
-      AtomicReaderContext readerContext = null;
+      LeafReaderContext readerContext = null;
       while (docID >= endDoc) {
         readerUpto++;
         readerContext = leaves.get(readerUpto);
@@ -75,15 +77,15 @@ public class SortRescorer extends Rescorer {
 
       if (readerContext != null) {
         // We advanced to another segment:
-        collector.getLeafCollector(readerContext);
-        collector.setScorer(fakeScorer);
+        leafCollector = collector.getLeafCollector(readerContext);
+        leafCollector.setScorer(fakeScorer);
         docBase = readerContext.docBase;
       }
 
       fakeScorer.score = hit.score;
       fakeScorer.doc = docID - docBase;
 
-      collector.collect(fakeScorer.doc);
+      leafCollector.collect(fakeScorer.doc);
 
       hitUpto++;
     }
@@ -97,23 +99,22 @@ public class SortRescorer extends Rescorer {
     TopDocs hits = rescore(searcher, oneHit, 1);
     assert hits.totalHits == 1;
 
-    // TODO: if we could ask the Sort to explain itself then
-    // we wouldn't need the separate ExpressionRescorer...
-    Explanation result = new Explanation(0.0f, "sort field values for sort=" + sort.toString());
+    List<Explanation> subs = new ArrayList<>();
 
     // Add first pass:
-    Explanation first = new Explanation(firstPassExplanation.getValue(), "first pass score");
-    first.addDetail(firstPassExplanation);
-    result.addDetail(first);
+    Explanation first = Explanation.match(firstPassExplanation.getValue(), "first pass score", firstPassExplanation);
+    subs.add(first);
 
     FieldDoc fieldDoc = (FieldDoc) hits.scoreDocs[0];
 
     // Add sort values:
     SortField[] sortFields = sort.getSort();
     for(int i=0;i<sortFields.length;i++) {
-      result.addDetail(new Explanation(0.0f, "sort field " + sortFields[i].toString() + " value=" + fieldDoc.fields[i]));
+      subs.add(Explanation.match(0.0f, "sort field " + sortFields[i].toString() + " value=" + fieldDoc.fields[i]));
     }
 
-    return result;
+    // TODO: if we could ask the Sort to explain itself then
+    // we wouldn't need the separate ExpressionRescorer...
+    return Explanation.match(0.0f, "sort field values for sort=" + sort.toString(), subs);
   }
 }

@@ -23,8 +23,6 @@ import java.util.Locale;
 import java.util.Random;
 
 import org.apache.lucene.index.DocValues;
-import org.apache.lucene.index.MultiDocValues;
-import org.apache.lucene.index.SortedDocValues;
 import org.apache.lucene.index.SortedSetDocValues;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.index.TermsEnum;
@@ -85,7 +83,7 @@ public class TestFaceting extends SolrTestCaseJ4 {
     createIndex(size);
     req = lrf.makeRequest("q","*:*");
 
-    SortedSetDocValues dv = DocValues.getSortedSet(req.getSearcher().getAtomicReader(), proto.field());
+    SortedSetDocValues dv = DocValues.getSortedSet(req.getSearcher().getLeafReader(), proto.field());
 
     assertEquals(size, dv.getValueCount());
 
@@ -162,7 +160,7 @@ public class TestFaceting extends SolrTestCaseJ4 {
     assertU(commit());
 
     assertQ("check many tokens",
-            req("q", "id:1","indent","true"
+            req("q", "*:*","indent","true"
                 ,"facet", "true", "facet.method","fc"
                 ,"facet.field", "many_ws"
                 ,"facet.limit", "-1"
@@ -185,34 +183,25 @@ public class TestFaceting extends SolrTestCaseJ4 {
             ,"//lst[@name='many_ws']/int[@name='" + t(4999) + "'][.='1']"
             );
 
-    // test gaps that take more than one byte
+    // add second document, check facets for items with count =2
     sb = new StringBuilder();
     sb.append(t(0)).append(' ');
     sb.append(t(150)).append(' ');
-    sb.append(t(301)).append(' ');
-    sb.append(t(453)).append(' ');
-    sb.append(t(606)).append(' ');
-    sb.append(t(1000)).append(' ');
-    sb.append(t(2010)).append(' ');
-    sb.append(t(3050)).append(' ');
     sb.append(t(4999)).append(' ');
     assertU(adoc("id", "2", "many_ws", sb.toString()));
+    assertU(commit());
     assertQ("check many tokens",
-            req("q", "id:1","indent","true"
+            req("q", "*:*","indent","true"
                 ,"facet", "true", "facet.method","fc"
                 ,"facet.field", "many_ws"
                 ,"facet.limit", "-1"
                 )
             ,"*[count(//lst[@name='many_ws']/int)=5000]"
-            ,"//lst[@name='many_ws']/int[@name='" + t(0) + "'][.='1']"
-            ,"//lst[@name='many_ws']/int[@name='" + t(150) + "'][.='1']"
-            ,"//lst[@name='many_ws']/int[@name='" + t(301) + "'][.='1']"
-            ,"//lst[@name='many_ws']/int[@name='" + t(453) + "'][.='1']"
-            ,"//lst[@name='many_ws']/int[@name='" + t(606) + "'][.='1']"
-            ,"//lst[@name='many_ws']/int[@name='" + t(1000) + "'][.='1']"
-            ,"//lst[@name='many_ws']/int[@name='" + t(2010) + "'][.='1']"
-            ,"//lst[@name='many_ws']/int[@name='" + t(3050) + "'][.='1']"
-            ,"//lst[@name='many_ws']/int[@name='" + t(4999) + "'][.='1']"
+            ,"//lst[@name='many_ws']/int[@name='" + t(0) + "'][.='2']"
+            ,"//lst[@name='many_ws']/int[@name='" + t(1) + "'][.='1']"
+            ,"//lst[@name='many_ws']/int[@name='" + t(150) + "'][.='2']"
+            ,"//lst[@name='many_ws']/int[@name='" + t(4998) + "'][.='1']"
+            ,"//lst[@name='many_ws']/int[@name='" + t(4999) + "'][.='2']"
               );
   }
 
@@ -713,8 +702,8 @@ public class TestFaceting extends SolrTestCaseJ4 {
             , "facet.threads", "1000"
             , "facet.limit", "-1"
         )
-        , "*[count(//lst[@name='facet_fields']/lst)=50]"
-        , "*[count(//lst[@name='facet_fields']/lst/int)=100]"
+        , "*[count(//lst[@name='facet_fields']/lst)=10]"
+        , "*[count(//lst[@name='facet_fields']/lst/int)=20]"
     );
 
   }
@@ -766,16 +755,16 @@ public class TestFaceting extends SolrTestCaseJ4 {
     RefCounted<SolrIndexSearcher> currentSearcherRef = h.getCore().getSearcher();
     try {
       SolrIndexSearcher currentSearcher = currentSearcherRef.get();
-      SortedSetDocValues ui0 = DocValues.getSortedSet(currentSearcher.getAtomicReader(), "f0_ws");
-      SortedSetDocValues ui1 = DocValues.getSortedSet(currentSearcher.getAtomicReader(), "f1_ws");
-      SortedSetDocValues ui2 = DocValues.getSortedSet(currentSearcher.getAtomicReader(), "f2_ws");
-      SortedSetDocValues ui3 = DocValues.getSortedSet(currentSearcher.getAtomicReader(), "f3_ws");
-      SortedSetDocValues ui4 = DocValues.getSortedSet(currentSearcher.getAtomicReader(), "f4_ws");
-      SortedSetDocValues ui5 = DocValues.getSortedSet(currentSearcher.getAtomicReader(), "f5_ws");
-      SortedSetDocValues ui6 = DocValues.getSortedSet(currentSearcher.getAtomicReader(), "f6_ws");
-      SortedSetDocValues ui7 = DocValues.getSortedSet(currentSearcher.getAtomicReader(), "f7_ws");
-      SortedSetDocValues ui8 = DocValues.getSortedSet(currentSearcher.getAtomicReader(), "f8_ws");
-      SortedSetDocValues ui9 = DocValues.getSortedSet(currentSearcher.getAtomicReader(), "f9_ws");
+      SortedSetDocValues ui0 = DocValues.getSortedSet(currentSearcher.getLeafReader(), "f0_ws");
+      SortedSetDocValues ui1 = DocValues.getSortedSet(currentSearcher.getLeafReader(), "f1_ws");
+      SortedSetDocValues ui2 = DocValues.getSortedSet(currentSearcher.getLeafReader(), "f2_ws");
+      SortedSetDocValues ui3 = DocValues.getSortedSet(currentSearcher.getLeafReader(), "f3_ws");
+      SortedSetDocValues ui4 = DocValues.getSortedSet(currentSearcher.getLeafReader(), "f4_ws");
+      SortedSetDocValues ui5 = DocValues.getSortedSet(currentSearcher.getLeafReader(), "f5_ws");
+      SortedSetDocValues ui6 = DocValues.getSortedSet(currentSearcher.getLeafReader(), "f6_ws");
+      SortedSetDocValues ui7 = DocValues.getSortedSet(currentSearcher.getLeafReader(), "f7_ws");
+      SortedSetDocValues ui8 = DocValues.getSortedSet(currentSearcher.getLeafReader(), "f8_ws");
+      SortedSetDocValues ui9 = DocValues.getSortedSet(currentSearcher.getLeafReader(), "f9_ws");
 
       assertQ("check threading, more threads than fields",
           req("q", "id:*", "indent", "true", "fl", "id", "rows", "1"
@@ -859,8 +848,7 @@ public class TestFaceting extends SolrTestCaseJ4 {
       );
 
       // After this all, the uninverted fields should be exactly the same as they were the first time, even if we
-      // blast a whole bunch of identical fields at the facet code. Which, BTW, doesn't detect
-      // if you've asked for the same field more than once.
+      // blast a whole bunch of identical fields at the facet code.
       // The way fetching the uninverted field is written, all this is really testing is if the cache is working.
       // It's NOT testing whether the pending/sleep is actually functioning, I had to do that by hand since I don't
       // see how to make sure that uninverting the field multiple times actually happens to hit the wait state.
@@ -920,8 +908,8 @@ public class TestFaceting extends SolrTestCaseJ4 {
               , "facet.threads", "1000"
               , "facet.limit", "-1"
           )
-          , "*[count(//lst[@name='facet_fields']/lst)=50]"
-          , "*[count(//lst[@name='facet_fields']/lst/int)=100]"
+          , "*[count(//lst[@name='facet_fields']/lst)=10]"
+          , "*[count(//lst[@name='facet_fields']/lst/int)=20]"
       );
     } finally {
       currentSearcherRef.decref();

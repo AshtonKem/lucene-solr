@@ -31,8 +31,8 @@ import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.TestUtil;
 
 public class TestParallelTermEnum extends LuceneTestCase {
-  private AtomicReader ir1;
-  private AtomicReader ir2;
+  private LeafReader ir1;
+  private LeafReader ir2;
   private Directory rd1;
   private Directory rd2;
   
@@ -74,13 +74,13 @@ public class TestParallelTermEnum extends LuceneTestCase {
   
   private void checkTerms(Terms terms, Bits liveDocs, String... termsList) throws IOException {
     assertNotNull(terms);
-    final TermsEnum te = terms.iterator(null);
+    final TermsEnum te = terms.iterator();
     
     for (String t : termsList) {
       BytesRef b = te.next();
       assertNotNull(b);
       assertEquals(t, b.utf8ToString());
-      DocsEnum td = TestUtil.docs(random(), te, liveDocs, null, DocsEnum.FLAG_NONE);
+      PostingsEnum td = TestUtil.docs(random(), te, liveDocs, null, PostingsEnum.NONE);
       assertTrue(td.nextDoc() != DocIdSetIterator.NO_MORE_DOCS);
       assertEquals(0, td.docID());
       assertEquals(td.nextDoc(), DocIdSetIterator.NO_MORE_DOCS);
@@ -89,7 +89,7 @@ public class TestParallelTermEnum extends LuceneTestCase {
   }
 
   public void test1() throws IOException {
-    ParallelAtomicReader pr = new ParallelAtomicReader(ir1, ir2);
+    ParallelLeafReader pr = new ParallelLeafReader(ir1, ir2);
 
     Bits liveDocs = pr.getLiveDocs();
 

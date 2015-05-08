@@ -72,7 +72,7 @@ import java.util.Map;
 public abstract class Analyzer implements Closeable {
 
   private final ReuseStrategy reuseStrategy;
-  private Version version = Version.LUCENE_CURRENT;
+  private Version version = Version.LATEST;
 
   // non final as it gets nulled if closed; pkg private for access by ReuseStrategy's final helper methods:
   CloseableThreadLocal<Object> storedValue = new CloseableThreadLocal<>();
@@ -88,7 +88,7 @@ public abstract class Analyzer implements Closeable {
   /**
    * Expert: create a new Analyzer with a custom {@link ReuseStrategy}.
    * <p>
-   * NOTE: if you just want to reuse on a per-field basis, its easier to
+   * NOTE: if you just want to reuse on a per-field basis, it's easier to
    * use a subclass of {@link AnalyzerWrapper} such as 
    * <a href="{@docRoot}/../analyzers-common/org/apache/lucene/analysis/miscellaneous/PerFieldAnalyzerWrapper.html">
    * PerFieldAnalyerWrapper</a> instead.

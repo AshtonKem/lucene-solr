@@ -20,7 +20,7 @@ package org.apache.lucene.search;
 import java.io.IOException;
 
 import org.apache.lucene.document.Document;
-import org.apache.lucene.index.AtomicReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.RandomIndexWriter;
 import org.apache.lucene.store.Directory;
@@ -31,7 +31,6 @@ public class TestTopDocsCollector extends LuceneTestCase {
   private static final class MyTopsDocCollector extends TopDocsCollector<ScoreDoc> {
 
     private int idx = 0;
-    private int base = 0;
     
     public MyTopsDocCollector(int size) {
       super(new HitQueue(size, false));
@@ -55,24 +54,26 @@ public class TestTopDocsCollector extends LuceneTestCase {
     }
     
     @Override
-    public void collect(int doc) {
-      ++totalHits;
-      pq.insertWithOverflow(new ScoreDoc(doc + base, scores[idx++]));
-    }
+    public LeafCollector getLeafCollector(LeafReaderContext context) throws IOException {
+      final int base = context.docBase;
+      return new LeafCollector() {
+        
+        @Override
+        public void collect(int doc) {
+          ++totalHits;
+          pq.insertWithOverflow(new ScoreDoc(doc + base, scores[idx++]));
+        }
 
-    @Override
-    protected void doSetNextReader(AtomicReaderContext context) throws IOException {
-      base = context.docBase;
-    }
-
-    @Override
-    public void setScorer(Scorer scorer) {
-      // Don't do anything. Assign scores in random
+        @Override
+        public void setScorer(Scorer scorer) {
+          // Don't do anything. Assign scores in random
+        }
+      };
     }
     
     @Override
-    public boolean acceptsDocsOutOfOrder() {
-      return true;
+    public boolean needsScores() {
+      return false;
     }
 
   }

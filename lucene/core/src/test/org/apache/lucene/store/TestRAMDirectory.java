@@ -17,8 +17,12 @@ package org.apache.lucene.store;
  * limitations under the License.
  */
 
-import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 import org.apache.lucene.analysis.MockAnalyzer;
 import org.apache.lucene.document.Document;
@@ -32,7 +36,6 @@ import org.apache.lucene.index.StoredDocument;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.util.English;
 import org.apache.lucene.util.IOUtils;
-import org.apache.lucene.util.TestUtil;
 
 /**
  * JUnit testcase to test RAMDirectory. RAMDirectory itself is used in many testcases,
@@ -41,15 +44,15 @@ import org.apache.lucene.util.TestUtil;
 public class TestRAMDirectory extends BaseDirectoryTestCase {
   
   @Override
-  protected Directory getDirectory(File path) {
+  protected Directory getDirectory(Path path) {
     return new RAMDirectory();
   }
   
   // add enough document so that the index will be larger than RAMDirectory.READ_BUFFER_SIZE
   private final int docsToAdd = 500;
 
-  private File buildIndex() throws IOException {
-    File path = createTempDir("buildIndex");
+  private Path buildIndex() throws IOException {
+    Path path = createTempDir("buildIndex");
     
     Directory dir = newFSDirectory(path);
     IndexWriter writer = new IndexWriter(dir, new IndexWriterConfig(
@@ -70,23 +73,24 @@ public class TestRAMDirectory extends BaseDirectoryTestCase {
   
   // LUCENE-1468
   public void testCopySubdir() throws Throwable {
-    File path = createTempDir("testsubdir");
-    Directory fsDir = null;
+    Path path = createTempDir("testsubdir");
+    FSDirectory fsDir = null;
     try {
-      path.mkdirs();
-      new File(path, "subdir").mkdirs();
-      fsDir = newFSDirectory(path);
-      assertEquals(0, new RAMDirectory(fsDir, newIOContext(random())).listAll().length);
+      Files.createDirectory(path.resolve("subdir"));
+      fsDir = new SimpleFSDirectory(path);
+      RAMDirectory ramDir = new RAMDirectory(fsDir, newIOContext(random()));
+      List<String> files = Arrays.asList(ramDir.listAll());
+      assertFalse(files.contains("subdir"));
     } finally {
-      TestUtil.rm(path);
       IOUtils.close(fsDir);
+      IOUtils.rm(path);
     }
   }
 
   public void testRAMDirectory () throws IOException {
-    File indexDir = buildIndex();
+    Path indexDir = buildIndex();
     
-    Directory dir = newFSDirectory(indexDir);
+    FSDirectory dir = new SimpleFSDirectory(indexDir);
     MockDirectoryWrapper ramDir = new MockDirectoryWrapper(random(), new RAMDirectory(dir, newIOContext(random())));
     
     // close the underlaying directory
@@ -117,9 +121,9 @@ public class TestRAMDirectory extends BaseDirectoryTestCase {
   
   public void testRAMDirectorySize() throws IOException, InterruptedException {
 
-    File indexDir = buildIndex();
+    Path indexDir = buildIndex();
       
-    Directory dir = newFSDirectory(indexDir);
+    FSDirectory dir = new SimpleFSDirectory(indexDir);
     final MockDirectoryWrapper ramDir = new MockDirectoryWrapper(random(), new RAMDirectory(dir, newIOContext(random())));
     dir.close();
     

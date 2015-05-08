@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 #
-# Transforms Lucene Java's CHANGES.txt into Changes.html
+# Transforms Lucene Core's or Solr's CHANGES.txt into Changes.html
 #
 # Input is on STDIN, output is to STDOUT
 #
@@ -44,8 +44,12 @@ my @releases = ();
 
 my @lines = <STDIN>;                        # Get all input at once
 
+#
+# Cmdline args:  <LUCENE|SOLR>  <JIRA-release-dates-json>  <lucene-javadoc-url>(only from Solr)
+#
 my $product = $ARGV[0];
 my %release_dates = &setup_release_dates($ARGV[1]);
+my $lucene_javadoc_url = ($product eq 'SOLR' ? $ARGV[2] : ''); # Only Solr supplies this on the cmdline
 my $in_major_component_versions_section = 0;
 
 
@@ -541,6 +545,7 @@ for my $rel (@releases) {
                                         }se;
                                   $bulleted_list;
                                 }ge;
+                    $uncode = markup_trailing_attribution($uncode);
                     $uncode;
                   }
                 }sge;
@@ -557,6 +562,11 @@ for my $rel (@releases) {
       # Link "[ github | gh ] pull request [ # ] X+" to Github pull request
       $item =~ s{((?:(?:(?:github|gh)\s+)?pull\s+request\s*(?:\#?\s*)?|gh-)(\d+))}
                 {<a href="${github_pull_request_prefix}$2">$1</a>}gi;
+      # Link "LUCENE_CHANGES.txt" to Lucene's same-release Changes.html
+      if ($product eq 'SOLR') {
+        $item =~ s[(LUCENE_CHANGES.txt)]
+                  [<a href="${lucene_javadoc_url}changes/Changes.html">$1</a>]g;
+      }
       if ($product eq 'LUCENE') {
         # Find single Bugzilla issues
         $item =~ s~((?i:bug|patch|issue)\s*\#?\s*(\d+))
@@ -617,13 +627,18 @@ print "</body>\n</html>\n";
 sub markup_trailing_attribution {
   my $item = shift;
 
-  # Put attributions on their own lines.
+  # Put attributions on their own lines - this already happens if there is a preceding </ul>
+  my $extra_newline = ($item =~ m:</ul>:) ? '' : '<br />';
   # Check for trailing parenthesized attribution with no following period.
   # Exclude things like "(see #3 above)" and "(use the bug number instead of xxxx)"
-  unless ($item =~ s{\s*(\((?![Ss]ee )
+  unless ($item =~ s{\s+(\((?![Ss]ee )
                            (?!spans\b)
                            (?!mainly\ )
                            (?!LUCENE-\d+\))
+                           (?!SOLR-\d+\))
+                           (?!user's)
+                           (?!like\ )
+                           (?!r\d{6})     # subversion revision 
                            (?!and\ )
                            (?!backported\ )
                            (?!in\ )
@@ -631,7 +646,7 @@ sub markup_trailing_attribution {
                            (?![Tt]he\ )
                            (?!use\ the\ bug\ number)
                      [^()"]+?\))\s*$}
-                    {\n<br /><span class="attrib">$1</span>}x) {
+                    {\n${extra_newline}<span class="attrib">$1</span>}x) {
     # If attribution is not found, then look for attribution with a
     # trailing period, but try not to include trailing parenthesized things
     # that are not attributions.
@@ -641,10 +656,14 @@ sub markup_trailing_attribution {
     # fewer words or it includes the word "via" or the phrase "updates from",
 	  # then it is considered to be an attribution.
 
-    $item =~ s{(\s*(\((?![Ss]ee\ )
+    $item =~ s{(\s+(\((?![Ss]ee\ )
                       (?!spans\b)
                       (?!mainly\ )
                       (?!LUCENE-\d+\))
+                      (?!SOLR-\d+\))
+                      (?!user's)
+                      (?!like\ )
+                      (?!r\d{6})     # subversion revision 
                       (?!and\ )
                       (?!backported\ )
                       (?!in\ )
@@ -660,8 +679,10 @@ sub markup_trailing_attribution {
                 if ($parenthetical !~ /LUCENE-\d+/) {
                   my ($no_parens) = $parenthetical =~ /^\((.*)\)$/s;
                   my @words = grep {/\S/} split /\s+/, $no_parens;
-                  if ($no_parens =~ /\b(?:via|updates\s+from)\b/i || scalar(@words) <= 4) {
-                    $subst = "\n<br /><span class=\"attrib\">$parenthetical</span>";
+                  my $commas = $no_parens =~ s/,/,/g; # count commas
+                  my $max_words = 4 + $commas;
+                  if ($no_parens =~ /\b(?:via|updates\s+from)\b/i || scalar(@words) <= $max_words) {
+                    $subst = "\n${extra_newline}<span class=\"attrib\">$parenthetical</span>";
                   }
                 }
                 $subst . $trailing_period_and_or_issue;
@@ -783,7 +804,9 @@ sub get_release_date {
     # Handle '1.2 RC6', which should be '1.2 final'
     $release = '1.2 final' if ($release eq '1.2 RC6');
 
-    $release =~ s/\.0\.0/\.0/;
+    if (not exists($release_dates{$release})) {
+      $release =~ s/\.0\.0/\.0/;
+    }
 
     $reldate = ( exists($release_dates{$release}) 
                ? $release_dates{$release}

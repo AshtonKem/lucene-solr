@@ -56,7 +56,7 @@ final class TermVectorsConsumer extends TermsHash {
   @Override
   void flush(Map<String, TermsHashPerField> fieldsToFlush, final SegmentWriteState state) throws IOException {
     if (writer != null) {
-      int numDocs = state.segmentInfo.getDocCount();
+      int numDocs = state.segmentInfo.maxDoc();
       assert numDocs > 0;
       // At least one doc in this run had term vectors enabled
       try {
@@ -93,8 +93,6 @@ final class TermVectorsConsumer extends TermsHash {
   @Override
   void finishDocument() throws IOException {
 
-    assert docWriter.testPoint("TermVectorsTermsWriter.finishDocument start");
-
     if (!hasVectors) {
       return;
     }
@@ -119,7 +117,6 @@ final class TermVectorsConsumer extends TermsHash {
 
     super.reset();
     resetFields();
-    assert docWriter.testPoint("TermVectorsTermsWriter.finishDocument end");
   }
 
   @Override
@@ -129,7 +126,7 @@ final class TermVectorsConsumer extends TermsHash {
       super.abort();
     } finally {
       if (writer != null) {
-        writer.abort();
+        IOUtils.closeWhileHandlingException(writer);
         writer = null;
       }
 

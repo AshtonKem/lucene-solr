@@ -17,20 +17,22 @@ package org.apache.lucene.search;
  * limitations under the License.
  */
 
-import org.apache.lucene.index.AtomicReaderContext;
-import org.apache.lucene.index.IndexReader;
-import org.apache.lucene.index.Term;
-import org.apache.lucene.util.ToStringUtils;
-import org.apache.lucene.util.Bits;
-
-import java.util.Set;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+
+import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.util.Bits;
+import org.apache.lucene.util.ToStringUtils;
 
 /**
  * A query that matches all documents.
  *
  */
-public class MatchAllDocsQuery extends Query {
+public final class MatchAllDocsQuery extends Query {
 
   private class MatchAllScorer extends Scorer {
     final float score;
@@ -56,7 +58,7 @@ public class MatchAllDocsQuery extends Query {
       while(liveDocs != null && doc < maxDoc && !liveDocs.get(doc)) {
         doc++;
       }
-      if (doc == maxDoc) {
+      if (doc >= maxDoc) { // can be > maxDoc when called from advance()
         doc = NO_MORE_DOCS;
       }
       return doc;
@@ -88,17 +90,16 @@ public class MatchAllDocsQuery extends Query {
     private float queryWeight;
     private float queryNorm;
 
-    public MatchAllDocsWeight(IndexSearcher searcher) {
+    public MatchAllDocsWeight() {
+      super(MatchAllDocsQuery.this);
     }
+
+    @Override
+    public void extractTerms(Set<Term> terms) {}
 
     @Override
     public String toString() {
       return "weight(" + MatchAllDocsQuery.this + ")";
-    }
-
-    @Override
-    public Query getQuery() {
-      return MatchAllDocsQuery.this;
     }
 
     @Override
@@ -114,31 +115,24 @@ public class MatchAllDocsQuery extends Query {
     }
 
     @Override
-    public Scorer scorer(AtomicReaderContext context, Bits acceptDocs) throws IOException {
+    public Scorer scorer(LeafReaderContext context, Bits acceptDocs) throws IOException {
       return new MatchAllScorer(context.reader(), acceptDocs, this, queryWeight);
     }
 
     @Override
-    public Explanation explain(AtomicReaderContext context, int doc) {
-      // explain query weight
-      Explanation queryExpl = new ComplexExplanation
-        (true, queryWeight, "MatchAllDocsQuery, product of:");
+    public Explanation explain(LeafReaderContext context, int doc) {
+      List<Explanation> subs = new ArrayList<>();
       if (getBoost() != 1.0f) {
-        queryExpl.addDetail(new Explanation(getBoost(),"boost"));
+        subs.add(Explanation.match(getBoost(),"boost"));
       }
-      queryExpl.addDetail(new Explanation(queryNorm,"queryNorm"));
-
-      return queryExpl;
+      subs.add(Explanation.match(queryNorm, "queryNorm"));
+      return Explanation.match(queryWeight, "MatchAllDocsQuery, product of:", subs);
     }
   }
 
   @Override
-  public Weight createWeight(IndexSearcher searcher) {
-    return new MatchAllDocsWeight(searcher);
-  }
-
-  @Override
-  public void extractTerms(Set<Term> terms) {
+  public Weight createWeight(IndexSearcher searcher, boolean needsScores) {
+    return new MatchAllDocsWeight();
   }
 
   @Override
@@ -147,18 +141,5 @@ public class MatchAllDocsQuery extends Query {
     buffer.append("*:*");
     buffer.append(ToStringUtils.boost(getBoost()));
     return buffer.toString();
-  }
-
-  @Override
-  public boolean equals(Object o) {
-    if (!(o instanceof MatchAllDocsQuery))
-      return false;
-    MatchAllDocsQuery other = (MatchAllDocsQuery) o;
-    return this.getBoost() == other.getBoost();
-  }
-
-  @Override
-  public int hashCode() {
-    return Float.floatToIntBits(getBoost()) ^ 0x1AA71190;
   }
 }

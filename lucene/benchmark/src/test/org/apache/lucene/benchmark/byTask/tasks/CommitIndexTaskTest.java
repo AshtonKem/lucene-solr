@@ -23,13 +23,14 @@ import org.apache.lucene.benchmark.BenchmarkTestCase;
 import org.apache.lucene.benchmark.byTask.PerfRunData;
 import org.apache.lucene.benchmark.byTask.utils.Config;
 import org.apache.lucene.index.SegmentInfos;
+import org.apache.lucene.util.Version;
 
 /** Tests the functionality of {@link CreateIndexTask}. */
 public class CommitIndexTaskTest extends BenchmarkTestCase {
 
   private PerfRunData createPerfRunData() throws Exception {
     Properties props = new Properties();
-    props.setProperty("writer.version", TEST_VERSION_CURRENT.toString());
+    props.setProperty("writer.version", Version.LATEST.toString());
     props.setProperty("print.props", "false"); // don't print anything
     props.setProperty("directory", "RAMDirectory");
     Config config = new Config(props);
@@ -49,8 +50,7 @@ public class CommitIndexTaskTest extends BenchmarkTestCase {
     CommitIndexTask task = new CommitIndexTask(runData);
     task.setParams("params");
     task.doLogic();
-    SegmentInfos infos = new SegmentInfos();
-    infos.read(runData.getDirectory());
+    SegmentInfos infos = SegmentInfos.readLatestCommit(runData.getDirectory());
     assertEquals("params", infos.getUserData().get(OpenReaderTask.USER_DATA));
     new CloseIndexTask(runData).doLogic();
   }

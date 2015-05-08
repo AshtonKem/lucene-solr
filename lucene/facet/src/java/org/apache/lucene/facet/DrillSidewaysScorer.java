@@ -21,13 +21,13 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.Collections;
 
-import org.apache.lucene.index.AtomicReaderContext;
-import org.apache.lucene.index.DocsEnum;
-import org.apache.lucene.search.LeafCollector;
+import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.index.PostingsEnum;
+import org.apache.lucene.search.BulkScorer;
 import org.apache.lucene.search.Collector;
 import org.apache.lucene.search.DocIdSetIterator;
+import org.apache.lucene.search.LeafCollector;
 import org.apache.lucene.search.Scorer;
-import org.apache.lucene.search.BulkScorer;
 import org.apache.lucene.search.Weight;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.FixedBitSet;
@@ -44,7 +44,7 @@ class DrillSidewaysScorer extends BulkScorer {
   // DrillDown DocsEnums:
   private final Scorer baseScorer;
 
-  private final AtomicReaderContext context;
+  private final LeafReaderContext context;
 
   final boolean scoreSubDocsAtOnce;
 
@@ -54,7 +54,7 @@ class DrillSidewaysScorer extends BulkScorer {
   private int collectDocID = -1;
   private float collectScore;
 
-  DrillSidewaysScorer(AtomicReaderContext context, Scorer baseScorer, Collector drillDownCollector,
+  DrillSidewaysScorer(LeafReaderContext context, Scorer baseScorer, Collector drillDownCollector,
                       DocsAndCost[] dims, boolean scoreSubDocsAtOnce) {
     this.dims = dims;
     this.context = context;
@@ -64,7 +64,15 @@ class DrillSidewaysScorer extends BulkScorer {
   }
 
   @Override
-  public boolean score(LeafCollector collector, int maxDoc) throws IOException {
+  public long cost() {
+    return baseScorer.cost();
+  }
+
+  @Override
+  public int score(LeafCollector collector, int min, int maxDoc) throws IOException {
+    if (min != 0) {
+      throw new IllegalArgumentException("min must be 0, got " + min);
+    }
     if (maxDoc != Integer.MAX_VALUE) {
       throw new IllegalArgumentException("maxDoc must be Integer.MAX_VALUE");
     }
@@ -90,6 +98,24 @@ class DrillSidewaysScorer extends BulkScorer {
     // change up the order of the conjuntions below
     assert baseScorer != null;
 
+    // some scorers, eg ReqExlScorer, can hit NPE if cost is called after nextDoc
+    long baseQueryCost = baseScorer.cost();
+
+    final int numDims = dims.length;
+
+    long drillDownCost = 0;
+    for (int dim=0;dim<numDims;dim++) {
+      DocIdSetIterator disi = dims[dim].disi;
+      if (dims[dim].bits == null && disi != null) {
+        drillDownCost += disi.cost();
+      }
+    }
+
+    long drillDownAdvancedCost = 0;
+    if (numDims > 1 && dims[1].disi != null) {
+      drillDownAdvancedCost = dims[1].disi.cost();
+    }
+
     // Position all scorers to their first matching doc:
     baseScorer.nextDoc();
     int numBits = 0;
@@ -101,14 +127,11 @@ class DrillSidewaysScorer extends BulkScorer {
       }
     }
 
-    final int numDims = dims.length;
-
     Bits[] bits = new Bits[numBits];
     LeafCollector[] bitsSidewaysCollectors = new LeafCollector[numBits];
 
     DocIdSetIterator[] disis = new DocIdSetIterator[numDims-numBits];
     LeafCollector[] sidewaysCollectors = new LeafCollector[numDims-numBits];
-    long drillDownCost = 0;
     int disiUpto = 0;
     int bitsUpto = 0;
     for (int dim=0;dim<numDims;dim++) {
@@ -117,17 +140,12 @@ class DrillSidewaysScorer extends BulkScorer {
         disis[disiUpto] = disi;
         sidewaysCollectors[disiUpto] = dims[dim].sidewaysLeafCollector;
         disiUpto++;
-        if (disi != null) {
-          drillDownCost += disi.cost();
-        }
       } else {
         bits[bitsUpto] = dims[dim].bits;
         bitsSidewaysCollectors[bitsUpto] = dims[dim].sidewaysLeafCollector;
         bitsUpto++;
       }
     }
-
-    long baseQueryCost = baseScorer.cost();
 
     /*
     System.out.println("\nbaseDocID=" + baseScorer.docID() + " est=" + estBaseHitCount);
@@ -142,7 +160,7 @@ class DrillSidewaysScorer extends BulkScorer {
     if (bitsUpto > 0 || scoreSubDocsAtOnce || baseQueryCost < drillDownCost/10) {
       //System.out.println("queryFirst: baseScorer=" + baseScorer + " disis.length=" + disis.length + " bits.length=" + bits.length);
       doQueryFirstScoring(collector, disis, sidewaysCollectors, bits, bitsSidewaysCollectors);
-    } else if (numDims > 1 && (dims[1].disi == null || dims[1].disi.cost() < baseQueryCost/10)) {
+    } else if (numDims > 1 && (dims[1].disi == null || drillDownAdvancedCost < baseQueryCost/10)) {
       //System.out.println("drillDownAdvance");
       doDrillDownAdvanceScoring(collector, disis, sidewaysCollectors);
     } else {
@@ -150,7 +168,7 @@ class DrillSidewaysScorer extends BulkScorer {
       doUnionScoring(collector, disis, sidewaysCollectors);
     }
 
-    return false;
+    return Integer.MAX_VALUE;
   }
 
   /** Used when base query is highly constraining vs the
@@ -165,7 +183,7 @@ class DrillSidewaysScorer extends BulkScorer {
     //}
     int docID = baseScorer.docID();
 
-    nextDoc: while (docID != DocsEnum.NO_MORE_DOCS) {
+    nextDoc: while (docID != PostingsEnum.NO_MORE_DOCS) {
       LeafCollector failedCollector = null;
       for (int i=0;i<disis.length;i++) {
         // TODO: should we sort this 2nd dimension of
@@ -330,7 +348,7 @@ class DrillSidewaysScorer extends BulkScorer {
       // Fold in baseScorer, using advance:
       int filledCount = 0;
       int slot0 = 0;
-      while (slot0 < CHUNK && (slot0 = seen.nextSetBit(slot0)) != -1) {
+      while (slot0 < CHUNK && (slot0 = seen.nextSetBit(slot0)) != DocIdSetIterator.NO_MORE_DOCS) {
         int ddDocID = docIDs[slot0];
         assert ddDocID != -1;
 

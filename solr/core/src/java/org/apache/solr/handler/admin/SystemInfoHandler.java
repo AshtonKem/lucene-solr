@@ -17,9 +17,9 @@
 
 package org.apache.solr.handler.admin;
 
-import java.io.DataInputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.lang.management.ManagementFactory;
 import java.lang.management.OperatingSystemMXBean;
@@ -45,6 +45,8 @@ import org.apache.solr.response.SolrQueryResponse;
 import org.apache.solr.schema.IndexSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import static org.apache.solr.common.params.CommonParams.NAME;
 
 
 /**
@@ -92,6 +94,11 @@ public class SystemInfoHandler extends RequestHandlerBase
     if (core != null) rsp.add( "core", getCoreInfo( core, req.getSchema() ) );
     boolean solrCloudMode =  getCoreContainer(req, core).isZooKeeperAware();
     rsp.add( "mode", solrCloudMode ? "solrcloud" : "std");
+    if (solrCloudMode) {
+      rsp.add("zkHost", getCoreContainer(req, core).getZkController().getZkServerAddress());
+    }
+    if (cc != null)
+      rsp.add( "solr_home", cc.getSolrHome());
     rsp.add( "lucene", getLuceneInfo() );
     rsp.add( "jvm", getJvmInfo() );
     rsp.add( "system", getSystemInfo() );
@@ -153,7 +160,7 @@ public class SystemInfoHandler extends RequestHandlerBase
     SimpleOrderedMap<Object> info = new SimpleOrderedMap<>();
     
     OperatingSystemMXBean os = ManagementFactory.getOperatingSystemMXBean();
-    info.add( "name", os.getName() );
+    info.add(NAME, os.getName());
     info.add( "version", os.getVersion() );
     info.add( "arch", os.getArch() );
     info.add( "systemLoadAverage", os.getSystemLoadAverage());
@@ -213,20 +220,24 @@ public class SystemInfoHandler extends RequestHandlerBase
    */
   private static String execute( String cmd )
   {
-    DataInputStream in = null;
+    InputStream in = null;
     Process process = null;
     
     try {
       process = Runtime.getRuntime().exec(cmd);
-      in = new DataInputStream( process.getInputStream() );
+      in = process.getInputStream();
       // use default charset from locale here, because the command invoked also uses the default locale:
       return IOUtils.toString(new InputStreamReader(in, Charset.defaultCharset()));
-    }
-    catch( Exception ex ) {
+    } catch( Exception ex ) {
       // ignore - log.warn("Error executing command", ex);
       return "(error executing: " + cmd + ")";
-    }
-    finally {
+    } catch (Error err) {
+      if (err.getMessage() != null && (err.getMessage().contains("posix_spawn") || err.getMessage().contains("UNIXProcess"))) {
+        log.warn("Error forking command due to JVM locale bug (see https://issues.apache.org/jira/browse/SOLR-6387): " + err.getMessage());
+        return "(error executing: " + cmd + ")";
+      }
+      throw err;
+    } finally {
       if (process != null) {
         IOUtils.closeQuietly( process.getOutputStream() );
         IOUtils.closeQuietly( process.getInputStream() );
@@ -253,12 +264,12 @@ public class SystemInfoHandler extends RequestHandlerBase
 
     // Summary Info
     jvm.add( "version", jreVersion + " " + vmVersion);
-    jvm.add( "name", jreVendor + " " + vmName );
+    jvm.add(NAME, jreVendor + " " + vmName);
     
     // details
     SimpleOrderedMap<Object> java = new SimpleOrderedMap<>();
     java.add( "vendor", javaVendor );
-    java.add( "name", javaName );
+    java.add(NAME, javaName);
     java.add( "version", javaVersion );
     jvm.add( "spec", java );
     SimpleOrderedMap<Object> jre = new SimpleOrderedMap<>();
@@ -267,7 +278,7 @@ public class SystemInfoHandler extends RequestHandlerBase
     jvm.add( "jre", jre );
     SimpleOrderedMap<Object> vm = new SimpleOrderedMap<>();
     vm.add( "vendor", vmVendor );
-    vm.add( "name", vmName );
+    vm.add(NAME, vmName);
     vm.add( "version", vmVersion );
     jvm.add( "vm", vm );
            

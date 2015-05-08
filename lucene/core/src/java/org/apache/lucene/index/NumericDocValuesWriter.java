@@ -40,9 +40,9 @@ class NumericDocValuesWriter extends DocValuesWriter {
   private FixedBitSet docsWithField;
   private final FieldInfo fieldInfo;
 
-  public NumericDocValuesWriter(FieldInfo fieldInfo, Counter iwBytesUsed, boolean trackDocsWithField) {
+  public NumericDocValuesWriter(FieldInfo fieldInfo, Counter iwBytesUsed) {
     pending = PackedLongValues.deltaPackedBuilder(PackedInts.COMPACT);
-    docsWithField = trackDocsWithField ? new FixedBitSet(64) : null;
+    docsWithField = new FixedBitSet(64);
     bytesUsed = pending.ramBytesUsed() + docsWithFieldBytesUsed();
     this.fieldInfo = fieldInfo;
     this.iwBytesUsed = iwBytesUsed;
@@ -60,17 +60,15 @@ class NumericDocValuesWriter extends DocValuesWriter {
     }
 
     pending.add(value);
-    if (docsWithField != null) {
-      docsWithField = FixedBitSet.ensureCapacity(docsWithField, docID);
-      docsWithField.set(docID);
-    }
-
+    docsWithField = FixedBitSet.ensureCapacity(docsWithField, docID);
+    docsWithField.set(docID);
+    
     updateBytesUsed();
   }
   
   private long docsWithFieldBytesUsed() {
     // size of the long[] + some overhead
-    return docsWithField == null ? 0 : RamUsageEstimator.sizeOf(docsWithField.getBits()) + 64;
+    return RamUsageEstimator.sizeOf(docsWithField.getBits()) + 64;
   }
 
   private void updateBytesUsed() {
@@ -86,7 +84,7 @@ class NumericDocValuesWriter extends DocValuesWriter {
   @Override
   public void flush(SegmentWriteState state, DocValuesConsumer dvConsumer) throws IOException {
 
-    final int maxDoc = state.segmentInfo.getDocCount();
+    final int maxDoc = state.segmentInfo.maxDoc();
     final PackedLongValues values = pending.build();
 
     dvConsumer.addNumericField(fieldInfo,
@@ -126,13 +124,13 @@ class NumericDocValuesWriter extends DocValuesWriter {
       Long value;
       if (upto < size) {
         long v = iter.next();
-        if (docsWithField == null || docsWithField.get(upto)) {
+        if (docsWithField.get(upto)) {
           value = v;
         } else {
           value = null;
         }
       } else {
-        value = docsWithField != null ? null : MISSING;
+        value = null;
       }
       upto++;
       return value;

@@ -19,14 +19,19 @@ package org.apache.lucene.util.automaton;
 
 //import java.io.IOException;
 //import java.io.PrintWriter;
+
 import java.util.Arrays;
 import java.util.BitSet;
 import java.util.HashSet;
 import java.util.Set;
 
+import org.apache.lucene.util.Accountable;
 import org.apache.lucene.util.ArrayUtil;
 import org.apache.lucene.util.InPlaceMergeSorter;
+import org.apache.lucene.util.RamUsageEstimator;
 import org.apache.lucene.util.Sorter;
+
+
 
 
 // TODO
@@ -47,7 +52,8 @@ import org.apache.lucene.util.Sorter;
  *
  * @lucene.experimental */
 
-public class Automaton {
+public class Automaton implements Accountable {
+
   /** Where we next write to the int[] states; this increments by 2 for
    *  each added state because we pack a pointer to the transitions
    *  array and a count of how many transitions leave the state.  */
@@ -67,18 +73,34 @@ public class Automaton {
    *  leaving transitions are stored, or -1 if this state
    *  has not added any transitions yet, followed by number
    *  of transitions. */
-  private int[] states = new int[4];
+  private int[] states;
 
+  private final BitSet isAccept;
+  
   /** Holds toState, min, max for each transition. */
-  private int[] transitions = new int[6];
-
-  private final BitSet isAccept = new BitSet(4);
+  private int[] transitions;
 
   /** True if no state has two transitions leaving with the same label. */
   private boolean deterministic = true;
 
   /** Sole constructor; creates an automaton with no states. */
   public Automaton() {
+     this(2, 2);
+  }
+
+  /**
+   * Constructor which creates an automaton with enough space for the given
+   * number of states and transitions.
+   * 
+   * @param numStates
+   *           Number of states.
+   * @param numTransitions
+   *           Number of transitions.
+   */
+  public Automaton(int numStates, int numTransitions) {
+     states = new int[numStates * 2];
+     isAccept = new BitSet(numStates);
+     transitions = new int[numTransitions * 3];
   }
 
   /** Create a new state. */
@@ -318,8 +340,14 @@ public class Automaton {
     return nextState/2;
   }
 
+  /** How many transitions this automaton has. */
+  public int getNumTransitions() {
+    return nextTransition / 3;   
+  }
+  
   /** How many transitions this state has. */
   public int getNumTransitions(int state) {
+    assert state >= 0;
     int count = states[2*state+1];
     if (count == -1) {
       return 0;
@@ -463,9 +491,48 @@ public class Automaton {
   public void getNextTransition(Transition t) {
     // Make sure there is still a transition left:
     assert (t.transitionUpto+3 - states[2*t.source]) <= 3*states[2*t.source+1];
+
+    // Make sure transitions are in fact sorted:
+    assert transitionSorted(t);
+
     t.dest = transitions[t.transitionUpto++];
     t.min = transitions[t.transitionUpto++];
     t.max = transitions[t.transitionUpto++];
+  }
+
+  private boolean transitionSorted(Transition t) {
+
+    int upto = t.transitionUpto;
+    if (upto == states[2*t.source]) {
+      // Transition isn't initialzed yet (this is the first transition); don't check:
+      return true;
+    }
+
+    int nextDest = transitions[upto];
+    int nextMin = transitions[upto+1];
+    int nextMax = transitions[upto+2];
+    if (nextMin > t.min) {
+      return true;
+    } else if (nextMin < t.min) {
+      return false;
+    }
+
+    // Min is equal, now test max:
+    if (nextMax > t.max) {
+      return true;
+    } else if (nextMax < t.max) {
+      return false;
+    }
+
+    // Max is also equal, now test dest:
+    if (nextDest > t.dest) {
+      return true;
+    } else if (nextDest < t.dest) {
+      return false;
+    }
+
+    // We should never see fully equal transitions here:
+    return false;
   }
 
   /** Fill the provided {@link Transition} with the index'th
@@ -537,7 +604,7 @@ public class Automaton {
       //System.out.println("toDot: state " + state + " has " + numTransitions + " transitions; t.nextTrans=" + t.transitionUpto);
       for(int i=0;i<numTransitions;i++) {
         getNextTransition(t);
-        //System.out.println("  t.nextTrans=" + t.transitionUpto);
+        //System.out.println("  t.nextTrans=" + t.transitionUpto + " t=" + t);
         assert t.max >= t.min;
         b.append("  ");
         b.append(state);
@@ -620,12 +687,28 @@ public class Automaton {
    *  it's too restrictive to have to add all transitions
    *  leaving each state at once. */
   public static class Builder {
-    private int[] transitions = new int[4];
-    private int nextTransition;
-    private final Automaton a = new Automaton();
+    private int nextState = 0;
+    private final BitSet isAccept;
+    private int[] transitions;
+    private int nextTransition = 0;
 
-    /** Sole constructor. */
+    /** Default constructor, pre-allocating for 16 states and transitions. */
     public Builder() {
+       this(16, 16);
+    }
+
+    /**
+     * Constructor which creates a builder with enough space for the given
+     * number of states and transitions.
+     * 
+     * @param numStates
+     *           Number of states.
+     * @param numTransitions
+     *           Number of transitions.
+     */
+    public Builder(int numStates, int numTransitions) {
+       isAccept = new BitSet(numStates);
+       transitions = new int[numTransitions * 4];
     }
 
     /** Add a new transition with min = max = label. */
@@ -642,6 +725,20 @@ public class Automaton {
       transitions[nextTransition++] = dest;
       transitions[nextTransition++] = min;
       transitions[nextTransition++] = max;
+    }
+
+    /** Add a [virtual] epsilon transition between source and dest.
+     *  Dest state must already have all transitions added because this
+     *  method simply copies those same transitions over to source. */
+    public void addEpsilon(int source, int dest) {
+      for (int upto = 0; upto < nextTransition; upto += 4) {
+         if (transitions[upto] == dest) {
+            addTransition(source, transitions[upto + 1], transitions[upto + 2], transitions[upto + 3]);
+         }
+      }
+      if (isAccept(dest)) {
+        setAccept(source, true);
+      }
     }
 
     /** Sorts transitions first then min label ascending, then
@@ -712,53 +809,64 @@ public class Automaton {
     /** Compiles all added states and transitions into a new {@code Automaton}
      *  and returns it. */
     public Automaton finish() {
-      //System.out.println("LA.Builder.finish: count=" + (nextTransition/4));
-      // TODO: we could make this more efficient,
-      // e.g. somehow xfer the int[] to the automaton, or
-      // alloc exactly the right size from the automaton
-      //System.out.println("finish pending");
-      sorter.sort(0, nextTransition/4);
-      int upto = 0;
-      while (upto < nextTransition) {
+      // Create automaton with the correct size.
+      int numStates = nextState;
+      int numTransitions = nextTransition / 4;
+      Automaton a = new Automaton(numStates, numTransitions);
+      
+      // Create all states.
+      for (int state = 0; state < numStates; state++) {
+         a.createState();
+         a.setAccept(state, isAccept(state));
+      }
+      
+      // Create all transitions
+      sorter.sort(0, numTransitions);
+      for (int upto = 0; upto < nextTransition; upto += 4) {
         a.addTransition(transitions[upto],
                         transitions[upto+1],
                         transitions[upto+2],
                         transitions[upto+3]);
-        upto += 4;
       }
 
       a.finishState();
+      
       return a;
     }
 
     /** Create a new state. */
     public int createState() {
-      return a.createState();
+      return nextState++;
     }
 
     /** Set or clear this state as an accept state. */
     public void setAccept(int state, boolean accept) {
-      a.setAccept(state, accept);
+      if (state >= getNumStates()) {
+        throw new IllegalArgumentException("state=" + state + " is out of bounds (numStates=" + getNumStates() + ")");
+      }
+      
+      this.isAccept.set(state, accept);
     }
 
     /** Returns true if this state is an accept state. */
     public boolean isAccept(int state) {
-      return a.isAccept(state);
+      return this.isAccept.get(state);
     }
 
     /** How many states this automaton has. */
     public int getNumStates() {
-      return a.getNumStates();
+      return nextState;
     }
 
     /** Copies over all states/transitions from other. */
     public void copy(Automaton other) {
       int offset = getNumStates();
       int otherNumStates = other.getNumStates();
-      for(int s=0;s<otherNumStates;s++) {
-        int newState = createState();
-        setAccept(newState, other.isAccept(s));
-      }
+
+      // Copy all states
+      copyStates(other);
+      
+      // Copy all transitions
       Transition t = new Transition();
       for(int s=0;s<otherNumStates;s++) {
         int count = other.initTransition(s, t);
@@ -768,5 +876,24 @@ public class Automaton {
         }
       }
     }
+
+    /** Copies over all states from other. */
+    public void copyStates(Automaton other) {
+      int otherNumStates = other.getNumStates();
+      for (int s = 0; s < otherNumStates; s++) {
+        int newState = createState();
+        setAccept(newState, other.isAccept(s));
+      }
+    }
+  }
+
+  @Override
+  public long ramBytesUsed() {
+    // TODO: BitSet RAM usage (isAccept.size()/8) isn't fully accurate...
+    return RamUsageEstimator.NUM_BYTES_OBJECT_HEADER + RamUsageEstimator.sizeOf(states) + RamUsageEstimator.sizeOf(transitions) +
+      RamUsageEstimator.NUM_BYTES_OBJECT_HEADER + (isAccept.size() / 8) + RamUsageEstimator.NUM_BYTES_OBJECT_REF +
+      2 * RamUsageEstimator.NUM_BYTES_OBJECT_REF +
+      3 * RamUsageEstimator.NUM_BYTES_INT +
+      RamUsageEstimator.NUM_BYTES_BOOLEAN;
   }
 }

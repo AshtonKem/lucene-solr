@@ -4,13 +4,13 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 
-import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.LuceneTestCase.Slow;
 import org.apache.solr.client.solrj.SolrQuery;
 import org.apache.solr.client.solrj.response.IntervalFacet.Count;
 import org.apache.solr.client.solrj.response.QueryResponse;
 import org.apache.solr.common.params.ModifiableSolrParams;
 import org.junit.BeforeClass;
+import org.junit.Test;
 
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
@@ -29,7 +29,6 @@ import org.junit.BeforeClass;
  * limitations under the License.
  */
 @Slow
-@LuceneTestCase.SuppressCodecs({"Lucene40", "Lucene41", "Lucene42", "Lucene43"})
 public class DistributedIntervalFacetingTest extends
     BaseDistributedSearchTestCase {
 
@@ -39,8 +38,8 @@ public class DistributedIntervalFacetingTest extends
     configString = "solrconfig-basic.xml";
   }
 
-  @Override
-  public void doTest() throws Exception {
+  @Test
+  public void test() throws Exception {
     del("*:*");
     commit();
     testRandom();
@@ -176,7 +175,11 @@ public class DistributedIntervalFacetingTest extends
     params.set("facet", "true");
     params.set("rows", "0");
     String field = fields[random().nextInt(fields.length)]; //choose from any of the fields
-    params.set("facet.interval", field);
+    if (random().nextBoolean()) {
+      params.set("facet.interval", field);
+    } else  {
+      params.set("facet.interval", getFieldWithKey(field));
+    }
     // number of intervals
     for (int i = 0; i < 1 + random().nextInt(20); i++) {
       Integer[] interval = getRandomRange(cardinality, field);
@@ -186,6 +189,10 @@ public class DistributedIntervalFacetingTest extends
     }
     query(params);
 
+  }
+
+  private String getFieldWithKey(String field) {
+    return "{!key='_some_key_for_" + field + "_" + System.currentTimeMillis() + "'}" + field;
   }
 
   /**

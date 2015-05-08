@@ -18,11 +18,11 @@ package org.apache.lucene.codecs.asserting;
  */
 
 import java.io.IOException;
+import java.util.Collection;
 
 import org.apache.lucene.codecs.StoredFieldsFormat;
 import org.apache.lucene.codecs.StoredFieldsReader;
 import org.apache.lucene.codecs.StoredFieldsWriter;
-import org.apache.lucene.codecs.lucene41.Lucene41StoredFieldsFormat;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.FieldInfos;
 import org.apache.lucene.index.SegmentInfo;
@@ -30,16 +30,18 @@ import org.apache.lucene.index.StorableField;
 import org.apache.lucene.index.StoredFieldVisitor;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.IOContext;
+import org.apache.lucene.util.Accountable;
+import org.apache.lucene.util.TestUtil;
 
 /**
- * Just like {@link Lucene41StoredFieldsFormat} but with additional asserts.
+ * Just like the default stored fields format but with additional asserts.
  */
 public class AssertingStoredFieldsFormat extends StoredFieldsFormat {
-  private final StoredFieldsFormat in = new Lucene41StoredFieldsFormat();
+  private final StoredFieldsFormat in = TestUtil.getDefaultCodec().storedFieldsFormat();
 
   @Override
   public StoredFieldsReader fieldsReader(Directory directory, SegmentInfo si, FieldInfos fn, IOContext context) throws IOException {
-    return new AssertingStoredFieldsReader(in.fieldsReader(directory, si, fn, context), si.getDocCount());
+    return new AssertingStoredFieldsReader(in.fieldsReader(directory, si, fn, context), si.maxDoc());
   }
 
   @Override
@@ -54,11 +56,16 @@ public class AssertingStoredFieldsFormat extends StoredFieldsFormat {
     AssertingStoredFieldsReader(StoredFieldsReader in, int maxDoc) {
       this.in = in;
       this.maxDoc = maxDoc;
+      // do a few simple checks on init
+      assert toString() != null;
+      assert ramBytesUsed() >= 0;
+      assert getChildResources() != null;
     }
     
     @Override
     public void close() throws IOException {
       in.close();
+      in.close(); // close again
     }
 
     @Override
@@ -74,12 +81,31 @@ public class AssertingStoredFieldsFormat extends StoredFieldsFormat {
 
     @Override
     public long ramBytesUsed() {
-      return in.ramBytesUsed();
+      long v = in.ramBytesUsed();
+      assert v >= 0;
+      return v;
+    }
+
+    @Override
+    public Collection<Accountable> getChildResources() {
+      Collection<Accountable> res = in.getChildResources();
+      TestUtil.checkReadOnly(res);
+      return res;
     }
 
     @Override
     public void checkIntegrity() throws IOException {
       in.checkIntegrity();
+    }
+
+    @Override
+    public StoredFieldsReader getMergeInstance() throws IOException {
+      return new AssertingStoredFieldsReader(in.getMergeInstance(), maxDoc);
+    }
+
+    @Override
+    public String toString() {
+      return getClass().getSimpleName() + "(" + in.toString() + ")";
     }
   }
 
@@ -119,11 +145,6 @@ public class AssertingStoredFieldsFormat extends StoredFieldsFormat {
     }
 
     @Override
-    public void abort() {
-      in.abort();
-    }
-
-    @Override
     public void finish(FieldInfos fis, int numDocs) throws IOException {
       assert docStatus == (numDocs > 0 ? Status.FINISHED : Status.UNDEFINED);
       in.finish(fis, numDocs);
@@ -133,6 +154,7 @@ public class AssertingStoredFieldsFormat extends StoredFieldsFormat {
     @Override
     public void close() throws IOException {
       in.close();
+      in.close(); // close again
     }
   }
 }

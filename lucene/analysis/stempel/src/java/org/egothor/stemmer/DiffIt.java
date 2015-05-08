@@ -54,12 +54,14 @@
  */
 package org.egothor.stemmer;
 
-import java.io.BufferedReader;
-import java.io.FileInputStream;
-import java.io.InputStreamReader;
 import java.io.LineNumberReader;
+import java.nio.charset.Charset;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.Locale;
 import java.util.StringTokenizer;
+
+import org.apache.lucene.util.SuppressForbidden;
 
 /**
  * The DiffIt class is a means generate patch commands from an already prepared
@@ -87,6 +89,7 @@ public class DiffIt {
    * 
    * @param args the path to a file containing a stemmer table
    */
+  @SuppressForbidden(reason = "System.out required: command line tool")
   public static void main(java.lang.String[] args) throws Exception {
     
     int ins = get(0, args[0]);
@@ -99,7 +102,7 @@ public class DiffIt {
       // System.out.println("[" + args[i] + "]");
       Diff diff = new Diff(ins, del, rep, nop);
       String charset = System.getProperty("egothor.stemmer.charset", "UTF-8");
-      in = new LineNumberReader(new BufferedReader(new InputStreamReader(new FileInputStream(args[i]), charset)));
+      in = new LineNumberReader(Files.newBufferedReader(Paths.get(args[i]), Charset.forName(charset)));
       for (String line = in.readLine(); line != null; line = in.readLine()) {
         try {
           line = line.toLowerCase(Locale.ROOT);

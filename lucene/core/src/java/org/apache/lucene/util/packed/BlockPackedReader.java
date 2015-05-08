@@ -42,6 +42,7 @@ public final class BlockPackedReader extends LongValues implements Accountable {
   private final long valueCount;
   private final long[] minValues;
   private final PackedInts.Reader[] subReaders;
+  private final long sumBPV;
 
   /** Sole constructor. */
   public BlockPackedReader(IndexInput in, int packedIntsVersion, int blockSize, long valueCount, boolean direct) throws IOException {
@@ -51,9 +52,11 @@ public final class BlockPackedReader extends LongValues implements Accountable {
     final int numBlocks = numBlocks(valueCount, blockSize);
     long[] minValues = null;
     subReaders = new PackedInts.Reader[numBlocks];
+    long sumBPV = 0;
     for (int i = 0; i < numBlocks; ++i) {
       final int token = in.readByte() & 0xFF;
       final int bitsPerValue = token >>> BPV_SHIFT;
+      sumBPV += bitsPerValue;
       if (bitsPerValue > 64) {
         throw new IOException("Corrupted");
       }
@@ -77,6 +80,7 @@ public final class BlockPackedReader extends LongValues implements Accountable {
       }
     }
     this.minValues = minValues;
+    this.sumBPV = sumBPV;
   }
 
   @Override
@@ -94,5 +98,11 @@ public final class BlockPackedReader extends LongValues implements Accountable {
       size += reader.ramBytesUsed();
     }
     return size;
+  }
+  
+  @Override
+  public String toString() {
+    long avgBPV = subReaders.length == 0 ? 0 : sumBPV / subReaders.length;
+    return getClass().getSimpleName() + "(blocksize=" + (1<<blockShift) + ",size=" + valueCount + ",avgBPV=" + avgBPV + ")";
   }
 }

@@ -17,6 +17,46 @@ package org.apache.lucene.codecs.simpletext;
  * limitations under the License.
  */
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.TreeMap;
+
+import org.apache.lucene.codecs.FieldsProducer;
+import org.apache.lucene.index.FieldInfo;
+import org.apache.lucene.index.FieldInfos;
+import org.apache.lucene.index.IndexOptions;
+import org.apache.lucene.index.PostingsEnum;
+import org.apache.lucene.index.SegmentReadState;
+import org.apache.lucene.index.Terms;
+import org.apache.lucene.index.TermsEnum;
+import org.apache.lucene.store.BufferedChecksumIndexInput;
+import org.apache.lucene.store.ChecksumIndexInput;
+import org.apache.lucene.store.IndexInput;
+import org.apache.lucene.util.Accountable;
+import org.apache.lucene.util.Accountables;
+import org.apache.lucene.util.ArrayUtil;
+import org.apache.lucene.util.Bits;
+import org.apache.lucene.util.BytesRef;
+import org.apache.lucene.util.BytesRefBuilder;
+import org.apache.lucene.util.CharsRef;
+import org.apache.lucene.util.CharsRefBuilder;
+import org.apache.lucene.util.FixedBitSet;
+import org.apache.lucene.util.IOUtils;
+import org.apache.lucene.util.IntsRefBuilder;
+import org.apache.lucene.util.RamUsageEstimator;
+import org.apache.lucene.util.StringHelper;
+import org.apache.lucene.util.fst.Builder;
+import org.apache.lucene.util.fst.BytesRefFSTEnum;
+import org.apache.lucene.util.fst.FST;
+import org.apache.lucene.util.fst.PairOutputs;
+import org.apache.lucene.util.fst.PositiveIntOutputs;
+import org.apache.lucene.util.fst.Util;
+
 import static org.apache.lucene.codecs.simpletext.SimpleTextFieldsWriter.DOC;
 import static org.apache.lucene.codecs.simpletext.SimpleTextFieldsWriter.END;
 import static org.apache.lucene.codecs.simpletext.SimpleTextFieldsWriter.END_OFFSET;
@@ -27,52 +67,11 @@ import static org.apache.lucene.codecs.simpletext.SimpleTextFieldsWriter.POS;
 import static org.apache.lucene.codecs.simpletext.SimpleTextFieldsWriter.START_OFFSET;
 import static org.apache.lucene.codecs.simpletext.SimpleTextFieldsWriter.TERM;
 
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.Map;
-import java.util.TreeMap;
-
-import org.apache.lucene.codecs.FieldsProducer;
-import org.apache.lucene.index.DocsAndPositionsEnum;
-import org.apache.lucene.index.DocsEnum;
-import org.apache.lucene.index.FieldInfo;
-import org.apache.lucene.index.FieldInfo.IndexOptions;
-import org.apache.lucene.index.FieldInfos;
-import org.apache.lucene.index.SegmentReadState;
-import org.apache.lucene.index.Terms;
-import org.apache.lucene.index.TermsEnum;
-import org.apache.lucene.store.BufferedChecksumIndexInput;
-import org.apache.lucene.store.ChecksumIndexInput;
-import org.apache.lucene.store.IndexInput;
-import org.apache.lucene.util.Accountable;
-import org.apache.lucene.util.ArrayUtil;
-import org.apache.lucene.util.Bits;
-import org.apache.lucene.util.BytesRef;
-import org.apache.lucene.util.BytesRefBuilder;
-import org.apache.lucene.util.CharsRef;
-import org.apache.lucene.util.CharsRefBuilder;
-import org.apache.lucene.util.FixedBitSet;
-import org.apache.lucene.util.IOUtils;
-import org.apache.lucene.util.IntsRef;
-import org.apache.lucene.util.IntsRefBuilder;
-import org.apache.lucene.util.RamUsageEstimator;
-import org.apache.lucene.util.StringHelper;
-import org.apache.lucene.util.UnicodeUtil;
-import org.apache.lucene.util.fst.Builder;
-import org.apache.lucene.util.fst.BytesRefFSTEnum;
-import org.apache.lucene.util.fst.FST;
-import org.apache.lucene.util.fst.PairOutputs;
-import org.apache.lucene.util.fst.PositiveIntOutputs;
-import org.apache.lucene.util.fst.Util;
-
 class SimpleTextFieldsReader extends FieldsProducer {
 
   private static final long BASE_RAM_BYTES_USED =
-        RamUsageEstimator.shallowSizeOfInstance(SimpleTextFieldsReader.class)
-      + RamUsageEstimator.shallowSizeOfInstance(TreeMap.class);
+      RamUsageEstimator.shallowSizeOfInstance(SimpleTextFieldsReader.class)
+          + RamUsageEstimator.shallowSizeOfInstance(TreeMap.class);
 
   private final TreeMap<String,Long> fields;
   private final IndexInput in;
@@ -80,7 +79,7 @@ class SimpleTextFieldsReader extends FieldsProducer {
   private final int maxDoc;
 
   public SimpleTextFieldsReader(SegmentReadState state) throws IOException {
-    this.maxDoc = state.segmentInfo.getDocCount();
+    this.maxDoc = state.segmentInfo.maxDoc();
     fieldInfos = state.fieldInfos;
     in = state.directory.openInput(SimpleTextPostingsFormat.getPostingsFileName(state.segmentInfo.name, state.segmentSuffix), state.context);
     boolean success = false;
@@ -93,12 +92,12 @@ class SimpleTextFieldsReader extends FieldsProducer {
       }
     }
   }
-  
+
   private TreeMap<String,Long> readFields(IndexInput in) throws IOException {
     ChecksumIndexInput input = new BufferedChecksumIndexInput(in);
     BytesRefBuilder scratch = new BytesRefBuilder();
     TreeMap<String,Long> fields = new TreeMap<>();
-    
+
     while (true) {
       SimpleTextUtil.readLine(input, scratch);
       if (scratch.get().equals(END)) {
@@ -204,39 +203,37 @@ class SimpleTextFieldsReader extends FieldsProducer {
 
     @Override
     public long totalTermFreq() {
-      return indexOptions == IndexOptions.DOCS_ONLY ? -1 : totalTermFreq;
+      return indexOptions == IndexOptions.DOCS ? -1 : totalTermFreq;
     }
- 
+
     @Override
-    public DocsEnum docs(Bits liveDocs, DocsEnum reuse, int flags) throws IOException {
+    public PostingsEnum postings(Bits liveDocs, PostingsEnum reuse, int flags) throws IOException {
+
+      boolean hasPositions = indexOptions.compareTo(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS) >= 0;
+      if (hasPositions && PostingsEnum.featureRequested(flags, PostingsEnum.POSITIONS)) {
+
+        SimpleTextPostingsEnum docsAndPositionsEnum;
+        if (reuse != null && reuse instanceof SimpleTextPostingsEnum && ((SimpleTextPostingsEnum) reuse).canReuse(SimpleTextFieldsReader.this.in)) {
+          docsAndPositionsEnum = (SimpleTextPostingsEnum) reuse;
+        } else {
+          docsAndPositionsEnum = new SimpleTextPostingsEnum();
+        }
+        return docsAndPositionsEnum.reset(docsStart, liveDocs, indexOptions, docFreq);
+
+      }
+
       SimpleTextDocsEnum docsEnum;
       if (reuse != null && reuse instanceof SimpleTextDocsEnum && ((SimpleTextDocsEnum) reuse).canReuse(SimpleTextFieldsReader.this.in)) {
         docsEnum = (SimpleTextDocsEnum) reuse;
       } else {
         docsEnum = new SimpleTextDocsEnum();
       }
-      return docsEnum.reset(docsStart, liveDocs, indexOptions == IndexOptions.DOCS_ONLY, docFreq);
+      return docsEnum.reset(docsStart, liveDocs, indexOptions == IndexOptions.DOCS, docFreq);
     }
 
-    @Override
-    public DocsAndPositionsEnum docsAndPositions(Bits liveDocs, DocsAndPositionsEnum reuse, int flags) throws IOException {
-
-      if (indexOptions.compareTo(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS) < 0) {
-        // Positions were not indexed
-        return null;
-      }
-
-      SimpleTextDocsAndPositionsEnum docsAndPositionsEnum;
-      if (reuse != null && reuse instanceof SimpleTextDocsAndPositionsEnum && ((SimpleTextDocsAndPositionsEnum) reuse).canReuse(SimpleTextFieldsReader.this.in)) {
-        docsAndPositionsEnum = (SimpleTextDocsAndPositionsEnum) reuse;
-      } else {
-        docsAndPositionsEnum = new SimpleTextDocsAndPositionsEnum();
-      } 
-      return docsAndPositionsEnum.reset(docsStart, liveDocs, indexOptions, docFreq);
-    }
   }
 
-  private class SimpleTextDocsEnum extends DocsEnum {
+  private class SimpleTextDocsEnum extends PostingsEnum {
     private final IndexInput inStart;
     private final IndexInput in;
     private boolean omitTF;
@@ -246,7 +243,7 @@ class SimpleTextFieldsReader extends FieldsProducer {
     private final BytesRefBuilder scratch = new BytesRefBuilder();
     private final CharsRefBuilder scratchUTF16 = new CharsRefBuilder();
     private int cost;
-    
+
     public SimpleTextDocsEnum() {
       this.inStart = SimpleTextFieldsReader.this.in;
       this.in = this.inStart.clone();
@@ -274,6 +271,26 @@ class SimpleTextFieldsReader extends FieldsProducer {
     @Override
     public int freq() throws IOException {
       return tf;
+    }
+
+    @Override
+    public int nextPosition() throws IOException {
+      return -1;
+    }
+
+    @Override
+    public int startOffset() throws IOException {
+      return -1;
+    }
+
+    @Override
+    public int endOffset() throws IOException {
+      return -1;
+    }
+
+    @Override
+    public BytesRef getPayload() throws IOException {
+      return null;
     }
 
     @Override
@@ -328,14 +345,14 @@ class SimpleTextFieldsReader extends FieldsProducer {
       // Naive -- better to index skip data
       return slowAdvance(target);
     }
-    
+
     @Override
     public long cost() {
       return cost;
     }
   }
 
-  private class SimpleTextDocsAndPositionsEnum extends DocsAndPositionsEnum {
+  private class SimpleTextPostingsEnum extends PostingsEnum {
     private final IndexInput inStart;
     private final IndexInput in;
     private int docID = -1;
@@ -345,6 +362,7 @@ class SimpleTextFieldsReader extends FieldsProducer {
     private final BytesRefBuilder scratch2 = new BytesRefBuilder();
     private final CharsRefBuilder scratchUTF16 = new CharsRefBuilder();
     private final CharsRefBuilder scratchUTF16_2 = new CharsRefBuilder();
+    private int pos;
     private BytesRef payload;
     private long nextDocStart;
     private boolean readOffsets;
@@ -353,7 +371,7 @@ class SimpleTextFieldsReader extends FieldsProducer {
     private int endOffset;
     private int cost;
 
-    public SimpleTextDocsAndPositionsEnum() {
+    public SimpleTextPostingsEnum() {
       this.inStart = SimpleTextFieldsReader.this.in;
       this.in = inStart.clone();
     }
@@ -362,7 +380,7 @@ class SimpleTextFieldsReader extends FieldsProducer {
       return in == inStart;
     }
 
-    public SimpleTextDocsAndPositionsEnum reset(long fp, Bits liveDocs, IndexOptions indexOptions, int docFreq) {
+    public SimpleTextPostingsEnum reset(long fp, Bits liveDocs, IndexOptions indexOptions, int docFreq) {
       this.liveDocs = liveDocs;
       nextDocStart = fp;
       docID = -1;
@@ -437,7 +455,6 @@ class SimpleTextFieldsReader extends FieldsProducer {
 
     @Override
     public int nextPosition() throws IOException {
-      final int pos;
       if (readPositions) {
         SimpleTextUtil.readLine(in, scratch);
         assert StringHelper.startsWith(scratch.get(), POS): "got line=" + scratch.get().utf8ToString();
@@ -488,7 +505,7 @@ class SimpleTextFieldsReader extends FieldsProducer {
     public BytesRef getPayload() {
       return payload;
     }
-    
+
     @Override
     public long cost() {
       return cost;
@@ -506,9 +523,9 @@ class SimpleTextFieldsReader extends FieldsProducer {
   }
 
   private static final long TERMS_BASE_RAM_BYTES_USED =
-        RamUsageEstimator.shallowSizeOfInstance(SimpleTextTerms.class)
-      + RamUsageEstimator.shallowSizeOfInstance(BytesRef.class)
-      + RamUsageEstimator.shallowSizeOfInstance(CharsRef.class);
+      RamUsageEstimator.shallowSizeOfInstance(SimpleTextTerms.class)
+          + RamUsageEstimator.shallowSizeOfInstance(BytesRef.class)
+          + RamUsageEstimator.shallowSizeOfInstance(CharsRef.class);
   private class SimpleTextTerms extends Terms implements Accountable {
     private final long termsStart;
     private final FieldInfo fieldInfo;
@@ -533,7 +550,7 @@ class SimpleTextFieldsReader extends FieldsProducer {
       final Builder<PairOutputs.Pair<Long,PairOutputs.Pair<Long,Long>>> b;
       final PairOutputs<Long,Long> outputsInner = new PairOutputs<>(posIntOutputs, posIntOutputs);
       final PairOutputs<Long,PairOutputs.Pair<Long,Long>> outputs = new PairOutputs<>(posIntOutputs,
-                                                                                                                      outputsInner);
+          outputsInner);
       b = new Builder<>(FST.INPUT_TYPE.BYTE1, outputs);
       IndexInput in = SimpleTextFieldsReader.this.in.clone();
       in.seek(termsStart);
@@ -548,8 +565,8 @@ class SimpleTextFieldsReader extends FieldsProducer {
         if (scratch.get().equals(END) || StringHelper.startsWith(scratch.get(), FIELD)) {
           if (lastDocsStart != -1) {
             b.add(Util.toIntsRef(lastTerm.get(), scratchIntsRef),
-                  outputs.newPair(lastDocsStart,
-                                  outputsInner.newPair((long) docFreq, totalTermFreq)));
+                outputs.newPair(lastDocsStart,
+                    outputsInner.newPair((long) docFreq, totalTermFreq)));
             sumTotalTermFreq += totalTermFreq;
           }
           break;
@@ -565,7 +582,7 @@ class SimpleTextFieldsReader extends FieldsProducer {
         } else if (StringHelper.startsWith(scratch.get(), TERM)) {
           if (lastDocsStart != -1) {
             b.add(Util.toIntsRef(lastTerm.get(), scratchIntsRef), outputs.newPair(lastDocsStart,
-                                                                            outputsInner.newPair((long) docFreq, totalTermFreq)));
+                outputsInner.newPair((long) docFreq, totalTermFreq)));
           }
           lastDocsStart = in.getFilePointer();
           final int len = scratch.length() - TERM.length;
@@ -596,7 +613,21 @@ class SimpleTextFieldsReader extends FieldsProducer {
     }
 
     @Override
-    public TermsEnum iterator(TermsEnum reuse) throws IOException {
+    public Collection<Accountable> getChildResources() {
+      if (fst == null) {
+        return Collections.emptyList();
+      } else {
+        return Collections.singletonList(Accountables.namedAccountable("term cache", fst));
+      }
+    }
+
+    @Override
+    public String toString() {
+      return getClass().getSimpleName() + "(terms=" + termCount + ",postings=" + sumDocFreq + ",positions=" + sumTotalTermFreq + ",docs=" + docCount + ")";
+    }
+
+    @Override
+    public TermsEnum iterator() throws IOException {
       if (fst != null) {
         return new SimpleTextTermsEnum(fst, fieldInfo.getIndexOptions());
       } else {
@@ -611,7 +642,7 @@ class SimpleTextFieldsReader extends FieldsProducer {
 
     @Override
     public long getSumTotalTermFreq() {
-      return fieldInfo.getIndexOptions() == IndexOptions.DOCS_ONLY ? -1 : sumTotalTermFreq;
+      return fieldInfo.getIndexOptions() == IndexOptions.DOCS ? -1 : sumTotalTermFreq;
     }
 
     @Override
@@ -638,7 +669,7 @@ class SimpleTextFieldsReader extends FieldsProducer {
     public boolean hasPositions() {
       return fieldInfo.getIndexOptions().compareTo(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS) >= 0;
     }
-    
+
     @Override
     public boolean hasPayloads() {
       return fieldInfo.hasPayloads();
@@ -684,6 +715,16 @@ class SimpleTextFieldsReader extends FieldsProducer {
       sizeInBytes += (simpleTextTerms!=null) ? simpleTextTerms.ramBytesUsed() : 0;
     }
     return sizeInBytes;
+  }
+
+  @Override
+  public synchronized Collection<Accountable> getChildResources() {
+    return Accountables.namedAccountables("field", termsCache);
+  }
+
+  @Override
+  public String toString() {
+    return getClass().getSimpleName() + "(fields=" + fields.size() + ")";
   }
 
   @Override

@@ -18,7 +18,7 @@
 -->
 
 <config>
-  <luceneMatchVersion>${tests.luceneMatchVersion:LUCENE_CURRENT}</luceneMatchVersion>
+  <luceneMatchVersion>${tests.luceneMatchVersion:LATEST}</luceneMatchVersion>
   <dataDir>${solr.data.dir:}</dataDir>
   <directoryFactory name="DirectoryFactory" class="${solr.directoryFactory:solr.RAMDirectoryFactory}"/>
 
@@ -55,8 +55,6 @@
       <str name="hl.fl">text,name,subject,title,whitetok</str>
     </lst>
   </requestHandler>
-
-  <requestHandler name="/update" class="solr.UpdateRequestHandler"  />
 
   <!-- enable streaming for testing... -->
   <requestDispatcher handleSelect="true">

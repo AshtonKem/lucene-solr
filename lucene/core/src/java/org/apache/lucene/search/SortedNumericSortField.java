@@ -19,12 +19,10 @@ package org.apache.lucene.search;
 
 import java.io.IOException;
 
-import org.apache.lucene.index.AtomicReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.DocValues;
 import org.apache.lucene.index.NumericDocValues;
 import org.apache.lucene.index.SortedNumericDocValues;
-import org.apache.lucene.search.FieldComparator;
-import org.apache.lucene.search.SortField;
 
 /** 
  * SortField for {@link SortedNumericDocValues}.
@@ -37,7 +35,6 @@ import org.apache.lucene.search.SortField;
  * <p>
  * Like sorting by string, this also supports sorting missing values as first or last,
  * via {@link #setMissingValue(Object)}.
- * <p>
  * @see SortedNumericSelector
  */
 public class SortedNumericSortField extends SortField {
@@ -139,28 +136,28 @@ public class SortedNumericSortField extends SortField {
       case INT:
         return new FieldComparator.IntComparator(numHits, getField(), (Integer) missingValue) {
           @Override
-          protected NumericDocValues getNumericDocValues(AtomicReaderContext context, String field) throws IOException {
+          protected NumericDocValues getNumericDocValues(LeafReaderContext context, String field) throws IOException {
             return SortedNumericSelector.wrap(DocValues.getSortedNumeric(context.reader(), field), selector, type);
           } 
         };
       case FLOAT:
         return new FieldComparator.FloatComparator(numHits, getField(), (Float) missingValue) {
           @Override
-          protected NumericDocValues getNumericDocValues(AtomicReaderContext context, String field) throws IOException {
+          protected NumericDocValues getNumericDocValues(LeafReaderContext context, String field) throws IOException {
             return SortedNumericSelector.wrap(DocValues.getSortedNumeric(context.reader(), field), selector, type);
           } 
         };
       case LONG:
         return new FieldComparator.LongComparator(numHits, getField(), (Long) missingValue) {
           @Override
-          protected NumericDocValues getNumericDocValues(AtomicReaderContext context, String field) throws IOException {
+          protected NumericDocValues getNumericDocValues(LeafReaderContext context, String field) throws IOException {
             return SortedNumericSelector.wrap(DocValues.getSortedNumeric(context.reader(), field), selector, type);
           }
         };
       case DOUBLE:
         return new FieldComparator.DoubleComparator(numHits, getField(), (Double) missingValue) {
           @Override
-          protected NumericDocValues getNumericDocValues(AtomicReaderContext context, String field) throws IOException {
+          protected NumericDocValues getNumericDocValues(LeafReaderContext context, String field) throws IOException {
             return SortedNumericSelector.wrap(DocValues.getSortedNumeric(context.reader(), field), selector, type);
           } 
         };

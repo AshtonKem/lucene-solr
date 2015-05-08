@@ -25,6 +25,7 @@ import org.apache.solr.client.solrj.SolrServerException;
 import org.apache.solr.client.solrj.embedded.JettySolrRunner;
 import org.apache.solr.common.SolrInputDocument;
 import org.apache.solr.common.cloud.ZkStateReader;
+import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -33,13 +34,13 @@ public class RecoveryZkTest extends AbstractFullDistribZkTestBase {
 
   //private static final String DISTRIB_UPDATE_CHAIN = "distrib-update-chain";
   private static Logger log = LoggerFactory.getLogger(RecoveryZkTest.class);
-  private StopableIndexingThread indexThread;
-  private StopableIndexingThread indexThread2;
+  private StoppableIndexingThread indexThread;
+  private StoppableIndexingThread indexThread2;
 
   public RecoveryZkTest() {
     super();
     sliceCount = 1;
-    shardCount = 2;
+    fixShardCount(2);
     schemaString = "schema15.xml";      // we need a string id
   }
   
@@ -54,8 +55,8 @@ public class RecoveryZkTest extends AbstractFullDistribZkTestBase {
     return randVals;
   }
 
-  @Override
-  public void doTest() throws Exception {
+  @Test
+  public void test() throws Exception {
     handle.clear();
     handle.put("timestamp", SKIPVAL);
     
@@ -71,11 +72,11 @@ public class RecoveryZkTest extends AbstractFullDistribZkTestBase {
       maxDoc = maxDocNightlyList[random().nextInt(maxDocList.length - 1)];
     }
     
-    indexThread = new StopableIndexingThread(controlClient, cloudClient, "1", true, maxDoc);
+    indexThread = new StoppableIndexingThread(controlClient, cloudClient, "1", true, maxDoc, 1, true);
     indexThread.start();
     
-    indexThread2 = new StopableIndexingThread(controlClient, cloudClient, "2", true, maxDoc);
-    
+    indexThread2 = new StoppableIndexingThread(controlClient, cloudClient, "2", true, maxDoc, 1, true);
+
     indexThread2.start();
 
     // give some time to index...
@@ -148,7 +149,7 @@ public class RecoveryZkTest extends AbstractFullDistribZkTestBase {
 
   
   @Override
-  public void tearDown() throws Exception {
+  public void distribTearDown() throws Exception {
     // make sure threads have been stopped...
     indexThread.safeStop();
     indexThread2.safeStop();
@@ -156,7 +157,7 @@ public class RecoveryZkTest extends AbstractFullDistribZkTestBase {
     indexThread.join();
     indexThread2.join();
     
-    super.tearDown();
+    super.distribTearDown();
   }
   
   // skip the randoms - they can deadlock...

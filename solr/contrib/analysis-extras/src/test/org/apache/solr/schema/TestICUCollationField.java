@@ -60,10 +60,10 @@ public class TestICUCollationField extends SolrTestCaseJ4 {
    * Ugly: but what to do? We want to test custom sort, which reads rules in as a resource.
    * These are largish files, and jvm-specific (as our documentation says, you should always
    * look out for jvm differences with collation).
-   * So its preferable to create this file on-the-fly.
+   * So it's preferable to create this file on-the-fly.
    */
   public static String setupSolrHome() throws Exception {
-    String tmpFile = createTempDir().getAbsolutePath();
+    String tmpFile = createTempDir().toFile().getAbsolutePath();
     // make data and conf dirs
     new File(tmpFile  + "/collection1", "data").mkdirs();
     File confDir = new File(tmpFile + "/collection1", "conf");

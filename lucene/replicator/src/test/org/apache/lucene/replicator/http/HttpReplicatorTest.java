@@ -17,8 +17,8 @@ package org.apache.lucene.replicator.http;
  * limitations under the License.
  */
 
-import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Collections;
 
 import org.apache.http.impl.conn.BasicHttpClientConnectionManager;
@@ -48,11 +48,7 @@ import org.junit.rules.TestRule;
 import com.carrotsearch.randomizedtesting.rules.SystemPropertiesRestoreRule;
 
 public class HttpReplicatorTest extends ReplicatorTestCase {
-  @Rule
-  public TestRule testRules = 
-    RuleChain.outerRule(new SystemPropertiesRestoreRule());
-
-  private File clientWorkDir;
+  private Path clientWorkDir;
   private Replicator serverReplicator;
   private IndexWriter writer;
   private DirectoryReader reader;

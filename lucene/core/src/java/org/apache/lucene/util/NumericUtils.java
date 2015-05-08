@@ -24,11 +24,10 @@ import org.apache.lucene.document.DoubleField; // javadocs
 import org.apache.lucene.document.FloatField; // javadocs
 import org.apache.lucene.document.IntField; // javadocs
 import org.apache.lucene.document.LongField; // javadocs
-import org.apache.lucene.index.FilterAtomicReader;
+import org.apache.lucene.index.FilterLeafReader;
 import org.apache.lucene.index.FilteredTermsEnum;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
-import org.apache.lucene.search.NumericRangeFilter;
 import org.apache.lucene.search.NumericRangeQuery; // for javadocs
 
 /**
@@ -57,7 +56,7 @@ import org.apache.lucene.search.NumericRangeQuery; // for javadocs
  * <p>For easy usage, the trie algorithm is implemented for indexing inside
  * {@link NumericTokenStream} that can index <code>int</code>, <code>long</code>,
  * <code>float</code>, and <code>double</code>. For querying,
- * {@link NumericRangeQuery} and {@link NumericRangeFilter} implement the query part
+ * {@link NumericRangeQuery} implements the query part
  * for the same data types.
  *
  * <p>This class can also be used, to generate lexicographically sortable (according to
@@ -74,7 +73,7 @@ public final class NumericUtils {
   /**
    * The default precision step used by {@link LongField},
    * {@link DoubleField}, {@link NumericTokenStream}, {@link
-   * NumericRangeQuery}, and {@link NumericRangeFilter}.
+   * NumericRangeQuery}.
    */
   public static final int PRECISION_STEP_DEFAULT = 16;
   
@@ -143,8 +142,10 @@ public final class NumericUtils {
    * @param bytes will contain the encoded value
    */
   public static void longToPrefixCodedBytes(final long val, final int shift, final BytesRefBuilder bytes) {
-    if ((shift & ~0x3f) != 0)  // ensure shift is 0..63
-      throw new IllegalArgumentException("Illegal shift value, must be 0..63");
+    // ensure shift is 0..63
+    if ((shift & ~0x3f) != 0) {
+      throw new IllegalArgumentException("Illegal shift value, must be 0..63; got shift=" + shift);
+    }
     int nChars = (((63-shift)*37)>>8) + 1;    // i/7 is the same as (i*37)>>8 for i in 0..63
     bytes.setLength(nChars+1);   // one extra for the byte that contains the shift info
     bytes.grow(BUF_SIZE_LONG);
@@ -169,8 +170,10 @@ public final class NumericUtils {
    * @param bytes will contain the encoded value
    */
   public static void intToPrefixCodedBytes(final int val, final int shift, final BytesRefBuilder bytes) {
-    if ((shift & ~0x1f) != 0)  // ensure shift is 0..31
-      throw new IllegalArgumentException("Illegal shift value, must be 0..31");
+    // ensure shift is 0..31
+    if ((shift & ~0x1f) != 0) {
+      throw new IllegalArgumentException("Illegal shift value, must be 0..31; got shift=" + shift);
+    }
     int nChars = (((31-shift)*37)>>8) + 1;    // i/7 is the same as (i*37)>>8 for i in 0..63
     bytes.setLength(nChars+1);   // one extra for the byte that contains the shift info
     bytes.grow(NumericUtils.BUF_SIZE_LONG);  // use the max
@@ -532,19 +535,19 @@ public final class NumericUtils {
   }
 
   private static Terms intTerms(Terms terms) {
-    return new FilterAtomicReader.FilterTerms(terms) {
+    return new FilterLeafReader.FilterTerms(terms) {
         @Override
-        public TermsEnum iterator(TermsEnum reuse) throws IOException {
-          return filterPrefixCodedInts(in.iterator(reuse));
+        public TermsEnum iterator() throws IOException {
+          return filterPrefixCodedInts(in.iterator());
         }
       };
   }
 
   private static Terms longTerms(Terms terms) {
-    return new FilterAtomicReader.FilterTerms(terms) {
+    return new FilterLeafReader.FilterTerms(terms) {
         @Override
-        public TermsEnum iterator(TermsEnum reuse) throws IOException {
-          return filterPrefixCodedLongs(in.iterator(reuse));
+        public TermsEnum iterator() throws IOException {
+          return filterPrefixCodedLongs(in.iterator());
         }
       };
   }

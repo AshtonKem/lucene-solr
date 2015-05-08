@@ -17,6 +17,8 @@
 
 package org.apache.solr;
 
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.StringWriter;
@@ -26,19 +28,10 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
-
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.LazyDocument;
-import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.StorableField;
 import org.apache.lucene.index.StoredDocument;
-import org.apache.lucene.store.Directory;
-import org.apache.lucene.store.IOContext.Context;
-import org.apache.lucene.store.MockDirectoryWrapper;
-import org.apache.lucene.store.RateLimitedDirectoryWrapper;
-import org.apache.lucene.util.English;
 import org.apache.solr.common.SolrException;
 import org.apache.solr.common.params.CommonParams;
 import org.apache.solr.common.params.MapSolrParams;
@@ -57,10 +50,7 @@ import org.apache.solr.schema.IndexSchemaFactory;
 import org.apache.solr.schema.SchemaField;
 import org.apache.solr.search.DocIterator;
 import org.apache.solr.search.DocList;
-import org.apache.solr.update.DirectUpdateHandler2;
-import org.apache.solr.util.RefCounted;
 import org.junit.BeforeClass;
-import org.junit.Ignore;
 import org.junit.Test;
 
 /**
@@ -78,7 +68,7 @@ public class BasicFunctionalityTest extends SolrTestCaseJ4 {
   }
   // tests the performance of dynamic field creation and
   // field property testing.
-  /***
+  /*
   public void testFieldPerf() {
     IndexSchema schema = h.getCore().getSchema();
     SchemaField[] fields = schema.getDynamicFieldPrototypes();
@@ -541,6 +531,11 @@ public class BasicFunctionalityTest extends SolrTestCaseJ4 {
     assertTrue(f.storeTermVector() && f.storeTermPositions() && f.storeTermOffsets());
     assertTrue(luf.fieldType().storeTermVectorOffsets() && luf.fieldType().storeTermVectorPositions());
 
+    f = ischema.getField("test_posoffpaytv");
+    luf = f.createField("test", 0f);
+    assertTrue(f.storeTermVector() && f.storeTermPositions() && f.storeTermOffsets() && f.storeTermPayloads());
+    assertTrue(luf.fieldType().storeTermVectorOffsets() && luf.fieldType().storeTermVectorPositions() && luf.fieldType().storeTermVectorPayloads());
+
   }
 
   @Test
@@ -625,7 +620,7 @@ public class BasicFunctionalityTest extends SolrTestCaseJ4 {
             ,"*[count(//doc)=2]"
             ,"//arr[@name='multiDefault']"
             );
-    assertQ("1 doc should have it's explicit multiDefault",
+    assertQ("1 doc should have its explicit multiDefault",
             req("multiDefault:a")
             ,"*[count(//doc)=1]"
             );
@@ -634,7 +629,7 @@ public class BasicFunctionalityTest extends SolrTestCaseJ4 {
             req("intDefault:42")
             ,"*[count(//doc)=2]"
             );
-    assertQ("1 doc should have it's explicit intDefault",
+    assertQ("1 doc should have its explicit intDefault",
             req("intDefault:[3 TO 5]")
             ,"*[count(//doc)=1]"
             );

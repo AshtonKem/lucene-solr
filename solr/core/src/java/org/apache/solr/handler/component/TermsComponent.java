@@ -19,7 +19,6 @@ package org.apache.solr.handler.component;
 import org.apache.lucene.index.*;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.BytesRefBuilder;
-import org.apache.lucene.util.CharsRef;
 import org.apache.lucene.util.CharsRefBuilder;
 import org.apache.lucene.util.StringHelper;
 import org.apache.solr.common.SolrException;
@@ -118,16 +117,16 @@ public class TermsComponent extends SearchComponent {
     boolean raw = params.getBool(TermsParams.TERMS_RAW, false);
 
 
-    final AtomicReader indexReader = rb.req.getSearcher().getAtomicReader();
+    final LeafReader indexReader = rb.req.getSearcher().getLeafReader();
     Fields lfields = indexReader.fields();
 
     for (String field : fields) {
       NamedList<Integer> fieldTerms = new NamedList<>();
       termsResult.add(field, fieldTerms);
 
-      Terms terms = lfields == null ? null : lfields.terms(field);
+      Terms terms = lfields.terms(field);
       if (terms == null) {
-        // no terms for this field
+        // field does not exist
         continue;
       }
 
@@ -162,7 +161,7 @@ public class TermsComponent extends SearchComponent {
       }
 
 
-     TermsEnum termsEnum = terms.iterator(null);
+     TermsEnum termsEnum = terms.iterator();
      BytesRef term = null;
 
       if (lowerBytes != null) {

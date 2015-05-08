@@ -31,7 +31,7 @@ import org.apache.lucene.util.RamUsageEstimator;
 
 /**
  * Simplistic compression for array of unsigned long values.
- * Each value is >= 0 and <= a specified maximum value.  The
+ * Each value is {@code >= 0} and {@code <=} a specified maximum value.  The
  * values are stored as packed ints, with each value
  * consuming a fixed number of bits.
  *
@@ -65,9 +65,8 @@ public class PackedInts {
   public static final int DEFAULT_BUFFER_SIZE = 1024; // 1K
 
   public final static String CODEC_NAME = "PackedInts";
-  public final static int VERSION_START = 0; // PackedInts were long-aligned
-  public final static int VERSION_BYTE_ALIGNED = 1;
   public static final int VERSION_MONOTONIC_WITHOUT_ZIGZAG = 2;
+  public final static int VERSION_START = VERSION_MONOTONIC_WITHOUT_ZIGZAG;
   public final static int VERSION_CURRENT = VERSION_MONOTONIC_WITHOUT_ZIGZAG;
 
   /**
@@ -94,11 +93,7 @@ public class PackedInts {
 
       @Override
       public long byteCount(int packedIntsVersion, int valueCount, int bitsPerValue) {
-        if (packedIntsVersion < VERSION_BYTE_ALIGNED) {
-          return 8L *  (long) Math.ceil((double) valueCount * bitsPerValue / 64);
-        } else {
-          return (long) Math.ceil((double) valueCount * bitsPerValue / 8);
-        }
+        return (long) Math.ceil((double) valueCount * bitsPerValue / 8);      
       }
 
     },
@@ -229,12 +224,12 @@ public class PackedInts {
    * Try to find the {@link Format} and number of bits per value that would
    * restore from disk the fastest reader whose overhead is less than
    * <code>acceptableOverheadRatio</code>.
-   * </p><p>
+   * <p>
    * The <code>acceptableOverheadRatio</code> parameter makes sense for
    * random-access {@link Reader}s. In case you only plan to perform
    * sequential access on this stream later on, you should probably use
    * {@link PackedInts#COMPACT}.
-   * </p><p>
+   * <p>
    * If you don't know how many values you are going to write, use
    * <code>valueCount = -1</code>.
    */
@@ -477,7 +472,6 @@ public class PackedInts {
      * @return the number of values.
      */
     public abstract int size();
-
   }
 
   /**
@@ -627,7 +621,6 @@ public class PackedInts {
     public final int size() {
       return valueCount;
     }
-
   }
 
   static abstract class MutableImpl extends Mutable {
@@ -651,6 +644,10 @@ public class PackedInts {
       return valueCount;
     }
 
+    @Override
+    public String toString() {
+      return getClass().getSimpleName() + "(valueCount=" + valueCount + ",bitsPerValue=" + bitsPerValue + ")";
+    }
   }
 
   /** A {@link Reader} which has all its values equal to 0 (bitsPerValue = 0). */
@@ -686,7 +683,6 @@ public class PackedInts {
     public long ramBytesUsed() {
       return RamUsageEstimator.alignObjectSize(RamUsageEstimator.NUM_BYTES_OBJECT_HEADER + RamUsageEstimator.NUM_BYTES_INT);
     }
-
   }
 
   /** A write-once Writer.
@@ -808,22 +804,6 @@ public class PackedInts {
         throw new AssertionError("Unknown Writer format: " + format);
     }
   }
-  
-  /**
-   * Expert: Restore a {@link Reader} from a stream without reading metadata at
-   * the beginning of the stream. This method is useful to restore data when
-   * metadata has been previously read using {@link #readHeader(DataInput)}.
-   *
-   * @param in           the stream to read data from, positioned at the beginning of the packed values
-   * @param header       metadata result from <code>readHeader()</code>
-   * @return             a Reader
-   * @throws IOException If there is a low-level I/O error
-   * @see #readHeader(DataInput)
-   * @lucene.internal
-   */
-  public static Reader getReaderNoHeader(DataInput in, Header header) throws IOException {
-    return getReaderNoHeader(in, header.format, header.version, header.valueCount, header.bitsPerValue);
-  }
 
   /**
    * Restore a {@link Reader} from a stream.
@@ -887,7 +867,7 @@ public class PackedInts {
    * metadata at the beginning of the stream. This method is useful to restore
    * data from streams which have been created using
    * {@link PackedInts#getWriterNoHeader(DataOutput, Format, int, int, int)}.
-   * </p><p>
+   * <p>
    * The returned reader will have very little memory overhead, but every call
    * to {@link Reader#get(int)} is likely to perform a disk seek.
    *
@@ -904,61 +884,19 @@ public class PackedInts {
     checkVersion(version);
     switch (format) {
       case PACKED:
-        final long byteCount = format.byteCount(version, valueCount, bitsPerValue);
-        if (byteCount != format.byteCount(VERSION_CURRENT, valueCount, bitsPerValue)) {
-          assert version == VERSION_START;
-          final long endPointer = in.getFilePointer() + byteCount;
-          // Some consumers of direct readers assume that reading the last value
-          // will make the underlying IndexInput go to the end of the packed
-          // stream, but this is not true because packed ints storage used to be
-          // long-aligned and is now byte-aligned, hence this additional
-          // condition when reading the last value
-          return new DirectPackedReader(bitsPerValue, valueCount, in) {
-            @Override
-            public long get(int index) {
-              final long result = super.get(index);
-              if (index == valueCount - 1) {
-                try {
-                  in.seek(endPointer);
-                } catch (IOException e) {
-                  throw new IllegalStateException("failed", e);
-                }
-              }
-              return result;
-            }
-          };
-        } else {
-          return new DirectPackedReader(bitsPerValue, valueCount, in);
-        }
+        return new DirectPackedReader(bitsPerValue, valueCount, in);
       case PACKED_SINGLE_BLOCK:
         return new DirectPacked64SingleBlockReader(bitsPerValue, valueCount, in);
       default:
         throw new AssertionError("Unknwown format: " + format);
     }
   }
-  
-  /**
-   * Expert: Construct a direct {@link Reader} from an {@link IndexInput} 
-   * without reading metadata at the beginning of the stream. This method is 
-   * useful to restore data when metadata has been previously read using 
-   * {@link #readHeader(DataInput)}.
-   *
-   * @param in           the stream to read data from, positioned at the beginning of the packed values
-   * @param header       metadata result from <code>readHeader()</code>
-   * @return             a Reader
-   * @throws IOException If there is a low-level I/O error
-   * @see #readHeader(DataInput)
-   * @lucene.internal
-   */
-  public static Reader getDirectReaderNoHeader(IndexInput in, Header header) throws IOException {
-    return getDirectReaderNoHeader(in, header.format, header.version, header.valueCount, header.bitsPerValue);
-  }
 
   /**
    * Construct a direct {@link Reader} from an {@link IndexInput}. This method
    * is useful to restore data from streams which have been created using
    * {@link PackedInts#getWriter(DataOutput, int, int, float)}.
-   * </p><p>
+   * <p>
    * The returned reader will have very little memory overhead, but every call
    * to {@link Reader#get(int)} is likely to perform a disk seek.
    *
@@ -980,7 +918,7 @@ public class PackedInts {
    * Create a packed integer array with the given amount of values initialized
    * to 0. the valueCount and the bitsPerValue cannot be changed after creation.
    * All Mutables known by this factory are kept fully in RAM.
-   * </p><p>
+   * <p>
    * Positive values of <code>acceptableOverheadRatio</code> will trade space
    * for speed by selecting a faster but potentially less memory-efficient
    * implementation. An <code>acceptableOverheadRatio</code> of
@@ -1040,12 +978,12 @@ public class PackedInts {
   /**
    * Expert: Create a packed integer array writer for the given output, format,
    * value count, and number of bits per value.
-   * </p><p>
+   * <p>
    * The resulting stream will be long-aligned. This means that depending on
    * the format which is used, up to 63 bits will be wasted. An easy way to
    * make sure that no space is lost is to always use a <code>valueCount</code>
    * that is a multiple of 64.
-   * </p><p>
+   * <p>
    * This method does not write any metadata to the stream, meaning that it is
    * your responsibility to store it somewhere else in order to be able to
    * recover data from the stream later on:
@@ -1055,7 +993,7 @@ public class PackedInts {
    *   <li><code>bitsPerValue</code>,</li>
    *   <li>{@link #VERSION_CURRENT}.</li>
    * </ul>
-   * </p><p>
+   * <p>
    * It is possible to start writing values without knowing how many of them you
    * are actually going to write. To do this, just pass <code>-1</code> as
    * <code>valueCount</code>. On the other hand, for any positive value of
@@ -1063,7 +1001,7 @@ public class PackedInts {
    * write more values than expected and pad the end of stream with zeros in
    * case you have written less than <code>valueCount</code> when calling
    * {@link Writer#finish()}.
-   * </p><p>
+   * <p>
    * The <code>mem</code> parameter lets you control how much memory can be used
    * to buffer changes in memory before flushing to disk. High values of
    * <code>mem</code> are likely to improve throughput. On the other hand, if
@@ -1088,18 +1026,18 @@ public class PackedInts {
   /**
    * Create a packed integer array writer for the given output, format, value
    * count, and number of bits per value.
-   * </p><p>
+   * <p>
    * The resulting stream will be long-aligned. This means that depending on
    * the format which is used under the hoods, up to 63 bits will be wasted.
    * An easy way to make sure that no space is lost is to always use a
    * <code>valueCount</code> that is a multiple of 64.
-   * </p><p>
+   * <p>
    * This method writes metadata to the stream, so that the resulting stream is
    * sufficient to restore a {@link Reader} from it. You don't need to track
    * <code>valueCount</code> or <code>bitsPerValue</code> by yourself. In case
    * this is a problem, you should probably look at
    * {@link #getWriterNoHeader(DataOutput, Format, int, int, int)}.
-   * </p><p>
+   * <p>
    * The <code>acceptableOverheadRatio</code> parameter controls how
    * readers that will be restored from this stream trade space
    * for speed by selecting a faster but potentially less memory-efficient
@@ -1207,42 +1145,6 @@ public class PackedInts {
       remaining -= written;
       System.arraycopy(buf, written, buf, 0, remaining);
     }
-  }
-
-  /**
-   * Expert: reads only the metadata from a stream. This is useful to later
-   * restore a stream or open a direct reader via 
-   * {@link #getReaderNoHeader(DataInput, Header)}
-   * or {@link #getDirectReaderNoHeader(IndexInput, Header)}.
-   * @param    in the stream to read data
-   * @return   packed integer metadata.
-   * @throws   IOException If there is a low-level I/O error
-   * @see #getReaderNoHeader(DataInput, Header)
-   * @see #getDirectReaderNoHeader(IndexInput, Header)
-   */
-  public static Header readHeader(DataInput in) throws IOException {
-    final int version = CodecUtil.checkHeader(in, CODEC_NAME, VERSION_START, VERSION_CURRENT);
-    final int bitsPerValue = in.readVInt();
-    assert bitsPerValue > 0 && bitsPerValue <= 64: "bitsPerValue=" + bitsPerValue;
-    final int valueCount = in.readVInt();
-    final Format format = Format.byId(in.readVInt());
-    return new Header(format, valueCount, bitsPerValue, version);
-  }
-  
-  /** Header identifying the structure of a packed integer array. */
-  public static class Header {
-
-    private final Format format;
-    private final int valueCount;
-    private final int bitsPerValue;
-    private final int version;
-
-    public Header(Format format, int valueCount, int bitsPerValue, int version) {
-      this.format = format;
-      this.valueCount = valueCount;
-      this.bitsPerValue = bitsPerValue;
-      this.version = version;
-    }    
   }
 
   /** Check that the block size is a power of 2, in the right bounds, and return

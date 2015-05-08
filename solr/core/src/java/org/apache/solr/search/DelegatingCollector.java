@@ -20,7 +20,7 @@ package org.apache.solr.search;
 
 import java.io.IOException;
 
-import org.apache.lucene.index.AtomicReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.search.LeafCollector;
 import org.apache.lucene.search.Collector;
 import org.apache.lucene.search.Scorer;
@@ -36,7 +36,7 @@ public class DelegatingCollector extends SimpleCollector {
   protected Collector delegate;
   protected LeafCollector leafDelegate;
   protected Scorer scorer;
-  protected AtomicReaderContext context;
+  protected LeafReaderContext context;
   protected int docBase;
 
   public Collector getDelegate() {
@@ -64,20 +64,20 @@ public class DelegatingCollector extends SimpleCollector {
   }
 
   @Override
+  public boolean needsScores() {
+    return delegate.needsScores();
+  }
+
+  @Override
   public void collect(int doc) throws IOException {
     leafDelegate.collect(doc);
   }
 
   @Override
-  protected void doSetNextReader(AtomicReaderContext context) throws IOException {
+  protected void doSetNextReader(LeafReaderContext context) throws IOException {
     this.context = context;
     this.docBase = context.docBase;
     leafDelegate = delegate.getLeafCollector(context);
-  }
-
-  @Override
-  public boolean acceptsDocsOutOfOrder() {
-    return leafDelegate.acceptsDocsOutOfOrder();
   }
 
   public void finish() throws IOException {

@@ -30,18 +30,19 @@ import org.apache.lucene.analysis.core.SimpleAnalyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.StringField;
-import org.apache.lucene.index.AtomicReaderContext;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
-import org.apache.lucene.search.LeafCollector;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.search.BitsFilteredDocIdSet;
 import org.apache.lucene.search.Collector;
 import org.apache.lucene.search.DocIdSet;
 import org.apache.lucene.search.Filter;
-import org.apache.lucene.search.FilterLeafCollector;
 import org.apache.lucene.search.FilterCollector;
+import org.apache.lucene.search.FilterLeafCollector;
+import org.apache.lucene.search.FilteredQuery;
 import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.LeafCollector;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.Sort;
@@ -52,6 +53,7 @@ import org.apache.lucene.search.TopFieldCollector;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.RAMDirectory;
 import org.apache.lucene.uninverting.UninvertingReader;
+import org.apache.lucene.util.BitDocIdSet;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.FixedBitSet;
 import org.apache.lucene.util.TestUtil;
@@ -235,8 +237,12 @@ public class TestSort extends SolrTestCaseJ4 {
       for (int i=0; i<qiter; i++) {
         Filter filt = new Filter() {
           @Override
-          public DocIdSet getDocIdSet(AtomicReaderContext context, Bits acceptDocs) {
+          public DocIdSet getDocIdSet(LeafReaderContext context, Bits acceptDocs) {
             return BitsFilteredDocIdSet.wrap(randSet(context.reader().maxDoc()), acceptDocs);
+          }
+          @Override
+          public String toString(String field) {
+            return "TestSortFilter";
           }
         };
 
@@ -269,14 +275,14 @@ public class TestSort extends SolrTestCaseJ4 {
         boolean trackScores = r.nextBoolean();
         boolean trackMaxScores = r.nextBoolean();
         boolean scoreInOrder = r.nextBoolean();
-        final TopFieldCollector topCollector = TopFieldCollector.create(sort, top, true, trackScores, trackMaxScores, scoreInOrder);
+        final TopFieldCollector topCollector = TopFieldCollector.create(sort, top, true, trackScores, trackMaxScores);
 
         final List<MyDoc> collectedDocs = new ArrayList<>();
         // delegate and collect docs ourselves
         Collector myCollector = new FilterCollector(topCollector) {
 
           @Override
-          public LeafCollector getLeafCollector(AtomicReaderContext context)
+          public LeafCollector getLeafCollector(LeafReaderContext context)
               throws IOException {
             final int docBase = context.docBase;
             return new FilterLeafCollector(super.getLeafCollector(context)) {
@@ -290,7 +296,7 @@ public class TestSort extends SolrTestCaseJ4 {
 
         };
 
-        searcher.search(new MatchAllDocsQuery(), filt, myCollector);
+        searcher.search(new FilteredQuery(new MatchAllDocsQuery(), filt), myCollector);
 
         Collections.sort(collectedDocs, new Comparator<MyDoc>() {
           @Override
@@ -339,7 +345,7 @@ public class TestSort extends SolrTestCaseJ4 {
     for (int i=0; i<n; i++) {
       obs.set(r.nextInt(sz));
     }
-    return obs;
+    return new BitDocIdSet(obs);
   }  
   
 

@@ -18,9 +18,7 @@ package org.apache.lucene.document;
  */
 
 import org.apache.lucene.analysis.NumericTokenStream; // javadocs
-import org.apache.lucene.index.AtomicReader;
-import org.apache.lucene.index.FieldInfo.IndexOptions;
-import org.apache.lucene.search.NumericRangeFilter; // javadocs
+import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.search.NumericRangeQuery; // javadocs
 import org.apache.lucene.util.NumericUtils;
 
@@ -53,11 +51,11 @@ import org.apache.lucene.util.NumericUtils;
  * DoubleField}.
  *
  * <p>To perform range querying or filtering against a
- * <code>IntField</code>, use {@link NumericRangeQuery} or {@link
- * NumericRangeFilter}.  To sort according to a
+ * <code>IntField</code>, use {@link NumericRangeQuery}.
+ * To sort according to a
  * <code>IntField</code>, use the normal numeric sort types, eg
  * {@link org.apache.lucene.search.SortField.Type#INT}. <code>IntField</code> 
- * values can also be loaded directly from {@link AtomicReader#getNumericDocValues}.</p>
+ * values can also be loaded directly from {@link org.apache.lucene.index.LeafReader#getNumericDocValues}.</p>
  *
  * <p>You may add the same field name as an <code>IntField</code> to
  * the same document more than once.  Range querying and
@@ -87,7 +85,7 @@ import org.apache.lucene.util.NumericUtils;
  * FieldType#setNumericPrecisionStep} method if you'd
  * like to change the value.  Note that you must also
  * specify a congruent value when creating {@link
- * NumericRangeQuery} or {@link NumericRangeFilter}.
+ * NumericRangeQuery}.
  * For low cardinality fields larger precision steps are good.
  * If the cardinality is &lt; 100, it is fair
  * to use {@link Integer#MAX_VALUE}, which produces one
@@ -120,10 +118,9 @@ public final class IntField extends Field {
    */
   public static final FieldType TYPE_NOT_STORED = new FieldType();
   static {
-    TYPE_NOT_STORED.setIndexed(true);
     TYPE_NOT_STORED.setTokenized(true);
     TYPE_NOT_STORED.setOmitNorms(true);
-    TYPE_NOT_STORED.setIndexOptions(IndexOptions.DOCS_ONLY);
+    TYPE_NOT_STORED.setIndexOptions(IndexOptions.DOCS);
     TYPE_NOT_STORED.setNumericType(FieldType.NumericType.INT);
     TYPE_NOT_STORED.setNumericPrecisionStep(NumericUtils.PRECISION_STEP_DEFAULT_32);
     TYPE_NOT_STORED.freeze();
@@ -135,10 +132,9 @@ public final class IntField extends Field {
    */
   public static final FieldType TYPE_STORED = new FieldType();
   static {
-    TYPE_STORED.setIndexed(true);
     TYPE_STORED.setTokenized(true);
     TYPE_STORED.setOmitNorms(true);
-    TYPE_STORED.setIndexOptions(IndexOptions.DOCS_ONLY);
+    TYPE_STORED.setIndexOptions(IndexOptions.DOCS);
     TYPE_STORED.setNumericType(FieldType.NumericType.INT);
     TYPE_STORED.setNumericPrecisionStep(NumericUtils.PRECISION_STEP_DEFAULT_32);
     TYPE_STORED.setStored(true);

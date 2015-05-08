@@ -8,7 +8,7 @@
       <sourceFolder url="file://$MODULE_DIR$/src/java" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src/webapp" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src/test" isTestSource="true" />
-      <sourceFolder url="file://$MODULE_DIR$/src/test-files" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/src/test-files" type="java-test-resource" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
@@ -25,5 +25,6 @@
     <orderEntry type="module" module-name="solrj" />
     <orderEntry type="module" module-name="analysis-common" />
     <orderEntry type="module" module-name="lucene-core" />
+    <orderEntry type="module" scope="TEST" module-name="join" />
   </component>
 </module>

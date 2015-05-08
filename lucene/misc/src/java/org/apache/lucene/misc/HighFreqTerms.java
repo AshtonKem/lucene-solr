@@ -27,9 +27,10 @@ import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.apache.lucene.util.PriorityQueue;
 import org.apache.lucene.util.BytesRef;
+import org.apache.lucene.util.SuppressForbidden;
 
-import java.io.File;
 import java.io.IOException;
+import java.nio.file.Paths;
 import java.util.Comparator;
 import java.util.Locale;
 
@@ -47,6 +48,7 @@ public class HighFreqTerms {
   // The top numTerms will be displayed
   public static final int DEFAULT_NUMTERMS = 100;
   
+  @SuppressForbidden(reason = "System.out required: command line tool")
   public static void main(String[] args) throws Exception {
     String field = null;
     int numTerms = DEFAULT_NUMTERMS;
@@ -56,7 +58,7 @@ public class HighFreqTerms {
       System.exit(1);
     }     
 
-    Directory dir = FSDirectory.open(new File(args[0]));
+    Directory dir = FSDirectory.open(Paths.get(args[0]));
     
     Comparator<TermStats> comparator = new DocFreqComparator();
    
@@ -83,6 +85,7 @@ public class HighFreqTerms {
     reader.close();
   }
   
+  @SuppressForbidden(reason = "System.out required: command line tool")
   private static void usage() {
     System.out
         .println("\n\n"
@@ -96,26 +99,24 @@ public class HighFreqTerms {
     TermStatsQueue tiq = null;
     
     if (field != null) {
-      Fields fields = MultiFields.getFields(reader);
-      if (fields == null) {
+      Terms terms = MultiFields.getTerms(reader, field);
+      if (terms == null) {
         throw new RuntimeException("field " + field + " not found");
       }
-      Terms terms = fields.terms(field);
-      if (terms != null) {
-        TermsEnum termsEnum = terms.iterator(null);
-        tiq = new TermStatsQueue(numTerms, comparator);
-        tiq.fill(field, termsEnum);
-      }
+
+      TermsEnum termsEnum = terms.iterator();
+      tiq = new TermStatsQueue(numTerms, comparator);
+      tiq.fill(field, termsEnum);
     } else {
       Fields fields = MultiFields.getFields(reader);
-      if (fields == null) {
+      if (fields.size() == 0) {
         throw new RuntimeException("no fields found for this index");
       }
       tiq = new TermStatsQueue(numTerms, comparator);
       for (String fieldName : fields) {
         Terms terms = fields.terms(fieldName);
         if (terms != null) {
-          tiq.fill(fieldName, terms.iterator(null));
+          tiq.fill(fieldName, terms.iterator());
         }
       }
     }

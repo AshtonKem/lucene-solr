@@ -17,8 +17,11 @@
 
 package org.apache.solr.search.join;
 
-import org.apache.lucene.index.AtomicReaderContext;
+import java.io.IOException;
+import java.util.Set;
+
 import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.search.Explanation;
 import org.apache.lucene.search.IndexSearcher;
@@ -26,9 +29,6 @@ import org.apache.lucene.search.Query;
 import org.apache.lucene.search.Scorer;
 import org.apache.lucene.search.Weight;
 import org.apache.lucene.util.Bits;
-
-import java.io.IOException;
-import java.util.Set;
 
 public class IgnoreAcceptDocsQuery extends Query {
   private final Query q;
@@ -48,13 +48,8 @@ public class IgnoreAcceptDocsQuery extends Query {
   }
 
   @Override
-  public String toString() {
-    return q.toString();
-  }
-
-  @Override
-  public Weight createWeight(IndexSearcher searcher) throws IOException {
-    Weight inner = q.createWeight(searcher);
+  public Weight createWeight(IndexSearcher searcher, boolean needsScores) throws IOException {
+    Weight inner = q.createWeight(searcher, needsScores);
     return new IADWeight(inner);
   }
 
@@ -62,17 +57,18 @@ public class IgnoreAcceptDocsQuery extends Query {
     Weight w;
 
     IADWeight(Weight delegate) {
+      super(q);
       this.w = delegate;
     }
 
     @Override
-    public Explanation explain(AtomicReaderContext context, int doc) throws IOException {
-      return w.explain(context, doc);
+    public void extractTerms(Set<Term> terms) {
+      w.extractTerms(terms);
     }
 
     @Override
-    public Query getQuery() {
-      return q;
+    public Explanation explain(LeafReaderContext context, int doc) throws IOException {
+      return w.explain(context, doc);
     }
 
     @Override
@@ -86,7 +82,7 @@ public class IgnoreAcceptDocsQuery extends Query {
     }
 
     @Override
-    public Scorer scorer(AtomicReaderContext context, Bits acceptDocs) throws IOException {
+    public Scorer scorer(LeafReaderContext context, Bits acceptDocs) throws IOException {
       return w.scorer(context, null);
     }
   }
@@ -96,11 +92,6 @@ public class IgnoreAcceptDocsQuery extends Query {
     Query n = q.rewrite(reader);
     if (q == n) return this;
     return new IgnoreAcceptDocsQuery(n);
-  }
-
-  @Override
-  public void extractTerms(Set<Term> terms) {
-    q.extractTerms(terms);
   }
 
   @Override

@@ -19,7 +19,7 @@ package org.apache.lucene.search;
 
 import java.io.IOException;
 
-import org.apache.lucene.index.AtomicReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
 
 /**
  * <p>Expert: Collectors are primarily meant to be used to
@@ -71,6 +71,12 @@ public interface Collector {
    * @param context
    *          next atomic reader context
    */
-  LeafCollector getLeafCollector(AtomicReaderContext context) throws IOException;
-
+  LeafCollector getLeafCollector(LeafReaderContext context) throws IOException;
+  
+  /**
+   * Indicates if document scores are needed by this collector.
+   * 
+   * @return {@code true} if scores are needed.
+   */
+  boolean needsScores();
 }

@@ -31,14 +31,14 @@ import org.apache.lucene.util.TestUtil;
 
 public class TestCompiledAutomaton extends LuceneTestCase {
 
-  private CompiledAutomaton build(String... strings) {
+  private CompiledAutomaton build(int maxDeterminizedStates, String... strings) {
     final List<BytesRef> terms = new ArrayList<>();
     for(String s : strings) {
       terms.add(new BytesRef(s));
     }
     Collections.sort(terms);
     final Automaton a = DaciukMihovAutomatonBuilder.build(terms);
-    return new CompiledAutomaton(a, true, false);
+    return new CompiledAutomaton(a, true, false, maxDeterminizedStates, false);
   }
 
   private void testFloor(CompiledAutomaton c, String input, String expected) {
@@ -53,8 +53,8 @@ public class TestCompiledAutomaton extends LuceneTestCase {
     }
   }
 
-  private void testTerms(String[] terms) throws Exception {
-    final CompiledAutomaton c = build(terms);
+  private void testTerms(int maxDeterminizedStates, String[] terms) throws Exception {
+    final CompiledAutomaton c = build(maxDeterminizedStates, terms);
     final BytesRef[] termBytes = new BytesRef[terms.length];
     for(int idx=0;idx<terms.length;idx++) {
       termBytes[idx] = new BytesRef(terms[idx]);
@@ -100,7 +100,7 @@ public class TestCompiledAutomaton extends LuceneTestCase {
     while(terms.size() != numTerms) {
       terms.add(randomString());
     }
-    testTerms(terms.toArray(new String[terms.size()]));
+    testTerms(numTerms * 100, terms.toArray(new String[terms.size()]));
   }
 
   private String randomString() {
@@ -109,7 +109,8 @@ public class TestCompiledAutomaton extends LuceneTestCase {
   }
 
   public void testBasic() throws Exception {
-    CompiledAutomaton c = build("fob", "foo", "goo");
+    CompiledAutomaton c = build(Operations.DEFAULT_MAX_DETERMINIZED_STATES,
+      "fob", "foo", "goo");
     testFloor(c, "goo", "goo");
     testFloor(c, "ga", "foo");
     testFloor(c, "g", "foo");
@@ -119,5 +120,44 @@ public class TestCompiledAutomaton extends LuceneTestCase {
     testFloor(c, "", null);
     testFloor(c, "aa", null);
     testFloor(c, "zzz", "goo");
+  }
+  
+  // LUCENE-6367
+  public void testBinaryAll() throws Exception {
+    Automaton a = new Automaton();
+    int state = a.createState();
+    a.setAccept(state, true);
+    a.addTransition(state, state, 0, 0xff);
+    a.finishState();
+
+    CompiledAutomaton ca = new CompiledAutomaton(a, null, true, Integer.MAX_VALUE, true);
+    assertEquals(CompiledAutomaton.AUTOMATON_TYPE.ALL, ca.type);
+  }
+
+  // LUCENE-6367
+  public void testUnicodeAll() throws Exception {
+    Automaton a = new Automaton();
+    int state = a.createState();
+    a.setAccept(state, true);
+    a.addTransition(state, state, 0, Character.MAX_CODE_POINT);
+    a.finishState();
+
+    CompiledAutomaton ca = new CompiledAutomaton(a, null, true, Integer.MAX_VALUE, false);
+    assertEquals(CompiledAutomaton.AUTOMATON_TYPE.ALL, ca.type);
+  }
+
+  // LUCENE-6367
+  public void testBinarySingleton() throws Exception {
+    // This is just ascii so we can pretend it's binary:
+    Automaton a = Automata.makeString("foobar");
+    CompiledAutomaton ca = new CompiledAutomaton(a, null, true, Integer.MAX_VALUE, true);
+    assertEquals(CompiledAutomaton.AUTOMATON_TYPE.SINGLE, ca.type);
+  }
+
+  // LUCENE-6367
+  public void testUnicodeSingleton() throws Exception {
+    Automaton a = Automata.makeString(TestUtil.randomRealisticUnicodeString(random()));
+    CompiledAutomaton ca = new CompiledAutomaton(a, null, true, Integer.MAX_VALUE, false);
+    assertEquals(CompiledAutomaton.AUTOMATON_TYPE.SINGLE, ca.type);
   }
 }

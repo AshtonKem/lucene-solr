@@ -17,6 +17,7 @@ package org.apache.solr.util;
  * limitations under the License.
  */
 
+import org.apache.solr.common.util.Cache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,16 +32,16 @@ import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * A LFU cache implementation based upon ConcurrentHashMap.
- * <p/>
+ * <p>
  * This is not a terribly efficient implementation.  The tricks used in the
  * LRU version were not directly usable, perhaps it might be possible to
  * rewrite them with LFU in mind.
- * <p/>
+ * <p>
  * <b>This API is experimental and subject to change</b>
  *
  * @since solr 1.6
  */
-public class ConcurrentLFUCache<K, V> {
+public class ConcurrentLFUCache<K, V> implements Cache<K,V> {
   private static Logger log = LoggerFactory.getLogger(ConcurrentLFUCache.class);
 
   private final ConcurrentHashMap<Object, CacheEntry<K, V>> map;
@@ -84,6 +85,7 @@ public class ConcurrentLFUCache<K, V> {
     islive = live;
   }
 
+  @Override
   public V get(K key) {
     CacheEntry<K, V> e = map.get(key);
     if (e == null) {
@@ -97,6 +99,7 @@ public class ConcurrentLFUCache<K, V> {
     return e.value;
   }
 
+  @Override
   public V remove(K key) {
     CacheEntry<K, V> cacheEntry = map.remove(key);
     if (cacheEntry != null) {
@@ -106,6 +109,7 @@ public class ConcurrentLFUCache<K, V> {
     return null;
   }
 
+  @Override
   public V put(K key, V val) {
     if (val == null) return null;
     CacheEntry<K, V> e = new CacheEntry<>(key, val, stats.accessCounter.incrementAndGet());
@@ -215,7 +219,7 @@ public class ConcurrentLFUCache<K, V> {
 
   /**
    * Returns 'n' number of least used entries present in this cache.
-   * <p/>
+   * <p>
    * This uses a TreeSet to collect the 'n' least used items ordered by ascending hitcount
    * and returns a LinkedHashMap containing 'n' or less than 'n' entries.
    *
@@ -259,7 +263,7 @@ public class ConcurrentLFUCache<K, V> {
 
   /**
    * Returns 'n' number of most used entries present in this cache.
-   * <p/>
+   * <p>
    * This uses a TreeSet to collect the 'n' most used items ordered by descending hitcount
    * and returns a LinkedHashMap containing 'n' or less than 'n' entries.
    *
@@ -305,6 +309,7 @@ public class ConcurrentLFUCache<K, V> {
     return stats.size.get();
   }
 
+  @Override
   public void clear() {
     map.clear();
   }

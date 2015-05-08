@@ -20,6 +20,7 @@
 <project name="common" xmlns:artifact="antlib:org.apache.maven.artifact.ant" 
                        xmlns:ivy="antlib:org.apache.ivy.ant"
                        xmlns:junit4="antlib:com.carrotsearch.junit4"
+                       xmlns:jacoco="antlib:org.jacoco.ant"
                        xmlns:rsel="antlib:org.apache.tools.ant.types.resources.selectors">
   <description>
     This file is designed for importing into a main build file, and not intended
@@ -27,17 +28,16 @@
   </description>
 
   <dirname file="${ant.file.common}" property="common.dir"/>
-  <property name="dev-tools.dir" location="${common.dir}/../dev-tools"/>
-  <property name="prettify.dir" location="${common.dir}/tools/prettify"/>
-  <property name="maven.build.dir" location="${build.dir}/maven"/>
-  <property name="license.dir" location="${common.dir}/licenses"/>
-
+  
   <!-- Give user a chance to override without editing this file
       (and without typing -D each time it compiles it -->
   <property file="${user.home}/lucene.build.properties"/>
   <property file="${user.home}/build.properties"/>
-  <property file="${basedir}/build.properties"/>
   <property file="${common.dir}/build.properties"/>
+
+  <property name="dev-tools.dir" location="${common.dir}/../dev-tools"/>
+  <property name="prettify.dir" location="${common.dir}/tools/prettify"/>
+  <property name="license.dir" location="${common.dir}/licenses"/>
 
   <tstamp>
     <format property="current.year" pattern="yyyy"/>
@@ -48,22 +48,29 @@
   </tstamp>
 
   <property name="Name" value="Lucene"/>
-  
   <property name="name" value="${ant.project.name}"/>
-  <property name="tests.luceneMatchVersion" value="5.0"/>
-  <property name="dev.version.base" value="5.0"/>
-  <property name="dev.version.suffix" value="SNAPSHOT"/>
-  <property name="dev.version" value="${dev.version.base}-${dev.version.suffix}"/>
-  <property name="version" value="${dev.version}"/>
-  <property name="spec.version" value="${version}"/>	
+  
+  <!-- include version number from property file (includes "version.*" properties) -->
+  <loadproperties srcFile="${common.dir}/version.properties"/>
+  
+  <fail message="'version.base' property must be 'x.y.z' (major, minor, bugfix) or 'x.y.z.1/2' (+ prerelease) and numeric only: ${version.base}">
+    <condition>
+      <not><matches pattern="^\d+\.\d+\.\d+(|\.1|\.2)$" casesensitive="true" string="${version.base}"/></not>
+    </condition>
+  </fail>
+
+  <fail message="If you pass -Dversion=... to set a release version, it must match &quot;${version.base}&quot;, optionally followed by a suffix (e.g., &quot;-SNAPSHOT&quot;).">
+    <condition>
+      <not><matches pattern="^\Q${version.base}\E(|\-.*)$" casesensitive="true" string="${version}"/></not>
+    </condition>
+  </fail>
 
   <property name="year" value="2000-${current.year}"/>
   
   <!-- Lucene modules unfortunately don't have the "lucene-" prefix, so we add it if no prefix is given in $name: -->
-  <condition property="final.name" value="${name}-${version}">
+  <condition property="final.name" value="${name}-${version}" else="lucene-${name}-${version}">
     <matches pattern="^(lucene|solr)\b" string="${name}"/>
   </condition>
-  <property name="final.name" value="lucene-${name}-${version}"/>
 
   <!-- we exclude ext/*.jar because we don't want example/lib/ext logging jars on the cp -->
   <property name="common.classpath.excludes" value="**/*.txt,**/*.template,**/*.sha1,ext/*.jar" />
@@ -114,24 +121,26 @@
   <property name="tests.monster" value="false" />
   <property name="tests.slow" value="true" />
   <property name="tests.cleanthreads.sysprop" value="perMethod"/>
-  <property name="tests.asserts.gracious" value="false"/>
   <property name="tests.verbose" value="false"/>
   <property name="tests.infostream" value="${tests.verbose}"/>
   <property name="tests.filterstacks" value="true"/>
+  <property name="tests.luceneMatchVersion" value="${version.base}"/>
+  <property name="tests.asserts" value="true" />
+  <property name="tests.policy" location="${common.dir}/tools/junit4/tests.policy"/>
 
-  <condition property="tests.heapsize" value="768M">
+  <condition property="tests.asserts.args" value="-ea -esa" else="">
+    <istrue value="${tests.asserts}"/>
+  </condition>
+
+  <condition property="tests.heapsize" value="768M" else="512M">
     <isset property="run.clover"/>
   </condition>
-  <property name="tests.heapsize" value="512M"/>
   
-  <condition property="tests.clover.args" value="-XX:ReservedCodeCacheSize=128m -XX:MaxPermSize=192m">
+  <condition property="tests.clover.args" value="-XX:ReservedCodeCacheSize=128m -XX:MaxPermSize=192m" else="">
     <isset property="run.clover"/>
   </condition>
-  <property name="tests.clover.args" value=""/>
 
   <property name="tests.heapdump.args" value=""/>
-
-  <property name="tests.workDir" location="${build.dir}/test"/>
 
   <!-- Override these in your local properties to your desire. -->
   <!-- Show simple class names (no package) in test suites. -->
@@ -155,21 +164,23 @@
 
   <property name="javac.deprecation" value="off"/>
   <property name="javac.debug" value="on"/>
-  <property name="javac.source" value="1.7"/>
-  <property name="javac.target" value="1.7"/>
-  <property name="javac.source.backwards" value="1.7"/>
-  <property name="javac.target.backwards" value="1.7"/>
+  <property name="javac.source" value="1.8"/>
+  <property name="javac.target" value="1.8"/>
   <property name="javac.args" value="-Xlint -Xlint:-deprecation -Xlint:-serial -Xlint:-options"/>
-  <property name="javadoc.link" value="http://download.oracle.com/javase/7/docs/api/"/>
+  <property name="javac.profile.args" value="-profile compact2"/>
+  <property name="javadoc.link" value="http://download.oracle.com/javase/8/docs/api/"/>
   <property name="javadoc.link.junit" value="http://junit.sourceforge.net/javadoc/"/>
   <property name="javadoc.packagelist.dir" location="${common.dir}/tools/javadoc"/>
-  <available file="${javadoc.packagelist.dir}/java7/package-list" property="javadoc.java7.packagelist.exists"/>
+  <available file="${javadoc.packagelist.dir}/java8/package-list" property="javadoc.java8.packagelist.exists"/>
   <property name="javadoc.access" value="protected"/>
   <property name="javadoc.charset" value="utf-8"/>
   <property name="javadoc.dir" location="${common.dir}/build/docs"/>
   <property name="javadoc.maxmemory" value="512m" />
   <property name="javadoc.noindex" value="true"/>
 
+  <property name="javadoc.doclint.args" value="-Xdoclint:all -Xdoclint:-missing"/>
+  <property name="javac.doclint.args" value="-Xdoclint:all/protected -Xdoclint:-missing"/>
+  
   <!-- detect bootclasspath from given bootjdk path (including crazy AppleJDK special case) -->
   <first id="-boot-rt.jar">
     <fileset dir="${bootjdk}" erroronmissingdir="false" followsymlinks="true">
@@ -228,13 +239,9 @@
   <property name="m2.repository.id" value="local"/>
   <property name="m2.credentials.prompt" value="true"/>
 
-  <property name="backwards.dir" location="backwards"/>
-  <property name="build.dir.backwards" location="${build.dir}/backwards"/>
-
+  <property name="tests.workDir" location="${build.dir}/test"/>
   <property name="junit.output.dir" location="${build.dir}/test"/>
-  <property name="junit.output.dir.backwards" location="${build.dir.backwards}/test"/>
   <property name="junit.reports" location="${build.dir}/test/reports"/>
-  <property name="junit.reports.backwards" location="${build.dir.backwards}/test/reports"/>
 
   <property name="manifest.file" location="${build.dir}/MANIFEST.MF"/>
 
@@ -261,6 +268,8 @@
   <property name="clover.db.dir" location="${common.dir}/build/clover/db"/>
   <property name="clover.report.dir" location="${common.dir}/build/clover/reports"/>
 
+  <property name="jacoco.report.dir" location="${common.dir}/build/jacoco"/>
+
   <property name="pitest.report.dir" location="${common.dir}/build/pitest/${name}/reports"/>
   <property name="pitest.distance" value="0" />
   <property name="pitest.threads" value="2" />
@@ -286,7 +295,7 @@
   </propertyset>
 
   <patternset id="lucene.local.src.package.patterns"
-              excludes="**/pom.xml,**/*.iml,**/*.jar,build/**,dist/**,benchmark/work/**,benchmark/temp/**,tools/javadoc/java7/**,tools/clover/**"
+              excludes="**/pom.xml,**/*.iml,**/*.jar,build/**,dist/**,benchmark/work/**,benchmark/temp/**,tools/javadoc/java8/**,tools/clover/**"
   />
 
   <!-- Default exclude sources and javadoc jars from Ivy fetch to save time and bandwidth -->
@@ -303,20 +312,44 @@
     </condition>
   </fail>
 
+  <fail message="Minimum supported Java version is 1.8.">
+    <condition>
+      <not><hasmethod classname="java.util.Arrays" method="parallelSort"/></not>
+    </condition>
+  </fail>
+
+  <!-- temporary for cleanup of java.specification.version, to be in format "x.y" -->
+  <loadresource property="-cleaned.specification.version">
+    <propertyresource name="java.specification.version"/>
+    <filterchain>
+      <tokenfilter>
+        <filetokenizer/>
+        <replaceregex pattern="^(\d+\.\d+)(|\..*)$" replace="\1" flags="s"/>
+      </tokenfilter>
+    </filterchain>
+  </loadresource>
+
   <!-- 
     the propery "ant.java.version" is not always correct, depending on used ANT version.
     E.g. Java 8 is only detected in ANT 1.8.3+.
-    Add newer Java version checks at beginning,
-    because ANT will nevert override existing properties!
+    
+    We want to detect here only a limited set of versions and placed in normalized form in ${build.java.runtime},
+    every other version is normalized to "unknown":
+    - To define a target to be only run on a specific version, add <equals/> condition to one of the supplied versions.
+    - To explicitely exclude specific versions (and unknown ones), add a condition to disallow "unknown" and some versions like "1.9"!
    -->
-  <condition property="build.java.runtime" value="1.8">
-    <hasmethod classname="java.util.Collections" method="emptySortedSet"/>
+  <condition property="build.java.runtime" value="${-cleaned.specification.version}" else="unknown">
+    <or>
+      <equals arg1="${-cleaned.specification.version}" arg2="1.8"/>
+      <equals arg1="${-cleaned.specification.version}" arg2="1.9"/>
+    </or>
   </condition>
-  <condition property="build.java.runtime" value="1.7">
-    <hasmethod classname="java.lang.Throwable" method="getSuppressed"/>
-  </condition>
-  <fail message="Minimum supported Java version is 1.7." unless="build.java.runtime"/>
-
+  
+  <!--
+  <echo message="DEBUG: Cleaned java.specification.version=${-cleaned.specification.version}"/>
+  <echo message="DEBUG: Detected runtime: ${build.java.runtime}"/>
+  -->
+  
   <condition property="documentation-lint.supported">
     <and>
       <or>
@@ -324,10 +357,7 @@
         <contains string="${java.vm.name}" substring="openjdk" casesensitive="false"/>
         <contains string="${java.vm.name}" substring="jrockit" casesensitive="false"/>
       </or>
-      <or>
-        <equals arg1="${build.java.runtime}" arg2="1.7"/>
-        <equals arg1="${build.java.runtime}" arg2="1.8"/>
-      </or>
+      <equals arg1="${build.java.runtime}" arg2="1.8"/>
       <!-- TODO: Fix this! For now only run this on 64bit, because jTIDY OOMs with default heap size: -->
       <contains string="${os.arch}" substring="64"/>
     </and>
@@ -335,13 +365,10 @@
 
   <!-- workaround for https://issues.apache.org/bugzilla/show_bug.cgi?id=53347 -->
   <condition property="build.compiler" value="javac1.7">
-    <and>
-      <equals arg1="${build.java.runtime}" arg2="1.8"/>
-      <or>
-        <antversion exactly="1.8.3" />
-        <antversion exactly="1.8.4" />
-      </or>
-    </and>
+    <or>
+      <antversion exactly="1.8.3" />
+      <antversion exactly="1.8.4" />
+    </or>
   </condition>
 
   <target name="-documentation-lint-unsupported" unless="documentation-lint.supported">
@@ -352,11 +379,6 @@
     </fail>
     <echo level="warning" message="WARN: Linting documentation HTML is not supported on this Java version (${build.java.runtime}) / JVM (${java.vm.name}). NOTHING DONE!"/>
   </target>
-
-  <!-- for now disable doclint on JDK 8: -->
-  <condition property="javadoc.args" value="-Xdoclint:none" else="">
-    <equals arg1="${build.java.runtime}" arg2="1.8"/>
-  </condition>
 
   <!-- Import custom ANT tasks. -->
   <import file="${common.dir}/tools/custom-tasks.xml" />
@@ -381,10 +403,14 @@
     <!-- <property name="ivy.settings.uptodate" value="true"/> -->
   </target>
 
+  <condition property="ivy.symlink">
+    <os family="unix"/>
+  </condition>
+
   <target name="resolve" depends="ivy-availability-check,ivy-configure">
     <!-- todo, make this a property or something. 
          only special cases need bundles -->
-    <ivy:retrieve type="jar,bundle,test,test-jar,tests" log="download-only"
+    <ivy:retrieve type="jar,bundle,test,test-jar,tests" log="download-only" symlink="${ivy.symlink}"
                   conf="${ivy.default.configuration}" sync="${ivy.sync}"/>
   </target>
 
@@ -586,7 +612,6 @@
   <macrodef name="build-manifest" description="Builds a manifest file">
   	<attribute name="title"/>
     <attribute name="implementation.title"/>
-    <attribute name="spec.version"/>
     <attribute name="manifest.file" default="${manifest.file}"/>
     <element name="additional-manifest-attributes" optional="true"/>
     <sequential>
@@ -617,7 +642,7 @@
         <attribute name="Extension-Name" value="@{implementation.title}"/>
         <attribute name="Specification-Title" value="@{title}"/>
         <!-- spec version must match "digit+{.digit+}*" -->
-        <attribute name="Specification-Version" value="@{spec.version}"/>
+        <attribute name="Specification-Version" value="${spec.version}"/>
         <attribute name="Specification-Vendor"
                    value="The Apache Software Foundation"/>
         <attribute name="Implementation-Title" value="@{implementation.title}"/>
@@ -640,14 +665,12 @@
     <attribute name="excludes" default="**/pom.xml,**/*.iml"/>
     <attribute name="metainf.source.dir" default="${common.dir}"/>
     <attribute name="implementation.title" default="org.apache.lucene"/>
-    <attribute name="spec.version" default="${spec.version}"/>
     <attribute name="manifest.file" default="${manifest.file}"/>
     <element name="filesets" optional="true"/>
     <element name="jarify-additional-manifest-attributes" optional="true"/>
     <sequential>
       <build-manifest title="@{title}"
                       implementation.title="@{implementation.title}"
-                      spec.version="@{spec.version}"
                       manifest.file="@{manifest.file}">
         <additional-manifest-attributes>
           <jarify-additional-manifest-attributes />
@@ -758,10 +781,9 @@
   </target>
 
   <target name="compile-test" depends="compile-core,compile-test-framework">
-  	<compile-test-macro srcdir="${tests.src.dir}" destdir="${build.dir}/classes/test"
-  						test.classpath="test.classpath"/>
+    <compile-test-macro srcdir="${tests.src.dir}" destdir="${build.dir}/classes/test" test.classpath="test.classpath"/>
   </target>
-	
+
   <macrodef name="compile-test-macro" description="Compiles junit tests.">
   	<attribute name="srcdir"/>
   	<attribute name="destdir"/>
@@ -805,22 +827,20 @@
     <isset property="testmethod" />
   </condition>
 
-  <condition property="tests.showSuccess" value="true">
+  <condition property="tests.showSuccess" value="true" else="false">
     <or>
       <isset property="tests.class" />
       <isset property="tests.method" />
     </or>
   </condition>
-  <property name="tests.showSuccess" value="false"/>
 
-  <condition property="tests.showOutput" value="always">
+  <condition property="tests.showOutput" value="always" else="onerror">
     <or>
       <isset property="tests.class" />
       <isset property="tests.method" />
       <istrue value="${tests.showSuccess}"/>
     </or>
   </condition>
-  <property name="tests.showOutput" value="onerror"/>
 
   <!-- Test macro using junit4. -->
   <macrodef name="test-macro" description="Executes junit tests.">
@@ -834,6 +854,9 @@
     <attribute name="tests.monster" default="${tests.monster}"/>
     <attribute name="tests.slow" default="${tests.slow}"/>
     <attribute name="tests.multiplier" default="${tests.multiplier}"/>
+    <attribute name="additional.vm.args" default=""/>
+    <!-- note this enables keeping junit4 files only (not test temp files) -->
+    <attribute name="runner.leaveTemporary" default="false"/>
       
     <sequential>
         <!-- Warn if somebody uses removed properties. -->
@@ -861,8 +884,36 @@
         <property name="tests.dynamicAssignmentRatio" value="0.50" /> <!-- 50% of suites -->
         <property name="tests.haltonfailure" value="true" />
         <property name="tests.leaveTemporary" value="false" />
+        <!-- 
+           keep junit4 runner files or not (independent of keeping test output files)
+         -->
+        <condition property="junit4.leaveTemporary">
+          <or>
+            <istrue value="${tests.leaveTemporary}"/> 
+            <istrue value="@{runner.leaveTemporary}"/> 
+          </or>
+        </condition>
         <property name="tests.iters" value="" />
         <property name="tests.dups"  value="1" />
+        <property name="tests.useSecurityManager"  value="true" />
+
+        <!-- turn on security manager? -->
+        <condition property="java.security.manager" value="org.apache.lucene.util.TestSecurityManager">
+          <istrue value="${tests.useSecurityManager}"/>
+        </condition>
+
+        <!-- create a fileset pattern that matches ${tests.class}. -->
+        <loadresource property="tests.explicitclass" quiet="true">
+          <propertyresource name="tests.class" />
+          <filterchain>
+            <tokenfilter>
+              <filetokenizer/>
+              <replacestring from="." to="/"/>
+              <replacestring from="*" to="**"/>
+              <replaceregex pattern="$" replace=".class" />
+            </tokenfilter>
+          </filterchain>
+        </loadresource>
 
         <!-- Pick the random seed now (unless already set). -->
         <junit4:pickseed property="tests.seed" />
@@ -876,7 +927,7 @@
             <value><!-- empty/ default encoding. --></value>
 
             <!--
-            Disabled because of Java 1.7 bug on Linux/ Unix:
+            Disabled because of Java 1.8 bug on Linux/ Unix:
             http://bugs.sun.com/bugdatabase/view_bug.do?bug_id=7181721
 
             <value>UTF-16</value>     
@@ -912,7 +963,7 @@
 
             dynamicAssignmentRatio="${tests.dynamicAssignmentRatio}"
             shuffleOnSlave="true"
-            leaveTemporary="${tests.leaveTemporary}"
+            leaveTemporary="${junit4.leaveTemporary}"
             seed="${tests.seed}"
 
             heartbeat="${tests.heartbeat}"
@@ -924,16 +975,12 @@
             <classpath refid="@{junit.classpath}"/>
             <classpath refid="clover.classpath" />
 
-            <!-- Assertions. -->
-            <assertions>
-              <enable package="org.apache.lucene"/>
-              <enable package="org.apache.solr"/>
-            </assertions>  
-
             <!-- JVM arguments and system properties. -->
             <jvmarg line="${args}"/>
             <jvmarg line="${tests.heapdump.args}"/>
             <jvmarg line="${tests.clover.args}"/>
+            <jvmarg line="@{additional.vm.args}"/>
+            <jvmarg line="${tests.asserts.args}"/>
 
             <!-- set the number of times tests should run -->
             <sysproperty key="tests.iters" value="${tests.iters}"/>
@@ -971,7 +1018,7 @@
             <sysproperty key="tests.slow" value="@{tests.slow}"/>
               
             <!-- set whether tests framework should not require java assertions enabled -->
-            <sysproperty key="tests.asserts.gracious" value="${tests.asserts.gracious}"/>
+            <sysproperty key="tests.asserts" value="${tests.asserts}"/>
 
             <!-- TODO: create propertyset for test properties, so each project can have its own set -->
             <sysproperty key="tests.multiplier" value="@{tests.multiplier}"/>
@@ -982,11 +1029,14 @@
 
             <!-- Restrict access to certain Java features and install security manager: -->
             <sysproperty key="junit4.tempDir" file="@{workDir}/temp" />
+            <sysproperty key="common.dir" file="${common.dir}" />
             <sysproperty key="clover.db.dir" file="${clover.db.dir}" />
-            <sysproperty key="java.security.manager" value="org.apache.lucene.util.TestSecurityManager" />
-            <sysproperty key="java.security.policy" file="${common.dir}/tools/junit4/tests.policy" />
+            <syspropertyset>
+                <propertyref prefix="java.security.manager"/>
+            </syspropertyset>
+            <sysproperty key="java.security.policy" file="${tests.policy}" />
 
-            <sysproperty key="lucene.version" value="${version}"/>
+            <sysproperty key="tests.LUCENE_VERSION" value="${version.base}"/>
 
             <sysproperty key="jetty.testMode" value="1"/>
             <sysproperty key="jetty.insecurerandom" value="1"/>
@@ -1003,8 +1053,8 @@
                 <propertyref prefix="tests.maxfailures" />
                 <propertyref prefix="tests.failfast" />
                 <propertyref prefix="tests.badapples" />
+                <propertyref prefix="tests.bwcdir" />
                 <propertyref prefix="tests.timeoutSuite" />
-                <propertyref prefix="tests.jettyConnector" />
                 <propertyref prefix="tests.disableHdfs" />
                 <propertyref prefix="tests.filter" />
                 <propertyref prefix="tests.leavetmpdir" />
@@ -1115,6 +1165,7 @@
               <fileset dir="@{testsDir}">
                 <include name="**/Test*.class" />
                 <include name="**/*Test.class" />
+                <include name="${tests.explicitclass}" if="tests.explicitclass" />
                 <exclude name="**/*$*" />
               </fileset>
             </junit4:duplicate>
@@ -1122,9 +1173,18 @@
 
         <!-- Append the number of non-ignored (actually executed) tests. -->
         <echo file="${tests.totals.tmpfile}" append="true" encoding="UTF-8"># module: ${ant.project.name}&#x000a;${junit4.stats.nonIgnored}&#x000a;</echo>
+        
+        <fail message="Beasting executed no tests (a typo in the filter pattern maybe?)">
+          <condition>
+            <and>
+              <isset property="tests.isbeasting"/>
+              <equals arg1="${junit4.stats.nonIgnored}" arg2="0"/>
+            </and>
+          </condition>
+        </fail>
 
         <!-- Report the 5 slowest tests from this run to the console. -->
-        <echo>5 slowest tests:</echo>
+        <echo level="info">5 slowest tests:</echo>
         <junit4:tophints max="5">
           <file file="${tests.cachedir}/${name}/timehints.txt" />
         </junit4:tophints>
@@ -1208,8 +1268,8 @@ ant test -Dtests.dups=N ...
 # master seed. You can combine beasting with any other parameter,
 # just replace "test" with "beast" and give -Dbeast.iters=P
 # (P >> 1).
-ant test -Dtests.dups=N -Dtests.iters=M -Dbeast.iters=P \
-  -Dtestcase=ClassName beast
+ant beast -Dtests.dups=N -Dtests.iters=M -Dbeast.iters=P \
+  -Dtestcase=ClassName
 
 #
 # Test groups. ----------------------------------------------------
@@ -1301,6 +1361,54 @@ ${tests-output}/junit4-*.suites     - per-JVM executed suites
   <target name="test" depends="clover,compile-test,install-junit4-taskdef,validate,-init-totals,-test,-check-totals" description="Runs unit tests"/>
   <target name="beast" depends="clover,compile-test,install-junit4-taskdef,validate,-init-totals,-beast,-check-totals" description="Runs unit tests in a loop (-Dbeast.iters=n)"/>
 
+  <target name="-jacoco-install">
+    <!-- download jacoco from ivy if needed -->
+    <ivy:cachepath organisation="org.jacoco" module="org.jacoco.ant" type="jar" inline="true" revision="0.7.4.201502262128"
+                   log="download-only" pathid="jacoco.classpath" />
+
+    <!-- install jacoco ant tasks -->
+    <taskdef uri="antlib:org.jacoco.ant" resource="org/jacoco/ant/antlib.xml">
+        <classpath refid="jacoco.classpath"/>
+    </taskdef>
+  </target>
+
+  <target name="-jacoco-test" depends="clover,compile-test,install-junit4-taskdef,validate,-init-totals">
+    <!-- hack: ant task computes absolute path, but we need a relative path, so its per-testrunner -->
+    <jacoco:agent property="agentvmparam.raw"/>
+    <property name="agentvmparam" value="${agentvmparam.raw}destfile=jacoco.db,append=false"/>
+  
+    <!-- create output dir if needed -->
+    <mkdir dir="${junit.output.dir}"/>
+
+    <!-- run tests, with agent vm args, and keep runner files around -->
+    <test-macro threadNum="${tests.jvms.override}" additional.vm.args="${agentvmparam}" runner.leaveTemporary="true"/>
+  </target>
+
+  <target name="-jacoco-report" depends="-check-totals">
+    <property name="jacoco.output.dir" location="${jacoco.report.dir}/${name}"/>
+    <!-- try to clean output dir to prevent any confusion -->
+    <delete dir="${jacoco.output.dir}" failonerror="false"/>
+    <mkdir dir="${jacoco.output.dir}"/>
+
+    <!-- print jacoco reports -->
+    <jacoco:report>
+      <executiondata>
+        <fileset dir="${junit.output.dir}" includes="**/jacoco.db"/>
+      </executiondata>
+      <structure name="${final.name} JaCoCo coverage report">
+        <classfiles>
+          <fileset dir="${build.dir}/classes/java"/>
+        </classfiles>
+        <sourcefiles>
+          <fileset dir="${src.dir}"/>
+        </sourcefiles>
+      </structure>
+      <html destdir="${jacoco.output.dir}" footer="Copyright ${year} Apache Software Foundation.  All Rights Reserved."/>
+    </jacoco:report>
+  </target>
+
+  <target name="jacoco" depends="-jacoco-install,-jacoco-test,-jacoco-report" description="Generates JaCoCo coverage report"/>
+
   <!-- Run the actual tests (must be wrapped with -init-totals, -check-totals) -->
   <target name="-test">
     <mkdir dir="${junit.output.dir}"/>
@@ -1309,22 +1417,62 @@ ${tests-output}/junit4-*.suites     - per-JVM executed suites
 
   <!-- Beast the actual tests (must be wrapped with -init-totals, -check-totals) -->
   <target name="-beast" depends="resolve-groovy">
+    <fail message="The Beast only works inside of individual modules (where 'junit.classpath' is defined)">
+      <condition>
+        <not><isreference refid="junit.classpath"/></not>
+      </condition>
+    </fail>
     <groovy taskname="beaster"><![CDATA[
       import org.apache.tools.ant.BuildException;
+      import org.apache.tools.ant.BuildLogger;
+      import org.apache.tools.ant.Project;
       
       int iters = (properties['beast.iters'] ?: '1') as int;
       if (iters <= 1) {
         throw new BuildException("Please give -Dbeast.iters with an int value > 1.");
       }
+      
       def antcall = project.createTask('antcall');
-      antcall.target = '-test';
-      antcall.inheritAll = true;
-      antcall.inheritRefs = true;
-      (1..iters).each { i ->
-        task.log('Beast round: ' + i);
-        antcall.execute();
+      antcall.with {
+        target = '-test';
+        inheritAll = true;
+        inheritRefs = true;
+        createParam().with {
+          name = "tests.isbeasting";
+          value = "true";
+        };
       };
-      task.log('Beasting finished.');
+      
+      (1..iters).each { i ->
+        task.log('Beast round: ' + i, Project.MSG_INFO);
+        try {
+          // disable verbose build logging:
+          project.buildListeners.each { listener ->
+            if (listener instanceof BuildLogger) {
+              listener.messageOutputLevel = Project.MSG_WARN;
+            }
+          };
+          
+          antcall.execute();
+          
+        } catch (BuildException be) {
+          def logFile = new File(properties["junit.output.dir"], "tests-failures.txt");
+          if (logFile.exists()) {
+            logFile.eachLine("UTF-8", { line ->
+              task.log(line, Project.MSG_ERR);
+            });
+          }
+          throw be;
+        } finally {
+          // restore build logging (unfortunately there is no way to get the original logging level (write-only property):
+          project.buildListeners.each { listener ->
+            if (listener instanceof BuildLogger) {
+              listener.messageOutputLevel = Project.MSG_INFO;
+            }
+          };
+        }
+      };
+      task.log('Beasting finished.', Project.MSG_INFO);
     ]]></groovy>
   </target>
 
@@ -1343,7 +1491,7 @@ ${tests-output}/junit4-*.suites     - per-JVM executed suites
       statsFile.delete();
 
       if (total == 0) {
-        throw new BuildException("Not even a single test was executed (a typo in the filter pattern maybe)?");
+        throw new BuildException("Not even a single test was executed (a typo in the filter pattern maybe?).");
       }
 
       // Interesting but let's keep the build output quiet.
@@ -1389,7 +1537,7 @@ ${tests-output}/junit4-*.suites     - per-JVM executed suites
   
 ]]></fail>
     <echo>Code coverage with Atlassian Clover enabled.</echo>
-    <ivy:cachepath organisation="com.cenqua.clover" module="clover" revision="3.3.0"
+    <ivy:cachepath organisation="com.atlassian.clover" module="clover" revision="4.0.3"
       inline="true" conf="master" pathid="clover.classpath"/>
     <taskdef resource="cloverlib.xml" classpathref="clover.classpath" />
     <mkdir dir="${clover.db.dir}"/>
@@ -1440,17 +1588,6 @@ ${tests-output}/junit4-*.suites     - per-JVM executed suites
         <include name="**/test/TEST-*.xml"/>
       </fileset>
       <report format="frames" todir="${junit.reports}"/>
-    </junitreport>
-    
-    <mkdir dir="${junit.reports.backwards}"/>
-    <junitreport todir="${junit.output.dir.backwards}">
-      <!-- this fileset let's the task work for individual modules,
-           as well as the project as a whole
-       -->
-      <fileset dir="${build.dir.backwards}">
-        <include name="**/test/TEST-*.xml"/>
-      </fileset>
-      <report format="frames" todir="${junit.reports.backwards}"/>
     </junitreport>
   </target>
 
@@ -1608,6 +1745,8 @@ ${ant.project.name}.test.dependencies=${test.classpath.list}
       <fileset dir="${common.dir}/../dev-tools/maven"/>
       <filterset begintoken="@" endtoken="@">
         <filter token="version" value="${version}"/>
+        <filter token="version.base" value="${version.base}"/>
+        <filter token="spec.version" value="${spec.version}"/>
       </filterset>
       <filterset>
         <filtersfile file="${maven.dependencies.filters.file}"/>
@@ -1662,7 +1801,7 @@ ${ant.project.name}.test.dependencies=${test.classpath.list}
   </target>
 
   <target name="rat-sources-typedef" unless="rat.loaded">
-    <ivy:cachepath organisation="org.apache.rat" module="apache-rat" revision="0.10" transitive="false" inline="true" conf="master" type="jar" pathid="rat.classpath"/>
+    <ivy:cachepath organisation="org.apache.rat" module="apache-rat" revision="0.11" transitive="false" inline="true" conf="master" type="jar" pathid="rat.classpath"/>
     <typedef resource="org/apache/rat/anttasks/antlib.xml" uri="antlib:org.apache.rat.anttasks" classpathref="rat.classpath"/>
     <property name="rat.loaded" value="true"/>
   </target>
@@ -1789,8 +1928,9 @@ ${ant.project.name}.test.dependencies=${test.classpath.list}
         <nested/>
         <!-- <compilerarg line="-Xmaxwarns 10000000"/>
         <compilerarg line="-Xmaxerrs 10000000"/> -->
-        <!-- for generics in Java 1.5: -->
         <compilerarg line="${javac.args}"/>
+        <compilerarg line="${javac.profile.args}"/>
+        <compilerarg line="${javac.doclint.args}"/>
       </javac>
     </sequential>
   </macrodef>
@@ -1798,7 +1938,7 @@ ${ant.project.name}.test.dependencies=${test.classpath.list}
   <!-- ECJ Javadoc linting: -->
   
   <condition property="ecj-javadoc-lint.supported">
-    <not><equals arg1="${build.java.runtime}" arg2="1.9"/></not>
+    <equals arg1="${build.java.runtime}" arg2="1.8"/>
   </condition>
 
   <condition property="ecj-javadoc-lint-tests.supported">
@@ -1832,7 +1972,7 @@ ${ant.project.name}.test.dependencies=${test.classpath.list}
   </target>
   
   <target name="-ecj-resolve" unless="ecj.loaded" depends="ivy-availability-check,ivy-configure" if="ecj-javadoc-lint.supported">
-    <ivy:cachepath organisation="org.eclipse.jdt.core.compiler" module="ecj" revision="4.4"
+    <ivy:cachepath organisation="org.eclipse.jdt.core.compiler" module="ecj" revision="4.4.1"
      inline="true" conf="master" type="jar" pathid="ecj.classpath" />
     <componentdef classname="org.eclipse.jdt.core.JDTCompilerAdapter"
      classpathref="ecj.classpath" name="ecj-component"/>
@@ -1848,21 +1988,29 @@ ${ant.project.name}.test.dependencies=${test.classpath.list}
     <element name="nested" implicit="yes" optional="yes"/>
 
     <sequential>
+      <!-- hack: we can tell ECJ not to create classfiles, but it still creates
+           package-info.class files. so redirect output to a tempdir -->
+      <tempfile property="ecj.trash.out" destdir="${java.io.tmpdir}" prefix="ecj"/>
+      <mkdir dir="${ecj.trash.out}"/>
       <javac
         includeAntRuntime="@{includeantruntime}"
         encoding="${build.encoding}"
         srcdir="@{srcdir}"
+        destdir="${ecj.trash.out}"
         source="@{javac.source}"
         target="@{javac.source}"
         taskname="ecj-lint">
         <ecj-component/>
         <nested/>
+      <!-- hack: we can't disable classfile creation right now, because we need
+           to specify a destination for buggy package-info.class files
         <compilerarg value="-d"/>
-        <compilerarg value="none"/>
+        <compilerarg value="none"/> -->
         <compilerarg value="-enableJavadoc"/>
         <compilerarg value="-properties"/>
         <compilerarg value="@{configuration}"/>
       </javac>
+      <delete dir="${ecj.trash.out}"/>
     </sequential>
   </macrodef>
 
@@ -1894,7 +2042,7 @@ ${ant.project.name}.test.dependencies=${test.classpath.list}
     <attribute name="overview" default="${src.dir}/overview.html"/>
     <attribute name="linksource" default="no"/>
     <sequential>
-      <antcall target="download-java7-javadoc-packagelist"/>
+      <antcall target="download-java8-javadoc-packagelist"/>
       <delete file="@{destdir}/stylesheet.css" failonerror="false"/>
       <copy todir="@{destdir}" file="${prettify.dir}/prettify.js" overwrite="false" />
       <record name="@{destdir}/log_javadoc.txt" action="start" append="no"/>
@@ -1924,7 +2072,7 @@ ${ant.project.name}.test.dependencies=${test.classpath.list}
         <tag name="lucene.internal"
         description="NOTE: This API is for internal purposes only and might change in incompatible ways in the next release."/>
       	<link offline="true" packagelistLoc="${javadoc.dir}"/>
-        <link offline="true" href="${javadoc.link}" packagelistLoc="${javadoc.packagelist.dir}/java7"/>
+        <link offline="true" href="${javadoc.link}" packagelistLoc="${javadoc.packagelist.dir}/java8"/>
         <bottom><![CDATA[
           <i>Copyright &copy; ${year} Apache Software Foundation.  All Rights Reserved.</i>
           <script src='{@docRoot}/prettify.js' type='text/javascript'></script>
@@ -1946,7 +2094,7 @@ ${ant.project.name}.test.dependencies=${test.classpath.list}
       	<sources />
       	      	
         <classpath refid="javadoc.classpath"/>
-        <arg line="${javadoc.args}"/>
+        <arg line="${javadoc.doclint.args}"/>
       </javadoc>
       <record name="@{destdir}/log_javadoc.txt" action="stop"/>
       
@@ -1978,70 +2126,7 @@ ${ant.project.name}.test.dependencies=${test.classpath.list}
           </and>
         </condition>
       </fail>
-
-      <patch-javadoc dir="@{destdir}" docencoding="${javadoc.charset}"/>
    </sequential>
-  </macrodef>
-
-  <!--
-    Patch frame injection bugs in javadoc generated files - see CVE-2013-1571, http://www.kb.cert.org/vuls/id/225657
-    
-    Feel free to use this macro in your own Ant build file. This macro works together with the javadoc task on Ant
-    and should be invoked directly after its execution to patch broken javadocs, e.g.:
-      <patch-javadoc dir="..." docencoding="UTF-8"/>
-    Please make sure that the docencoding parameter uses the same charset like javadoc's docencoding. Default
-    is the platform default encoding (like the javadoc task).
-    The specified dir is the destination directory of the javadoc task.
-  -->
-  <macrodef name="patch-javadoc">
-    <attribute name="dir"/>
-    <attribute name="docencoding" default="${file.encoding}"/>
-    <sequential>
-      <replace encoding="@{docencoding}" summary="true" taskname="patch-javadoc">
-        <fileset dir="@{dir}" casesensitive="false" includes="**/index.html,**/index.htm,**/toc.html,**/toc.htm">
-          <!-- TODO: add encoding="@{docencoding}" to contains check, when we are on ANT 1.9.0: -->
-          <not><contains text="function validURL(url) {" casesensitive="true" /></not>
-        </fileset>
-        <replacetoken><![CDATA[function loadFrames() {]]></replacetoken>
-        <replacevalue expandProperties="false"><![CDATA[if (targetPage != "" && !validURL(targetPage))
-        targetPage = "undefined";
-    function validURL(url) {
-        var pos = url.indexOf(".html");
-        if (pos == -1 || pos != url.length - 5)
-            return false;
-        var allowNumber = false;
-        var allowSep = false;
-        var seenDot = false;
-        for (var i = 0; i < url.length - 5; i++) {
-            var ch = url.charAt(i);
-            if ('a' <= ch && ch <= 'z' ||
-                    'A' <= ch && ch <= 'Z' ||
-                    ch == '$' ||
-                    ch == '_') {
-                allowNumber = true;
-                allowSep = true;
-            } else if ('0' <= ch && ch <= '9'
-                    || ch == '-') {
-                if (!allowNumber)
-                     return false;
-            } else if (ch == '/' || ch == '.') {
-                if (!allowSep)
-                    return false;
-                allowNumber = false;
-                allowSep = false;
-                if (ch == '.')
-                     seenDot = true;
-                if (ch == '/' && seenDot)
-                     return false;
-            } else {
-                return false;
-            }
-        }
-        return true;
-    }
-    function loadFrames() {]]></replacevalue>
-      </replace>
-    </sequential>
   </macrodef>
 
   <target name="check-javadocs-uptodate">
@@ -2064,10 +2149,10 @@ ${ant.project.name}.test.dependencies=${test.classpath.list}
     </sequential>
   </macrodef>
 
-  <target name="download-java7-javadoc-packagelist" unless="javadoc.java7.packagelist.exists">
-    <mkdir dir="${javadoc.packagelist.dir}/java7"/>
+  <target name="download-java8-javadoc-packagelist" unless="javadoc.java8.packagelist.exists">
+    <mkdir dir="${javadoc.packagelist.dir}/java8"/>
     <get src="${javadoc.link}/package-list"
-         dest="${javadoc.packagelist.dir}/java7/package-list" ignoreerrors="true"/>
+         dest="${javadoc.packagelist.dir}/java8/package-list" ignoreerrors="true"/>
   </target>
 
   <!-- VALIDATION work -->
@@ -2245,7 +2330,7 @@ ${ant.project.name}.test.dependencies=${test.classpath.list}
 
   <!-- GROOVY scripting engine for ANT tasks -->
   <target name="resolve-groovy" unless="groovy.loaded" depends="ivy-availability-check,ivy-configure">
-    <ivy:cachepath organisation="org.codehaus.groovy" module="groovy-all" revision="2.3.1"
+    <ivy:cachepath organisation="org.codehaus.groovy" module="groovy-all" revision="2.3.10"
       inline="true" conf="default" type="jar" transitive="true" pathid="groovy.classpath"/>
     <taskdef name="groovy"
       classname="org.codehaus.groovy.ant.Groovy"
@@ -2259,7 +2344,7 @@ ${ant.project.name}.test.dependencies=${test.classpath.list}
   <property name="forbidden-sysout-excludes" value=""/>
   
   <target name="-install-forbidden-apis" unless="forbidden-apis.loaded" depends="ivy-availability-check,ivy-configure">
-    <ivy:cachepath organisation="de.thetaphi" module="forbiddenapis" revision="1.6.1"
+    <ivy:cachepath organisation="de.thetaphi" module="forbiddenapis" revision="1.8"
       inline="true" conf="default" transitive="true" pathid="forbidden-apis.classpath"/>
     <taskdef name="forbidden-apis" classname="de.thetaphi.forbiddenapis.AntTask" classpathref="forbidden-apis.classpath"/>
     <property name="forbidden-apis.loaded" value="true"/>
@@ -2276,22 +2361,34 @@ ${ant.project.name}.test.dependencies=${test.classpath.list}
     </path>
   </target>  
 
+  <condition property="forbidden-isLucene">
+    <not>
+      <or>
+        <matches pattern="^(solr)\b" string="${name}"/>
+        <matches pattern="tools" string="${name}"/>
+      </or>
+    </not>
+  </condition>
+
   <target name="check-forbidden-apis" depends="-check-forbidden-all,-check-forbidden-core,-check-forbidden-tests" description="Check forbidden API calls in compiled class files"/>
   
   <!-- applies to both source and test code -->
   <target name="-check-forbidden-all" depends="-init-forbidden-apis,compile-core,compile-test">
-    <forbidden-apis internalRuntimeForbidden="true" classpathref="forbidden-apis.allclasses.classpath">
+    <forbidden-apis internalRuntimeForbidden="true" suppressAnnotation="**.SuppressForbidden" classpathref="forbidden-apis.allclasses.classpath">
       <bundledSignatures name="jdk-unsafe-${javac.target}"/>
       <bundledSignatures name="jdk-deprecated-${javac.target}"/>
-      <signaturesFileSet file="${common.dir}/tools/forbiddenApis/base.txt"/>
+      <signaturesFileSet dir="${common.dir}/tools/forbiddenApis">
+        <include name="base.txt"/>
+        <include name="lucene.txt" if="forbidden-isLucene"/>
+      </signaturesFileSet>
       <fileset dir="${build.dir}/classes/java" excludes="${forbidden-base-excludes}"/>
       <fileset dir="${build.dir}/classes/test" excludes="${forbidden-tests-excludes}" erroronmissingdir="false"/>
     </forbidden-apis>
   </target>
-  
+
   <!-- applies to only test code -->
   <target name="-check-forbidden-tests" depends="-init-forbidden-apis,compile-test">
-    <forbidden-apis signaturesFile="${common.dir}/tools/forbiddenApis/tests.txt" classpathref="forbidden-apis.allclasses.classpath"> 
+    <forbidden-apis signaturesFile="${common.dir}/tools/forbiddenApis/tests.txt" suppressAnnotation="**.SuppressForbidden" classpathref="forbidden-apis.allclasses.classpath"> 
       <fileset dir="${build.dir}/classes/test" excludes="${forbidden-tests-excludes}"/>
     </forbidden-apis>
   </target>
@@ -2300,7 +2397,7 @@ ${ant.project.name}.test.dependencies=${test.classpath.list}
   <target name="-check-forbidden-core" depends="-init-forbidden-apis,compile-core,-check-forbidden-sysout" />
 
   <target name="-check-forbidden-sysout" depends="-init-forbidden-apis,compile-core">
-    <forbidden-apis bundledSignatures="jdk-system-out" classpathref="forbidden-apis.allclasses.classpath">
+    <forbidden-apis bundledSignatures="jdk-system-out" suppressAnnotation="**.SuppressForbidden" classpathref="forbidden-apis.allclasses.classpath">
       <fileset dir="${build.dir}/classes/java" excludes="${forbidden-sysout-excludes}"/>
     </forbidden-apis>
   </target>
@@ -2393,6 +2490,7 @@ ${ant.project.name}.test.dependencies=${test.classpath.list}
     <attribute name="changes.product"/>
     <attribute name="changes.src.file" default="CHANGES.txt"/>
     <attribute name="changes.target.dir" default="${changes.target.dir}"/>
+    <attribute name="lucene.javadoc.url" default="${lucene.javadoc.url}"/>
     <sequential>
       <mkdir dir="@{changes.target.dir}"/>
       <get src="https://issues.apache.org/jira/rest/api/2/project/@{changes.product}"
@@ -2403,6 +2501,7 @@ ${ant.project.name}.test.dependencies=${test.classpath.list}
         <arg value="${changes.src.dir}/changes2html.pl"/>
         <arg value="@{changes.product}"/>
         <arg value="@{changes.target.dir}/jiraVersionList.json"/>
+        <arg value="@{lucene.javadoc.url}"/>
       </exec>
       <delete file="@{changes.target.dir}/jiraVersionList.json"/>
       <copy todir="@{changes.target.dir}">
@@ -2468,7 +2567,7 @@ The following arguments can be provided to ant to alter its behaviour and target
 
         <junit4:pickseed property="pitest.seed" />
 
-        <property name="pitest.sysprops" value="-Dlucene.version=${version},-Dtest.seed=${pitest.seed},-Djava.security.manager=org.apache.lucene.util.TestSecurityManager,-Djava.security.policy=${common.dir}/tools/junit4/tests.policy,-Djava.io.tmpdir=${tests.workDir},-Djunit4.childvm.cwd=${tests.workDir},-Djunit4.tempDir=${tests.workDir}" />
+        <property name="pitest.sysprops" value="-Dversion=${version},-Dtest.seed=${pitest.seed},-Djava.security.manager=org.apache.lucene.util.TestSecurityManager,-Djava.security.policy=${tests.policy},-Djava.io.tmpdir=${tests.workDir},-Djunit4.childvm.cwd=${tests.workDir},-Djunit4.tempDir=${tests.workDir}" />
 
         <pitest
             classPath="pitest.classpath"

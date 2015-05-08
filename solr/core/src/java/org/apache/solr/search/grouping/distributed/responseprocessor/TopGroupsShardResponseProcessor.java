@@ -20,6 +20,7 @@ package org.apache.solr.search.grouping.distributed.responseprocessor;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.TopDocs;
+import org.apache.lucene.search.TopFieldDocs;
 import org.apache.lucene.search.grouping.GroupDocs;
 import org.apache.lucene.search.grouping.TopGroups;
 import org.apache.lucene.util.BytesRef;
@@ -120,6 +121,8 @@ public class TopGroupsShardResponseProcessor implements ShardResponseProcessor {
         continue; // continue if there was an error and we're tolerant.  
       }
       NamedList<NamedList> secondPhaseResult = (NamedList<NamedList>) srsp.getSolrResponse().getResponse().get("secondPhase");
+      if(secondPhaseResult == null)
+        continue;
       Map<String, ?> result = serializer.transformToNative(secondPhaseResult, groupSort, sortWithinGroup, srsp.getShard());
       int numFound = 0;
       float maxScore = Float.NaN;
@@ -169,7 +172,12 @@ public class TopGroupsShardResponseProcessor implements ShardResponseProcessor {
         }
 
         int topN = rb.getGroupingSpec().getOffset() + rb.getGroupingSpec().getLimit();
-        TopDocs mergedTopDocs = TopDocs.merge(sortWithinGroup, topN, topDocs.toArray(new TopDocs[topDocs.size()]));
+        final TopDocs mergedTopDocs;
+        if (sortWithinGroup == null) {
+          mergedTopDocs = TopDocs.merge(topN, topDocs.toArray(new TopDocs[topDocs.size()]));
+        } else {
+          mergedTopDocs = TopDocs.merge(sortWithinGroup, topN, topDocs.toArray(new TopFieldDocs[topDocs.size()]));
+        }
         rb.mergedQueryCommandResults.put(query, new QueryCommandResult(mergedTopDocs, mergedMatches));
       }
 

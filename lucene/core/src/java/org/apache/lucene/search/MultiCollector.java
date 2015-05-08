@@ -20,9 +20,7 @@ package org.apache.lucene.search;
 import java.io.IOException;
 import java.util.Arrays;
 
-import org.apache.lucene.index.AtomicReaderContext;
-import org.apache.lucene.search.Collector;
-import org.apache.lucene.search.Scorer;
+import org.apache.lucene.index.LeafReaderContext;
 
 /**
  * A {@link Collector} which allows running a search with several
@@ -88,32 +86,54 @@ public class MultiCollector implements Collector {
     }
   }
   
+  private final boolean cacheScores;
   private final Collector[] collectors;
 
   private MultiCollector(Collector... collectors) {
     this.collectors = collectors;
+    int numNeedsScores = 0;
+    for (Collector collector : collectors) {
+      if (collector.needsScores()) {
+        numNeedsScores += 1;
+      }
+    }
+    this.cacheScores = numNeedsScores >= 2;
   }
 
   @Override
-  public LeafCollector getLeafCollector(AtomicReaderContext context) throws IOException {
+  public boolean needsScores() {
+    for (Collector collector : collectors) {
+      if (collector.needsScores()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  @Override
+  public LeafCollector getLeafCollector(LeafReaderContext context) throws IOException {
     final LeafCollector[] leafCollectors = new LeafCollector[collectors.length];
     for (int i = 0; i < collectors.length; ++i) {
       leafCollectors[i] = collectors[i].getLeafCollector(context);
     }
-    return new MultiLeafCollector(leafCollectors);
+    return new MultiLeafCollector(leafCollectors, cacheScores);
   }
-
 
   private static class MultiLeafCollector implements LeafCollector {
 
+    private final boolean cacheScores;
     private final LeafCollector[] collectors;
 
-    private MultiLeafCollector(LeafCollector[] collectors) {
+    private MultiLeafCollector(LeafCollector[] collectors, boolean cacheScores) {
       this.collectors = collectors;
+      this.cacheScores = cacheScores;
     }
 
     @Override
     public void setScorer(Scorer scorer) throws IOException {
+      if (cacheScores) {
+        scorer = new ScoreCachingWrappingScorer(scorer);
+      }
       for (LeafCollector c : collectors) {
         c.setScorer(scorer);
       }
@@ -124,16 +144,6 @@ public class MultiCollector implements Collector {
       for (LeafCollector c : collectors) {
         c.collect(doc);
       }
-    }
-
-    @Override
-    public boolean acceptsDocsOutOfOrder() {
-      for (LeafCollector c : collectors) {
-        if (!c.acceptsDocsOutOfOrder()) {
-          return false;
-        }
-      }
-      return true;
     }
 
   }

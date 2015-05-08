@@ -17,16 +17,16 @@
 
 package org.apache.solr.common.params;
 
+import org.apache.solr.common.SolrException;
+import org.apache.solr.common.util.NamedList;
+import org.apache.solr.common.util.SimpleOrderedMap;
+import org.apache.solr.common.util.StrUtils;
+
 import java.io.Serializable;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-
-import org.apache.solr.common.SolrException;
-import org.apache.solr.common.util.NamedList;
-import org.apache.solr.common.util.SimpleOrderedMap;
-import org.apache.solr.common.util.StrUtils;
 
 /**  SolrParams hold request parameters.
  *
@@ -121,6 +121,17 @@ public abstract class SolrParams implements Serializable {
     }
   }
 
+  /** Returns the Long value of the param, or null if not set */
+  public Long getLong(String param, Long def) {
+    String val = get(param);
+    try {
+      return val== null ? def : Long.parseLong(val);
+    }
+    catch( Exception ex ) {
+      throw new SolrException( SolrException.ErrorCode.BAD_REQUEST, ex.getMessage(), ex );
+    }
+  }
+
   /** Returns the int value of the param, or def if not set */
   public int getInt(String param, int def) {
     String val = get(param);
@@ -131,7 +142,28 @@ public abstract class SolrParams implements Serializable {
       throw new SolrException( SolrException.ErrorCode.BAD_REQUEST, ex.getMessage(), ex );
     }
   }
-  
+
+  /** Returns the Long value of the param, or null if not set */
+  public Long getLong(String param) {
+    String val = get(param);
+    try {
+      return val == null ? null : Long.valueOf(val);
+    } catch (Exception ex) {
+      throw new SolrException(SolrException.ErrorCode.BAD_REQUEST, ex.getMessage(), ex);
+    }
+  }
+
+  /** Returns the long value of the param, or def if not set */
+  public long getLong(String param, long def) {
+    String val = get(param);
+    try {
+      return val == null ? def : Long.parseLong(val);
+    } catch (Exception ex) {
+      throw new SolrException(SolrException.ErrorCode.BAD_REQUEST, ex.getMessage(), ex);
+    }
+  }
+
+
   /**
    * @return The int value of the field param, or the value for param 
    * or <code>null</code> if neither is set. 
@@ -250,7 +282,6 @@ public abstract class SolrParams implements Serializable {
     }
   }
 
-  @SuppressWarnings({"deprecation"})
   public static SolrParams wrapDefaults(SolrParams params, SolrParams defaults) {
     if (params == null)
       return defaults;
@@ -259,13 +290,12 @@ public abstract class SolrParams implements Serializable {
     return new DefaultSolrParams(params,defaults);
   }
 
-  @SuppressWarnings({"deprecation"})
   public static SolrParams wrapAppended(SolrParams params, SolrParams defaults) {
     if (params == null)
       return defaults;
     if (defaults == null)
       return params;
-    return new AppendedSolrParams(params,defaults);
+    return AppendedSolrParams.wrapAppended(params,defaults);
   }
 
   /** Create a Map&lt;String,String&gt; from a NamedList given no keys are repeated */
@@ -290,13 +320,8 @@ public abstract class SolrParams implements Serializable {
 
   /** Create SolrParams from NamedList. */
   public static SolrParams toSolrParams(NamedList params) {
-    // if no keys are repeated use the faster MapSolrParams
-    HashMap<String,String> map = new HashMap<>();
-    for (int i=0; i<params.size(); i++) {
-      String prev = map.put(params.getName(i), params.getVal(i).toString());
-      if (prev!=null) return new MultiMapSolrParams(toMultiMap(params));
-    }
-    return new MapSolrParams(map);
+    // always use MultiMap for easier processing further down the chain
+    return new MultiMapSolrParams(toMultiMap(params));
   }
   
   /** Create filtered SolrParams. */

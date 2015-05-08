@@ -17,21 +17,31 @@ package org.apache.solr.core;
  * limitations under the License.
  */
 
+import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.HADOOP_SECURITY_AUTHENTICATION;
+
 import java.io.IOException;
-import java.net.URI;
 import java.net.URLEncoder;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Locale;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.hadoop.conf.Configuration;
-import static org.apache.hadoop.fs.CommonConfigurationKeys.HADOOP_SECURITY_AUTHENTICATION;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.store.LockFactory;
 import org.apache.lucene.store.NRTCachingDirectory;
+import org.apache.lucene.store.NoLockFactory;
+import org.apache.lucene.store.SingleInstanceLockFactory;
 import org.apache.solr.cloud.ZkController;
 import org.apache.solr.common.SolrException;
 import org.apache.solr.common.SolrException.ErrorCode;
 import org.apache.solr.common.params.SolrParams;
+import org.apache.solr.common.util.IOUtils;
 import org.apache.solr.common.util.NamedList;
 import org.apache.solr.store.blockcache.BlockCache;
 import org.apache.solr.store.blockcache.BlockDirectory;
@@ -40,10 +50,14 @@ import org.apache.solr.store.blockcache.BufferStore;
 import org.apache.solr.store.blockcache.Cache;
 import org.apache.solr.store.blockcache.Metrics;
 import org.apache.solr.store.hdfs.HdfsDirectory;
+import org.apache.solr.store.hdfs.HdfsLockFactory;
 import org.apache.solr.util.HdfsUtil;
-import org.apache.solr.util.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.google.common.cache.CacheBuilder;
+import com.google.common.cache.RemovalListener;
+import com.google.common.cache.RemovalNotification;
 
 public class HdfsDirectoryFactory extends CachingDirectoryFactory {
   public static Logger LOG = LoggerFactory
@@ -54,7 +68,7 @@ public class HdfsDirectoryFactory extends CachingDirectoryFactory {
   public static final String BLOCKCACHE_ENABLED = "solr.hdfs.blockcache.enabled";
   public static final String BLOCKCACHE_GLOBAL = "solr.hdfs.blockcache.global";
   public static final String BLOCKCACHE_READ_ENABLED = "solr.hdfs.blockcache.read.enabled";
-  public static final String BLOCKCACHE_WRITE_ENABLED = "solr.hdfs.blockcache.write.enabled";
+  public static final String BLOCKCACHE_WRITE_ENABLED = "solr.hdfs.blockcache.write.enabled"; // currently buggy and disabled
   
   public static final String NRTCACHINGDIRECTORY_ENABLE = "solr.hdfs.nrtcachingdirectory.enable";
   public static final String NRTCACHINGDIRECTORY_MAXMERGESIZEMB = "solr.hdfs.nrtcachingdirectory.maxmergesizemb";
@@ -80,16 +94,45 @@ public class HdfsDirectoryFactory extends CachingDirectoryFactory {
   public static Metrics metrics;
   private static Boolean kerberosInit;
   
+  // we use this cache for FileSystem instances when we don't have access to a long lived instance
+  private com.google.common.cache.Cache<String,FileSystem> tmpFsCache = CacheBuilder.newBuilder()
+      .concurrencyLevel(10)
+      .maximumSize(1000)
+      .expireAfterAccess(5, TimeUnit.MINUTES).removalListener(new RemovalListener<String,FileSystem>() {
+        @Override
+        public void onRemoval(RemovalNotification<String,FileSystem> rn) {
+          IOUtils.closeQuietly(rn.getValue());
+        }
+      })
+      .build();
+  
+  private final static class MetricsHolder {
+    // [JCIP SE, Goetz, 16.6] Lazy initialization
+    // Won't load until MetricsHolder is referenced
+    public static final Metrics metrics = new Metrics();
+  }
+  
+  @Override
+  public void close() throws IOException {
+    super.close();
+    Collection<FileSystem> values = tmpFsCache.asMap().values();
+    for (FileSystem fs : values) {
+      IOUtils.closeQuietly(fs);
+    }
+    tmpFsCache.invalidateAll();
+    tmpFsCache.cleanUp();
+  }
+
   @Override
   public void init(NamedList args) {
     params = SolrParams.toSolrParams(args);
-    this.hdfsDataDir = params.get(HDFS_HOME);
+    this.hdfsDataDir = getConfig(HDFS_HOME, null);
     if (this.hdfsDataDir != null && this.hdfsDataDir.length() == 0) {
       this.hdfsDataDir = null;
     } else {
       LOG.info(HDFS_HOME + "=" + this.hdfsDataDir);
     }
-    boolean kerberosEnabled = params.getBool(KERBEROS_ENABLED, false);
+    boolean kerberosEnabled = getConfig(KERBEROS_ENABLED, false);
     LOG.info("Solr Kerberos Authentication "
         + (kerberosEnabled ? "enabled" : "disabled"));
     if (kerberosEnabled) {
@@ -98,34 +141,48 @@ public class HdfsDirectoryFactory extends CachingDirectoryFactory {
   }
   
   @Override
-  protected Directory create(String path, DirContext dirContext)
-      throws IOException {
+  protected LockFactory createLockFactory(String rawLockType) throws IOException {
+    if (null == rawLockType) {
+      LOG.warn("No lockType configured, assuming 'hdfs'.");
+      rawLockType = "hdfs";
+    }
+    final String lockType = rawLockType.toLowerCase(Locale.ROOT).trim();
+    switch (lockType) {
+      case "hdfs":
+        return HdfsLockFactory.INSTANCE;
+      case "single":
+        return new SingleInstanceLockFactory();
+      case "none":
+        return NoLockFactory.INSTANCE;
+      default:
+        throw new SolrException(SolrException.ErrorCode.SERVER_ERROR,
+            "Unrecognized lockType: " + rawLockType);
+    }
+  }
+
+  @Override
+  protected Directory create(String path, LockFactory lockFactory, DirContext dirContext) throws IOException {
+    assert params != null : "init must be called before create";
     LOG.info("creating directory factory for path {}", path);
     Configuration conf = getConf();
     
     if (metrics == null) {
-      metrics = new Metrics(conf);
+      metrics = MetricsHolder.metrics;
     }
     
-    boolean blockCacheEnabled = params.getBool(BLOCKCACHE_ENABLED, true);
-    boolean blockCacheGlobal = params.getBool(BLOCKCACHE_GLOBAL, false); // default to false for back compat
-    boolean blockCacheReadEnabled = params.getBool(BLOCKCACHE_READ_ENABLED, true);
-    boolean blockCacheWriteEnabled = params.getBool(BLOCKCACHE_WRITE_ENABLED, true);
+    boolean blockCacheEnabled = getConfig(BLOCKCACHE_ENABLED, true);
+    boolean blockCacheGlobal = getConfig(BLOCKCACHE_GLOBAL, false); // default to false for back compat
+    boolean blockCacheReadEnabled = getConfig(BLOCKCACHE_READ_ENABLED, true);
     
-    if (blockCacheWriteEnabled) {
-      LOG.warn("Using " + BLOCKCACHE_WRITE_ENABLED + " is currently buggy and can result in readers seeing a corrupted view of the index.");
-    }
-    Directory dir = null;
-    
+    final Directory dir;
     if (blockCacheEnabled && dirContext != DirContext.META_DATA) {
-      int numberOfBlocksPerBank = params.getInt(NUMBEROFBLOCKSPERBANK, 16384);
+      int numberOfBlocksPerBank = getConfig(NUMBEROFBLOCKSPERBANK, 16384);
       
       int blockSize = BlockDirectory.BLOCK_SIZE;
       
-      int bankCount = params.getInt(BLOCKCACHE_SLAB_COUNT, 1);
+      int bankCount = getConfig(BLOCKCACHE_SLAB_COUNT, 1);
       
-      boolean directAllocation = params.getBool(
-          BLOCKCACHE_DIRECT_MEMORY_ALLOCATION, true);
+      boolean directAllocation = getConfig(BLOCKCACHE_DIRECT_MEMORY_ALLOCATION, true);
       
       int slabSize = numberOfBlocksPerBank * blockSize;
       LOG.info(
@@ -136,45 +193,70 @@ public class HdfsDirectoryFactory extends CachingDirectoryFactory {
           new Object[] {slabSize, bankCount,
               ((long) bankCount * (long) slabSize)});
       
-      int bufferSize = params.getInt("solr.hdfs.blockcache.bufferstore.buffersize", 128);
-      int bufferCount = params.getInt("solr.hdfs.blockcache.bufferstore.buffercount", 128 * 128);
+      int bufferSize = getConfig("solr.hdfs.blockcache.bufferstore.buffersize", 128);
+      int bufferCount = getConfig("solr.hdfs.blockcache.bufferstore.buffercount", 128 * 128);
       
-      BlockCache blockCache = getBlockDirectoryCache(path, numberOfBlocksPerBank,
+      BlockCache blockCache = getBlockDirectoryCache(numberOfBlocksPerBank,
           blockSize, bankCount, directAllocation, slabSize,
           bufferSize, bufferCount, blockCacheGlobal);
       
-      Cache cache = new BlockDirectoryCache(blockCache, path, metrics);
-      HdfsDirectory hdfsDirectory = new HdfsDirectory(new Path(path), conf);
-      dir = new BlockDirectory(path, hdfsDirectory, cache, null,
-          blockCacheReadEnabled, blockCacheWriteEnabled);
+      Cache cache = new BlockDirectoryCache(blockCache, path, metrics, blockCacheGlobal);
+      HdfsDirectory hdfsDirectory = new HdfsDirectory(new Path(path), lockFactory, conf);
+      dir = new BlockDirectory(path, hdfsDirectory, cache, null, blockCacheReadEnabled, false);
     } else {
-      dir = new HdfsDirectory(new Path(path), conf);
+      dir = new HdfsDirectory(new Path(path), lockFactory, conf);
     }
     
-    boolean nrtCachingDirectory = params.getBool(NRTCACHINGDIRECTORY_ENABLE, true);
+    boolean nrtCachingDirectory = getConfig(NRTCACHINGDIRECTORY_ENABLE, true);
     if (nrtCachingDirectory) {
-      double nrtCacheMaxMergeSizeMB = params.getInt(
-          NRTCACHINGDIRECTORY_MAXMERGESIZEMB, 16);
-      double nrtCacheMaxCacheMB = params.getInt(NRTCACHINGDIRECTORY_MAXCACHEMB,
-          192);
+      double nrtCacheMaxMergeSizeMB = getConfig(NRTCACHINGDIRECTORY_MAXMERGESIZEMB, 16);
+      double nrtCacheMaxCacheMB = getConfig(NRTCACHINGDIRECTORY_MAXCACHEMB, 192);
       
-      return new NRTCachingDirectory(dir, nrtCacheMaxMergeSizeMB,
-          nrtCacheMaxCacheMB);
+      return new NRTCachingDirectory(dir, nrtCacheMaxMergeSizeMB, nrtCacheMaxCacheMB);
     }
     return dir;
   }
 
-  private BlockCache getBlockDirectoryCache(String path,
-      int numberOfBlocksPerBank, int blockSize, int bankCount,
+  boolean getConfig(String name, boolean defaultValue) {
+    Boolean value = params.getBool(name);
+    if (value == null) {
+      String sysValue = System.getProperty(name);
+      if (sysValue != null) {
+        value = Boolean.valueOf(sysValue);
+      }
+    }
+    return value == null ? defaultValue : value;
+  }
+  
+  int getConfig(String name, int defaultValue) {
+    Integer value = params.getInt(name);
+    if (value == null) {
+      String sysValue = System.getProperty(name);
+      if (sysValue != null) {
+        value = Integer.parseInt(sysValue);
+      }
+    }
+    return value == null ? defaultValue : value;
+  }
+
+  String getConfig(String name, String defaultValue) {
+    String value = params.get(name);
+    if (value == null) {
+      value = System.getProperty(name);
+    }
+    return value == null ? defaultValue : value;
+  }
+  
+  private BlockCache getBlockDirectoryCache(int numberOfBlocksPerBank, int blockSize, int bankCount,
       boolean directAllocation, int slabSize, int bufferSize, int bufferCount, boolean staticBlockCache) {
     if (!staticBlockCache) {
       LOG.info("Creating new single instance HDFS BlockCache");
       return createBlockCache(numberOfBlocksPerBank, blockSize, bankCount, directAllocation, slabSize, bufferSize, bufferCount);
     }
-    LOG.info("Creating new global HDFS BlockCache");
     synchronized (HdfsDirectoryFactory.class) {
       
       if (globalBlockCache == null) {
+        LOG.info("Creating new global HDFS BlockCache");
         globalBlockCache = createBlockCache(numberOfBlocksPerBank, blockSize, bankCount,
             directAllocation, slabSize, bufferSize, bufferCount);
       }
@@ -185,7 +267,7 @@ public class HdfsDirectoryFactory extends CachingDirectoryFactory {
   private BlockCache createBlockCache(int numberOfBlocksPerBank, int blockSize,
       int bankCount, boolean directAllocation, int slabSize, int bufferSize,
       int bufferCount) {
-    BufferStore.initNewBuffer(bufferSize, bufferCount);
+    BufferStore.initNewBuffer(bufferSize, bufferCount, metrics);
     long totalMemory = (long) bankCount * (long) numberOfBlocksPerBank
         * (long) blockSize;
     
@@ -205,33 +287,55 @@ public class HdfsDirectoryFactory extends CachingDirectoryFactory {
   
   @Override
   public boolean exists(String path) {
-    Path hdfsDirPath = new Path(path);
-    Configuration conf = getConf();
+    final Path hdfsDirPath = new Path(path);
+    final Configuration conf = getConf();
     FileSystem fileSystem = null;
     try {
-      fileSystem = FileSystem.newInstance(hdfsDirPath.toUri(), conf);
+      // no need to close the fs, the cache will do it
+      fileSystem = tmpFsCache.get(path, new Callable<FileSystem>() {
+        @Override
+        public FileSystem call() throws IOException {
+          return FileSystem.get(hdfsDirPath.toUri(), conf);
+        }
+      });
+    } catch (ExecutionException e) {
+      throw new RuntimeException(e);
+    }
+
+    try {
       return fileSystem.exists(hdfsDirPath);
     } catch (IOException e) {
       LOG.error("Error checking if hdfs path exists", e);
       throw new RuntimeException("Error checking if hdfs path exists", e);
-    } finally {
-      IOUtils.closeQuietly(fileSystem);
     }
   }
   
   private Configuration getConf() {
     Configuration conf = new Configuration();
-    confDir = params.get(CONFIG_DIRECTORY, null);
+    confDir = getConfig(CONFIG_DIRECTORY, null);
     HdfsUtil.addHdfsResources(conf, confDir);
+    conf.setBoolean("fs.hdfs.impl.disable.cache", true);
     return conf;
   }
   
-  protected synchronized void removeDirectory(CacheValue cacheValue)
+  protected synchronized void removeDirectory(final CacheValue cacheValue)
       throws IOException {
-    Configuration conf = getConf();
+    final Configuration conf = getConf();
     FileSystem fileSystem = null;
+    
     try {
-      fileSystem = FileSystem.newInstance(new URI(cacheValue.path), conf);
+      // no need to close the fs, the cache will do it
+      fileSystem = tmpFsCache.get(cacheValue.path, new Callable<FileSystem>() {
+        @Override
+        public FileSystem call() throws IOException {
+          return FileSystem.get(new Path(cacheValue.path).toUri(), conf);
+        }
+      });
+    } catch (ExecutionException e) {
+      throw new RuntimeException(e);
+    }
+    
+    try {
       boolean success = fileSystem.delete(new Path(cacheValue.path), true);
       if (!success) {
         throw new RuntimeException("Could not remove directory");
@@ -240,8 +344,6 @@ public class HdfsDirectoryFactory extends CachingDirectoryFactory {
       LOG.error("Could not remove directory", e);
       throw new SolrException(ErrorCode.SERVER_ERROR,
           "Could not remove directory", e);
-    } finally {
-      IOUtils.closeQuietly(fileSystem);
     }
   }
   
@@ -298,12 +400,12 @@ public class HdfsDirectoryFactory extends CachingDirectoryFactory {
   }
   
   private void initKerberos() {
-    String keytabFile = params.get(KERBEROS_KEYTAB, "").trim();
+    String keytabFile = getConfig(KERBEROS_KEYTAB, "").trim();
     if (keytabFile.length() == 0) {
       throw new IllegalArgumentException(KERBEROS_KEYTAB + " required because "
           + KERBEROS_ENABLED + " set to true");
     }
-    String principal = params.get(KERBEROS_PRINCIPAL, "");
+    String principal = getConfig(KERBEROS_PRINCIPAL, "");
     if (principal.length() == 0) {
       throw new IllegalArgumentException(KERBEROS_PRINCIPAL
           + " required because " + KERBEROS_ENABLED + " set to true");
@@ -334,5 +436,10 @@ public class HdfsDirectoryFactory extends CachingDirectoryFactory {
         LOG.info("Got Kerberos ticket");
       }
     }
+  }
+
+  @Override
+  public Collection<SolrInfoMBean> offerMBeans() {
+    return Arrays.<SolrInfoMBean>asList(MetricsHolder.metrics);
   }
 }

@@ -17,8 +17,8 @@ package org.apache.lucene.index;
  * limitations under the License.
  */
 
-import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -42,6 +42,7 @@ import org.apache.lucene.store.Directory;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.FailOnNonBulkMergesInfoStream;
+import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.LineFileDocs;
 import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.NamedThreadFactory;
@@ -308,7 +309,6 @@ public abstract class ThreadedIndexingAndSearchingTestCase extends LuceneTestCas
             doAfterIndexingThreadDone();
           }
         };
-      threads[thread].setDaemon(true);
       threads[thread].start();
     }
 
@@ -331,14 +331,14 @@ public abstract class ThreadedIndexingAndSearchingTestCase extends LuceneTestCas
             if (VERBOSE) {
               System.out.println(Thread.currentThread().getName() + ": launch search thread");
             }
-            while (System.currentTimeMillis() < stopTimeMS) {
+            while (System.currentTimeMillis() < stopTimeMS && !failed.get()) {
               try {
                 final IndexSearcher s = getCurrentSearcher();
                 try {
                   // Verify 1) IW is correctly setting
                   // diagnostics, and 2) segment warming for
                   // merged segments is actually happening:
-                  for(final AtomicReaderContext sub : s.getIndexReader().leaves()) {
+                  for(final LeafReaderContext sub : s.getIndexReader().leaves()) {
                     SegmentReader segReader = (SegmentReader) sub.reader();
                     Map<String,String> diagnostics = segReader.getSegmentInfo().info.getDiagnostics();
                     assertNotNull(diagnostics);
@@ -352,14 +352,11 @@ public abstract class ThreadedIndexingAndSearchingTestCase extends LuceneTestCas
                   if (s.getIndexReader().numDocs() > 0) {
                     smokeTestSearcher(s);
                     Fields fields = MultiFields.getFields(s.getIndexReader());
-                    if (fields == null) {
-                      continue;
-                    }
                     Terms terms = fields.terms("body");
                     if (terms == null) {
                       continue;
                     }
-                    TermsEnum termsEnum = terms.iterator(null);
+                    TermsEnum termsEnum = terms.iterator();
                     int seenTermCount = 0;
                     int shift;
                     int trigger; 
@@ -382,7 +379,7 @@ public abstract class ThreadedIndexingAndSearchingTestCase extends LuceneTestCas
                         //if (VERBOSE) {
                         //System.out.println(Thread.currentThread().getName() + " now search body:" + term.utf8ToString());
                         //}
-                        totHits.addAndGet(runQuery(s, new TermQuery(new Term("body", term))));
+                        totHits.addAndGet(runQuery(s, new TermQuery(new Term("body", BytesRef.deepCopyOf(term)))));
                       }
                     }
                     //if (VERBOSE) {
@@ -401,12 +398,11 @@ public abstract class ThreadedIndexingAndSearchingTestCase extends LuceneTestCas
             }
           }
         };
-      searchThreads[thread].setDaemon(true);
       searchThreads[thread].start();
     }
 
-    for(int thread=0;thread<searchThreads.length;thread++) {
-      searchThreads[thread].join();
+    for(Thread thread : searchThreads) {
+      thread.join();
     }
 
     if (VERBOSE) {
@@ -435,7 +431,7 @@ public abstract class ThreadedIndexingAndSearchingTestCase extends LuceneTestCas
 
     Random random = new Random(random().nextLong());
     final LineFileDocs docs = new LineFileDocs(random, true);
-    final File tempDir = createTempDir(testName);
+    final Path tempDir = createTempDir(testName);
     dir = getDirectory(newMockFSDirectory(tempDir)); // some subclasses rely on this being MDW
     if (dir instanceof BaseDirectoryWrapper) {
       ((BaseDirectoryWrapper) dir).setCheckIndexOnClose(false); // don't double-checkIndex, we do it ourselves.
@@ -460,11 +456,16 @@ public abstract class ThreadedIndexingAndSearchingTestCase extends LuceneTestCas
       } else if (mp instanceof LogMergePolicy) {
         ((LogMergePolicy) mp).setMaxMergeDocs(100000);
       }
+      // when running nightly, merging can still have crazy parameters, 
+      // and might use many per-field codecs. turn on CFS for IW flushes
+      // and ensure CFS ratio is reasonable to keep it contained.
+      conf.setUseCompoundFile(true);
+      mp.setNoCFSRatio(Math.max(0.25d, mp.getNoCFSRatio()));
     }
 
     conf.setMergedSegmentWarmer(new IndexWriter.IndexReaderWarmer() {
       @Override
-      public void warm(AtomicReader reader) throws IOException {
+      public void warm(LeafReader reader) throws IOException {
         if (VERBOSE) {
           System.out.println("TEST: now warm merged reader=" + reader);
         }
@@ -532,8 +533,8 @@ public abstract class ThreadedIndexingAndSearchingTestCase extends LuceneTestCas
       System.out.println("TEST: all searching done [" + (System.currentTimeMillis()-t0) + " ms]");
     }
     
-    for(int thread=0;thread<indexThreads.length;thread++) {
-      indexThreads[thread].join();
+    for(Thread thread : indexThreads) {
+      thread.join();
     }
 
     if (VERBOSE) {
@@ -653,7 +654,7 @@ public abstract class ThreadedIndexingAndSearchingTestCase extends LuceneTestCas
 
     TestUtil.checkIndex(dir);
     dir.close();
-    TestUtil.rm(tempDir);
+    IOUtils.rm(tempDir);
 
     if (VERBOSE) {
       System.out.println("TEST: done [" + (System.currentTimeMillis()-t0) + " ms]");
@@ -662,9 +663,9 @@ public abstract class ThreadedIndexingAndSearchingTestCase extends LuceneTestCas
 
   private int runQuery(IndexSearcher s, Query q) throws Exception {
     s.search(q, 10);
-    int hitCount = s.search(q, null, 10, new Sort(new SortField("title", SortField.Type.STRING))).totalHits;
-    final Sort dvSort = new Sort(new SortField("title", SortField.Type.STRING));
-    int hitCount2 = s.search(q, null, 10, dvSort).totalHits;
+    int hitCount = s.search(q, 10, new Sort(new SortField("titleDV", SortField.Type.STRING))).totalHits;
+    final Sort dvSort = new Sort(new SortField("titleDV", SortField.Type.STRING));
+    int hitCount2 = s.search(q, 10, dvSort).totalHits;
     assertEquals(hitCount, hitCount2);
     return hitCount;
   }

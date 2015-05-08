@@ -28,10 +28,12 @@ import java.util.TreeMap;
 import org.apache.lucene.document.DateTools;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
+import org.apache.lucene.document.SortedDocValuesField;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.RandomIndexWriter;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.LuceneTestCase;
 
 /** Unit test for sorting code. */
@@ -58,7 +60,7 @@ public class TestCustomSearcherSort extends LuceneTestCase {
       Document doc = new Document();
       if ((i % 5) != 0) { // some documents must not have an entry in the first
                           // sort field
-        doc.add(newStringField("publicationDate_", random.getLuceneDate(), Field.Store.YES));
+        doc.add(new SortedDocValuesField("publicationDate_", new BytesRef(random.getLuceneDate())));
       }
       if ((i % 7) == 0) { // some documents to match the query (see below)
         doc.add(newTextField("content", "test", Field.Store.YES));
@@ -110,7 +112,7 @@ public class TestCustomSearcherSort extends LuceneTestCase {
   // make sure the documents returned by the search match the expected list
   private void matchHits(IndexSearcher searcher, Sort sort) throws IOException {
     // make a query without sorting first
-    ScoreDoc[] hitsByRank = searcher.search(query, null, Integer.MAX_VALUE).scoreDocs;
+    ScoreDoc[] hitsByRank = searcher.search(query, Integer.MAX_VALUE).scoreDocs;
     checkHits(hitsByRank, "Sort by rank: "); // check for duplicates
     Map<Integer,Integer> resultMap = new TreeMap<>();
     // store hits in TreeMap - TreeMap does not allow duplicates; existing
@@ -122,7 +124,7 @@ public class TestCustomSearcherSort extends LuceneTestCase {
     }
     
     // now make a query using the sort criteria
-    ScoreDoc[] resultSort = searcher.search(query, null, Integer.MAX_VALUE,
+    ScoreDoc[] resultSort = searcher.search(query, Integer.MAX_VALUE,
         sort).scoreDocs;
     checkHits(resultSort, "Sort by custom criteria: "); // check for duplicates
     
@@ -190,23 +192,23 @@ public class TestCustomSearcherSort extends LuceneTestCase {
     }
     
     @Override
-    public TopFieldDocs search(Query query, Filter filter, int nDocs, Sort sort)
+    public TopFieldDocs search(Query query, int nDocs, Sort sort)
         throws IOException {
       BooleanQuery bq = new BooleanQuery();
       bq.add(query, BooleanClause.Occur.MUST);
       bq.add(new TermQuery(new Term("mandant", Integer.toString(switcher))),
           BooleanClause.Occur.MUST);
-      return super.search(bq, filter, nDocs, sort);
+      return super.search(bq, nDocs, sort);
     }
     
     @Override
-    public TopDocs search(Query query, Filter filter, int nDocs)
+    public TopDocs search(Query query, int nDocs)
         throws IOException {
       BooleanQuery bq = new BooleanQuery();
       bq.add(query, BooleanClause.Occur.MUST);
       bq.add(new TermQuery(new Term("mandant", Integer.toString(switcher))),
           BooleanClause.Occur.MUST);
-      return super.search(bq, filter, nDocs);
+      return super.search(bq, nDocs);
     }
   }
   

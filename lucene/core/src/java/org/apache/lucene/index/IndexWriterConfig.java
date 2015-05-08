@@ -110,11 +110,6 @@ public final class IndexWriterConfig extends LiveIndexWriterConfig {
    *  ram buffers use <code>false</code> */
   public final static boolean DEFAULT_USE_COMPOUND_FILE_SYSTEM = true;
   
-  /** Default value for calling {@link AtomicReader#checkIntegrity()} before
-   *  merging segments (set to <code>false</code>). You can set this
-   *  to <code>true</code> for additional safety. */
-  public final static boolean DEFAULT_CHECK_INTEGRITY_AT_MERGE = false;
-
   /** Default value for whether calls to {@link IndexWriter#close()} include a commit. */
   public final static boolean DEFAULT_COMMIT_ON_CLOSE = true;
   
@@ -147,6 +142,9 @@ public final class IndexWriterConfig extends LiveIndexWriterConfig {
    *           if this config is already attached to a writer.
    */
   IndexWriterConfig setIndexWriter(IndexWriter writer) {
+    if (this.writer.get() != null) {
+      throw new IllegalStateException("do not share IndexWriterConfig instances across IndexWriters");
+    }
     this.writer.set(writer);
     return this;
   }
@@ -523,7 +521,7 @@ public final class IndexWriterConfig extends LiveIndexWriterConfig {
   @Override
   public String toString() {
     StringBuilder sb = new StringBuilder(super.toString());
-    sb.append("writer=").append(writer).append("\n");
+    sb.append("writer=").append(writer.get()).append("\n");
     return sb.toString();
   }
   

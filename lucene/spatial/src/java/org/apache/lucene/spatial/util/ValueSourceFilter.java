@@ -17,7 +17,7 @@
 
 package org.apache.lucene.spatial.util;
 
-import org.apache.lucene.index.AtomicReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.queries.function.FunctionValues;
 import org.apache.lucene.queries.function.ValueSource;
 import org.apache.lucene.search.DocIdSet;
@@ -26,6 +26,7 @@ import org.apache.lucene.search.FilteredDocIdSet;
 import org.apache.lucene.util.Bits;
 
 import java.io.IOException;
+import java.util.Objects;
 
 /**
  * Filter that matches all documents where a ValueSource is
@@ -52,7 +53,7 @@ public class ValueSourceFilter extends Filter {
   }
 
   @Override
-  public DocIdSet getDocIdSet(AtomicReaderContext context, Bits acceptDocs) throws IOException {
+  public DocIdSet getDocIdSet(LeafReaderContext context, Bits acceptDocs) throws IOException {
     final FunctionValues values = source.getValues( null, context );
     return new FilteredDocIdSet(startingFilter.getDocIdSet(context, acceptDocs)) {
       @Override
@@ -61,5 +62,31 @@ public class ValueSourceFilter extends Filter {
         return val >= min && val <= max;
       }
     };
+  }
+
+  @Override
+  public String toString(String field) {
+    return "ValueSourceFilter(" +
+             "startingFilter=" + startingFilter.toString(field) + "," +
+             "source=" + source.toString() + "," +
+             "min=" + min + "," +
+             "max=" + max +
+           ")";
+  }
+
+  @Override
+  public boolean equals(Object obj) {
+    if (super.equals(obj) == false) {
+      return false;
+    }
+    ValueSourceFilter other = (ValueSourceFilter) obj;
+    return startingFilter.equals(other.startingFilter)
+        && source.equals(other.source)
+        && min == min && max == max;
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(super.hashCode(), startingFilter, source, min, max);
   }
 }

@@ -18,19 +18,19 @@ package org.apache.lucene.search;
  */
 
 import java.io.IOException;
+
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.index.TermContext;
 import org.apache.lucene.index.TermState;
 import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.search.MultiTermQuery.RewriteMethod;
-
 import org.apache.lucene.util.ArrayUtil;
 import org.apache.lucene.util.ByteBlockPool;
 import org.apache.lucene.util.BytesRef;
+import org.apache.lucene.util.BytesRefHash.DirectBytesStartArray;
 import org.apache.lucene.util.BytesRefHash;
 import org.apache.lucene.util.RamUsageEstimator;
-import org.apache.lucene.util.BytesRefHash.DirectBytesStartArray;
 
 /** 
  * Base rewrite method that translates each term into a query, and keeps
@@ -45,14 +45,14 @@ public abstract class ScoringRewrite<Q extends Query> extends TermCollectingRewr
    *  query.  Note that typically such scores are
    *  meaningless to the user, and require non-trivial CPU
    *  to compute, so it's almost always better to use {@link
-   *  MultiTermQuery#CONSTANT_SCORE_AUTO_REWRITE_DEFAULT} instead.
+   *  MultiTermQuery#CONSTANT_SCORE_REWRITE} instead.
    *
    *  <p><b>NOTE</b>: This rewrite method will hit {@link
    *  BooleanQuery.TooManyClauses} if the number of terms
    *  exceeds {@link BooleanQuery#getMaxClauseCount}.
    *
    *  @see MultiTermQuery#setRewriteMethod */
-  public final static ScoringRewrite<BooleanQuery> SCORING_BOOLEAN_QUERY_REWRITE = new ScoringRewrite<BooleanQuery>() {
+  public final static ScoringRewrite<BooleanQuery> SCORING_BOOLEAN_REWRITE = new ScoringRewrite<BooleanQuery>() {
     @Override
     protected BooleanQuery getTopLevelQuery() {
       return new BooleanQuery(true);
@@ -73,7 +73,7 @@ public abstract class ScoringRewrite<Q extends Query> extends TermCollectingRewr
     }
   };
   
-  /** Like {@link #SCORING_BOOLEAN_QUERY_REWRITE} except
+  /** Like {@link #SCORING_BOOLEAN_REWRITE} except
    *  scores are not computed.  Instead, each matching
    *  document receives a constant score equal to the
    *  query's boost.
@@ -83,10 +83,10 @@ public abstract class ScoringRewrite<Q extends Query> extends TermCollectingRewr
    *  exceeds {@link BooleanQuery#getMaxClauseCount}.
    *
    *  @see MultiTermQuery#setRewriteMethod */
-  public final static RewriteMethod CONSTANT_SCORE_BOOLEAN_QUERY_REWRITE = new RewriteMethod() {
+  public final static RewriteMethod CONSTANT_SCORE_BOOLEAN_REWRITE = new RewriteMethod() {
     @Override
     public Query rewrite(IndexReader reader, MultiTermQuery query) throws IOException {
-      final BooleanQuery bq = SCORING_BOOLEAN_QUERY_REWRITE.rewrite(reader, query);
+      final BooleanQuery bq = SCORING_BOOLEAN_REWRITE.rewrite(reader, query);
       // strip the scores off
       final Query result = new ConstantScoreQuery(bq);
       result.setBoost(query.getBoost());
@@ -112,7 +112,7 @@ public abstract class ScoringRewrite<Q extends Query> extends TermCollectingRewr
       for (int i = 0; i < size; i++) {
         final int pos = sort[i];
         final Term term = new Term(query.getField(), col.terms.get(pos, new BytesRef()));
-        assert reader.docFreq(term) == termStates[pos].docFreq();
+        assert termStates[pos].hasOnlyRealTerms() == false || reader.docFreq(term) == termStates[pos].docFreq();
         addClause(result, term, termStates[pos].docFreq(), query.getBoost() * boost[pos], termStates[pos]);
       }
     }
@@ -137,7 +137,7 @@ public abstract class ScoringRewrite<Q extends Query> extends TermCollectingRewr
       final int e = terms.add(bytes);
       final TermState state = termsEnum.termState();
       assert state != null; 
-      if (e < 0 ) {
+      if (e < 0) {
         // duplicate term: update docFreq
         final int pos = (-e)-1;
         array.termState[pos].register(state, readerContext.ord, termsEnum.docFreq(), termsEnum.totalTermFreq());

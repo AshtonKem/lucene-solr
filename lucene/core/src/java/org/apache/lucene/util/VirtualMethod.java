@@ -43,11 +43,11 @@ import java.util.Set;
  * instance's class, use a <strong>non-static</strong> field:</p>
  * <pre class="prettyprint">
  *  final boolean isDeprecatedMethodOverridden =
- *   oldMethod.getImplementationDistance(this.getClass()) > newMethod.getImplementationDistance(this.getClass());
+ *   oldMethod.getImplementationDistance(this.getClass()) &gt; newMethod.getImplementationDistance(this.getClass());
  *
  *  <em>// alternatively (more readable):</em>
  *  final boolean isDeprecatedMethodOverridden =
- *   VirtualMethod.compareImplementationDistance(this.getClass(), oldMethod, newMethod) > 0
+ *   VirtualMethod.compareImplementationDistance(this.getClass(), oldMethod, newMethod) &gt; 0
  * </pre> 
  * <p>{@link #getImplementationDistance} returns the distance of the subclass that overrides this method.
  * The one with the larger distance should be used preferable.
@@ -63,7 +63,12 @@ public final class VirtualMethod<C> {
   private final Class<C> baseClass;
   private final String method;
   private final Class<?>[] parameters;
-  private final WeakIdentityMap<Class<? extends C>, Integer> cache = WeakIdentityMap.newConcurrentHashMap(false);
+  private final ClassValue<Integer> distanceOfClass = new ClassValue<Integer>() {
+    @Override
+    protected Integer computeValue(Class<?> subclazz) {
+      return Integer.valueOf(reflectImplementationDistance(subclazz));
+    }
+  };
 
   /**
    * Creates a new instance for the given {@code baseClass} and method declaration.
@@ -92,12 +97,7 @@ public final class VirtualMethod<C> {
    * @return 0 iff not overridden, else the distance to the base class
    */
   public int getImplementationDistance(final Class<? extends C> subclazz) {
-    Integer distance = cache.get(subclazz);
-    if (distance == null) {
-      // we have the slight chance that another thread may do the same, but who cares?
-      cache.put(subclazz, distance = Integer.valueOf(reflectImplementationDistance(subclazz)));
-    }
-    return distance.intValue();
+    return distanceOfClass.get(subclazz).intValue();
   }
   
   /**
@@ -111,7 +111,7 @@ public final class VirtualMethod<C> {
     return getImplementationDistance(subclazz) > 0;
   }
   
-  private int reflectImplementationDistance(final Class<? extends C> subclazz) {
+  int reflectImplementationDistance(final Class<?> subclazz) {
     if (!baseClass.isAssignableFrom(subclazz))
       throw new IllegalArgumentException(subclazz.getName() + " is not a subclass of " + baseClass.getName());
     boolean overridden = false;

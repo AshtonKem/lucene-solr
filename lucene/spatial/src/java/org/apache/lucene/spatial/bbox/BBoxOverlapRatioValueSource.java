@@ -16,15 +16,17 @@
  */
 package org.apache.lucene.spatial.bbox;
 
-import com.spatial4j.core.shape.Rectangle;
+import java.util.concurrent.atomic.AtomicReference;
+
 import org.apache.lucene.queries.function.ValueSource;
 import org.apache.lucene.search.Explanation;
+
+import com.spatial4j.core.shape.Rectangle;
 
 /**
  * The algorithm is implemented as envelope on envelope (rect on rect) overlays rather than
  * complex polygon on complex polygon overlays.
- * <p/>
- * <p/>
+ * <p>
  * Spatial relevance scoring algorithm:
  * <DL>
  *   <DT>queryArea</DT> <DD>the area of the input query envelope</DD>
@@ -43,15 +45,15 @@ import org.apache.lucene.search.Explanation;
  * area is calculated (queryArea, targetArea, intersectionArea). This allows for points or horizontal/vertical lines
  * to be used as the query shape and in such case the descending order should have smallest boxes up front. Without
  * this, a point or line query shape typically scores everything with the same value since there is 0 area.
- * <p />
+ * <p>
  * Note: The actual computation of queryRatio and targetRatio is more complicated so that it considers
  * points and lines. Lines have the ratio of overlap, and points are either 1.0 or 0.0 depending on whether
  * it intersects or not.
- * <p />
+ * <p>
  * Originally based on Geoportal's
  * <a href="http://geoportal.svn.sourceforge.net/svnroot/geoportal/Geoportal/trunk/src/com/esri/gpt/catalog/lucene/SpatialRankingValueSource.java">
  *   SpatialRankingValueSource</a> but modified quite a bit. GeoPortal's algorithm will yield a score of 0
- * if either a line or point is compared, and it's doesn't output a 0-1 normalized score (it multiplies the factors),
+ * if either a line or point is compared, and it doesn't output a 0-1 normalized score (it multiplies the factors),
  * and it doesn't support minSideLength, and it had dateline bugs.
  *
  * @lucene.experimental
@@ -127,13 +129,17 @@ public class BBoxOverlapRatioValueSource extends BBoxSimilarityValueSource {
   }
 
   @Override
-  protected double score(Rectangle target, Explanation exp) {
+  protected double score(Rectangle target, AtomicReference<Explanation> exp) {
     // calculate "height": the intersection height between two boxes.
     double top = Math.min(queryExtent.getMaxY(), target.getMaxY());
     double bottom = Math.max(queryExtent.getMinY(), target.getMinY());
     double height = top - bottom;
-    if (height < 0)
+    if (height < 0) {
+      if (exp != null) {
+        exp.set(Explanation.noMatch("No intersection"));
+      }
       return 0;//no intersection
+    }
 
     // calculate "width": the intersection width between two boxes.
     double width = 0;
@@ -151,6 +157,9 @@ public class BBoxOverlapRatioValueSource extends BBoxSimilarityValueSource {
               && (Math.abs(b.getMinX()) == 180 || Math.abs(b.getMaxX()) == 180)) {
             width = 0;//both adjacent to dateline
           } else {
+            if (exp != null) {
+              exp.set(Explanation.noMatch("No intersection"));
+            }
             return 0;//no intersection
           }
         } else {//both cross
@@ -172,8 +181,12 @@ public class BBoxOverlapRatioValueSource extends BBoxSimilarityValueSource {
         if (qryEastLeft < qryEastRight)
           width += qryEastRight - qryEastLeft;
 
-        if (qryWestLeft > qryWestRight && qryEastLeft > qryEastRight)
+        if (qryWestLeft > qryWestRight && qryEastLeft > qryEastRight) {
+          if (exp != null) {
+            exp.set(Explanation.noMatch("No intersection"));
+          }
           return 0;//no intersection
+        }
       }
     }
 
@@ -212,25 +225,19 @@ public class BBoxOverlapRatioValueSource extends BBoxSimilarityValueSource {
     double score = queryFactor + targetFactor;
 
     if (exp!=null) {
-      exp.setValue((float)score);
-      exp.setDescription(this.getClass().getSimpleName()+": queryFactor + targetFactor");
-
-      Explanation e;//tmp
-
       String minSideDesc = minSideLength > 0.0 ? " (minSide="+minSideLength+")" : "";
-
-      exp.addDetail( e = new Explanation((float)intersectionArea, "IntersectionArea" + minSideDesc));
-      e.addDetail(new Explanation((float)width,  "width"));
-      e.addDetail(new Explanation((float)height, "height"));
-      e.addDetail(new Explanation((float)queryTargetProportion, "queryTargetProportion"));
-
-      exp.addDetail( e = new Explanation((float)queryFactor, "queryFactor"));
-      e.addDetail(new Explanation((float)queryRatio, "ratio"));
-      e.addDetail(new Explanation((float)queryArea,  "area of " + queryExtent + minSideDesc));
-
-      exp.addDetail( e = new Explanation((float)targetFactor, "targetFactor"));
-      e.addDetail(new Explanation((float)targetRatio, "ratio"));
-      e.addDetail(new Explanation((float)targetArea,  "area of " + target + minSideDesc));
+      exp.set(Explanation.match((float) score,
+          this.getClass().getSimpleName()+": queryFactor + targetFactor",
+          Explanation.match((float)intersectionArea, "IntersectionArea" + minSideDesc,
+              Explanation.match((float)width, "width"),
+              Explanation.match((float)height, "height"),
+              Explanation.match((float)queryTargetProportion, "queryTargetProportion")),
+          Explanation.match((float)queryFactor, "queryFactor",
+              Explanation.match((float)targetRatio, "ratio"),
+              Explanation.match((float)queryArea,  "area of " + queryExtent + minSideDesc)),
+          Explanation.match((float)targetFactor, "targetFactor",
+              Explanation.match((float)targetRatio, "ratio"),
+              Explanation.match((float)targetArea,  "area of " + target + minSideDesc))));
     }
 
     return score;

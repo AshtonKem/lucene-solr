@@ -17,16 +17,11 @@ package org.apache.solr.cloud;
  * limitations under the License.
  */
 
-import static org.apache.solr.cloud.Assign.getNodesForNewShard;
-import static org.apache.solr.common.cloud.ZkStateReader.COLLECTION_PROP;
-import static org.apache.solr.common.cloud.ZkStateReader.REPLICA_PROP;
-import static org.apache.solr.common.cloud.ZkStateReader.SHARD_ID_PROP;
-import static org.apache.solr.common.params.CollectionParams.CollectionAction.ADDREPLICA;
-import static org.apache.solr.common.params.CollectionParams.CollectionAction.ADDROLE;
-import static org.apache.solr.common.params.CollectionParams.CollectionAction.CLUSTERSTATUS;
-import static org.apache.solr.common.params.CollectionParams.CollectionAction.LIST;
-import static org.apache.solr.common.params.CollectionParams.CollectionAction.OVERSEERSTATUS;
-import static org.apache.solr.common.params.CollectionParams.CollectionAction.REMOVEROLE;
+import static org.apache.solr.cloud.Assign.*;
+import static org.apache.solr.common.cloud.ZkStateReader.*;
+import static org.apache.solr.common.params.CollectionParams.CollectionAction.*;
+import static org.apache.solr.common.params.CommonParams.*;
+import static org.apache.solr.common.util.StrUtils.formatString;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -36,19 +31,22 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.commons.lang.StringUtils;
 import org.apache.solr.client.solrj.SolrResponse;
 import org.apache.solr.client.solrj.SolrServerException;
-import org.apache.solr.client.solrj.impl.HttpSolrServer;
+import org.apache.solr.client.solrj.impl.HttpSolrClient;
 import org.apache.solr.client.solrj.request.AbstractUpdateRequest;
 import org.apache.solr.client.solrj.request.CoreAdminRequest;
 import org.apache.solr.client.solrj.request.UpdateRequest;
@@ -56,6 +54,12 @@ import org.apache.solr.client.solrj.response.UpdateResponse;
 import org.apache.solr.cloud.Assign.Node;
 import org.apache.solr.cloud.DistributedQueue.QueueEvent;
 import org.apache.solr.cloud.Overseer.LeaderStatus;
+import org.apache.solr.cloud.rule.Rule;
+import org.apache.solr.cloud.rule.ReplicaAssigner;
+import org.apache.solr.cloud.rule.ReplicaAssigner.Position;
+import org.apache.solr.cloud.overseer.ClusterStateMutator;
+import org.apache.solr.cloud.overseer.OverseerAction;
+import org.apache.solr.cloud.rule.SnitchContext;
 import org.apache.solr.common.SolrException;
 import org.apache.solr.common.SolrException.ErrorCode;
 import org.apache.solr.common.cloud.Aliases;
@@ -69,16 +73,17 @@ import org.apache.solr.common.cloud.Replica;
 import org.apache.solr.common.cloud.RoutingRule;
 import org.apache.solr.common.cloud.Slice;
 import org.apache.solr.common.cloud.SolrZkClient;
+import org.apache.solr.common.cloud.ZkConfigManager;
 import org.apache.solr.common.cloud.ZkCoreNodeProps;
 import org.apache.solr.common.cloud.ZkNodeProps;
 import org.apache.solr.common.cloud.ZkStateReader;
-import org.apache.solr.common.cloud.ZooKeeperException;
 import org.apache.solr.common.params.CollectionParams;
 import org.apache.solr.common.params.CoreAdminParams;
 import org.apache.solr.common.params.CoreAdminParams.CoreAdminAction;
 import org.apache.solr.common.params.MapSolrParams;
 import org.apache.solr.common.params.ModifiableSolrParams;
 import org.apache.solr.common.params.ShardParams;
+import org.apache.solr.common.util.ExecutorUtil;
 import org.apache.solr.common.util.NamedList;
 import org.apache.solr.common.util.SimpleOrderedMap;
 import org.apache.solr.common.util.StrUtils;
@@ -86,6 +91,7 @@ import org.apache.solr.handler.component.ShardHandler;
 import org.apache.solr.handler.component.ShardHandlerFactory;
 import org.apache.solr.handler.component.ShardRequest;
 import org.apache.solr.handler.component.ShardResponse;
+import org.apache.solr.logging.MDCUtils;
 import org.apache.solr.update.SolrIndexSplitter;
 import org.apache.solr.util.DefaultSolrThreadFactory;
 import org.apache.solr.util.stats.Snapshot;
@@ -96,35 +102,18 @@ import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.data.Stat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import com.google.common.collect.ImmutableSet;
 
 
 public class OverseerCollectionProcessor implements Runnable, Closeable {
-  
+
   public static final String NUM_SLICES = "numShards";
-  
-  // @Deprecated- see on ZkStateReader
-  public static final String REPLICATION_FACTOR = "replicationFactor";
-  
-  // @Deprecated- see on ZkStateReader
-  public static final String MAX_SHARDS_PER_NODE = "maxShardsPerNode";
-  
+
+  static final boolean CREATE_NODE_SET_SHUFFLE_DEFAULT = true;
+  public static final String CREATE_NODE_SET_SHUFFLE = "createNodeSet.shuffle";
   public static final String CREATE_NODE_SET = "createNodeSet";
-  
-  public static final String DELETECOLLECTION = "deletecollection";
-
-  public static final String CREATECOLLECTION = "createcollection";
-
-  public static final String RELOADCOLLECTION = "reloadcollection";
-  
-  public static final String CREATEALIAS = "createalias";
-  
-  public static final String DELETEALIAS = "deletealias";
-  
-  public static final String SPLITSHARD = "splitshard";
-
-  public static final String DELETESHARD = "deleteshard";
 
   public static final String ROUTER = "router";
 
@@ -132,33 +121,45 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
 
   public static final String ASYNC = "async";
 
-  public static final String CREATESHARD = "createshard";
-
-  public static final String DELETEREPLICA = "deletereplica";
-
-  public static final String MIGRATE = "migrate";
-
   public static final String REQUESTID = "requestid";
 
   public static final String COLL_CONF = "collection.configName";
 
   public static final String COLL_PROP_PREFIX = "property.";
 
-  public int maxParallelThreads = 10;
+  public static final String ONLY_IF_DOWN = "onlyIfDown";
 
-  public static final Set<String> KNOWN_CLUSTER_PROPS = ImmutableSet.of(ZkStateReader.LEGACY_CLOUD, ZkStateReader.URL_SCHEME);
+  public static final String SHARD_UNIQUE = "shardUnique";
+
+  public static final String ONLY_ACTIVE_NODES = "onlyactivenodes";
+
+  public int maxParallelThreads = 10;
 
   public static final Map<String,Object> COLL_PROPS = ZkNodeProps.makeMap(
       ROUTER, DocRouter.DEFAULT_NAME,
       ZkStateReader.REPLICATION_FACTOR, "1",
       ZkStateReader.MAX_SHARDS_PER_NODE, "1",
-      ZkStateReader.AUTO_ADD_REPLICAS, "false");
+      ZkStateReader.AUTO_ADD_REPLICAS, "false",
+      "rule", null,
+      "snitch",null);
+
+  static final Random RANDOM;
+  static {
+    // We try to make things reproducible in the context of our tests by initializing the random instance
+    // based on the current seed
+    String seed = System.getProperty("tests.seed");
+    if (seed == null) {
+      RANDOM = new Random();
+    } else {
+      RANDOM = new Random(seed.hashCode());
+    }
+  }
 
   public ExecutorService tpe ;
-  
+
   private static Logger log = LoggerFactory
       .getLogger(OverseerCollectionProcessor.class);
-  
+
   private DistributedQueue workQueue;
   private DistributedMap runningMap;
   private DistributedMap completedMap;
@@ -191,13 +192,15 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
   // deleted from the work-queue as that is a batched operation.
   final private Set<String> runningZKTasks;
   private final Object waitLock = new Object();
+  private Overseer overseer;
 
   public OverseerCollectionProcessor(ZkStateReader zkStateReader, String myId,
                                      final ShardHandler shardHandler,
-                                     String adminPath, Overseer.Stats stats) {
+                                     String adminPath, Overseer.Stats stats, Overseer overseer) {
     this(zkStateReader, myId, shardHandler.getShardHandlerFactory(), adminPath, stats, Overseer.getCollectionQueue(zkStateReader.getZkClient(), stats),
         Overseer.getRunningMap(zkStateReader.getZkClient()),
         Overseer.getCompletedMap(zkStateReader.getZkClient()), Overseer.getFailureMap(zkStateReader.getZkClient()));
+    this.overseer = overseer;
   }
 
   protected OverseerCollectionProcessor(ZkStateReader zkStateReader, String myId,
@@ -222,7 +225,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     this.collectionWip = new HashSet();
     this.completedTasks = new HashMap<>();
   }
-  
+
   @Override
   public void run() {
     log.info("Process current queue of collection creations");
@@ -262,7 +265,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
 
     // TODO: Make maxThreads configurable.
 
-    this.tpe = new ThreadPoolExecutor(5, 100, 0L, TimeUnit.MILLISECONDS,
+    this.tpe = new ExecutorUtil.MDCAwareThreadPoolExecutor(5, 100, 0L, TimeUnit.MILLISECONDS,
         new SynchronousQueue<Runnable>(),
         new DefaultSolrThreadFactory("OverseerThreadFactory"));
     try {
@@ -305,7 +308,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
           for (QueueEvent head : heads) {
             final ZkNodeProps message = ZkNodeProps.load(head.getBytes());
             String collectionName = message.containsKey(COLLECTION_PROP) ?
-                message.getStr(COLLECTION_PROP) : message.getStr("name");
+                message.getStr(COLLECTION_PROP) : message.getStr(NAME);
             String asyncId = message.getStr(ASYNC);
             if (hasLeftOverItems) {
               if (head.getId().equals(oldestItemInWorkQueue))
@@ -341,14 +344,11 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
           }
 
         } catch (KeeperException e) {
-          if (e.code() == KeeperException.Code.SESSIONEXPIRED
-              || e.code() == KeeperException.Code.CONNECTIONLOSS) {
+          if (e.code() == KeeperException.Code.SESSIONEXPIRED) {
             log.warn("Overseer cannot talk to ZK");
             return;
           }
           SolrException.log(log, "", e);
-          throw new ZooKeeperException(
-              SolrException.ErrorCode.SERVER_ERROR, "", e);
         } catch (InterruptedException e) {
           Thread.currentThread().interrupt();
           return;
@@ -363,7 +363,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
 
   private boolean checkExclusivity(ZkNodeProps message, String id) throws KeeperException, InterruptedException {
     String collectionName = message.containsKey(COLLECTION_PROP) ?
-        message.getStr(COLLECTION_PROP) : message.getStr("name");
+        message.getStr(COLLECTION_PROP) : message.getStr(NAME);
 
     if(collectionName == null)
       return true;
@@ -419,7 +419,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     String ldr = getLeaderNode(zk);
     if(overseerDesignates.contains(ldr)) return;
     log.info("prioritizing overseer nodes at {} overseer designates are {}", myId, overseerDesignates);
-    List<String> electionNodes = getSortedElectionNodes(zk);
+    List<String> electionNodes = getSortedElectionNodes(zk, OverseerElectionContext.PATH + LeaderElector.ELECTION_NODE);
     if(electionNodes.size()<2) return;
     log.info("sorted nodes {}", electionNodes);
 
@@ -443,7 +443,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     }
     //now ask the current leader to QUIT , so that the designate can takeover
     Overseer.getInQueue(zkStateReader.getZkClient()).offer(
-        ZkStateReader.toJSON(new ZkNodeProps(Overseer.QUEUE_OPERATION, Overseer.QUIT,
+        ZkStateReader.toJSON(new ZkNodeProps(Overseer.QUEUE_OPERATION, OverseerAction.QUIT.toLower(),
             "id",getLeaderId(zkStateReader.getZkClient()))));
 
   }
@@ -462,10 +462,10 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     return nodeNames;
   }
 
-  public static List<String> getSortedElectionNodes(SolrZkClient zk) throws KeeperException, InterruptedException {
+  public static List<String> getSortedElectionNodes(SolrZkClient zk, String path) throws KeeperException, InterruptedException {
     List<String> children = null;
     try {
-      children = zk.getChildren(OverseerElectionContext.PATH + LeaderElector.ELECTION_NODE, null, true);
+      children = zk.getChildren(path, null, true);
       LeaderElector.sortSeqs(children);
       return children;
     } catch (Exception e) {
@@ -543,51 +543,93 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     return LeaderStatus.NO;
   }
 
-
+  @SuppressWarnings("unchecked")
   protected SolrResponse processMessage(ZkNodeProps message, String operation) {
     log.warn("OverseerCollectionProcessor.processMessage : "+ operation + " , "+ message.toString());
 
     NamedList results = new NamedList();
     try {
-      if (CREATECOLLECTION.equals(operation)) {
-        createCollection(zkStateReader.getClusterState(), message, results);
-      } else if (DELETECOLLECTION.equals(operation)) {
-        deleteCollection(message, results);
-      } else if (RELOADCOLLECTION.equals(operation)) {
-        ModifiableSolrParams params = new ModifiableSolrParams();
-        params.set(CoreAdminParams.ACTION, CoreAdminAction.RELOAD.toString());
-        collectionCmd(zkStateReader.getClusterState(), message, params, results, ZkStateReader.ACTIVE);
-      } else if (CREATEALIAS.equals(operation)) {
-        createAlias(zkStateReader.getAliases(), message);
-      } else if (DELETEALIAS.equals(operation)) {
-        deleteAlias(zkStateReader.getAliases(), message);
-      } else if (SPLITSHARD.equals(operation))  {
-        splitShard(zkStateReader.getClusterState(), message, results);
-      } else if (CREATESHARD.equals(operation))  {
-        createShard(zkStateReader.getClusterState(), message, results);
-      } else if (DELETESHARD.equals(operation)) {
-        deleteShard(zkStateReader.getClusterState(), message, results);
-      } else if (DELETEREPLICA.equals(operation)) {
-        deleteReplica(zkStateReader.getClusterState(), message, results);
-      } else if (MIGRATE.equals(operation)) {
-        migrate(zkStateReader.getClusterState(), message, results);
-      } else if(REMOVEROLE.isEqual(operation) || ADDROLE.isEqual(operation) ){
-        processRoleCommand(message, operation);
-      } else if (ADDREPLICA.isEqual(operation))  {
-        addReplica(zkStateReader.getClusterState(), message, results);
-      } else if (OVERSEERSTATUS.isEqual(operation)) {
-        getOverseerStatus(message, results);
-      } else if(LIST.isEqual(operation)) {
-        listCollections(zkStateReader.getClusterState(), results);
-      } else if (CLUSTERSTATUS.isEqual(operation)) {
-        getClusterStatus(zkStateReader.getClusterState(), message, results);
-      } else {
-        throw new SolrException(ErrorCode.BAD_REQUEST, "Unknown operation:"
-            + operation);
+      // force update the cluster state
+      zkStateReader.updateClusterState(true);
+      CollectionParams.CollectionAction action = CollectionParams.CollectionAction.get(operation);
+      if (action == null) {
+        throw new SolrException(ErrorCode.BAD_REQUEST, "Unknown operation:" + operation);
+      }
+      switch (action) {
+        case CREATE:
+          createCollection(zkStateReader.getClusterState(), message, results);
+          break;
+        case DELETE:
+          deleteCollection(message, results);
+          break;
+        case RELOAD:
+          ModifiableSolrParams params = new ModifiableSolrParams();
+          params.set(CoreAdminParams.ACTION, CoreAdminAction.RELOAD.toString());
+          collectionCmd(zkStateReader.getClusterState(), message, params, results, Replica.State.ACTIVE);
+          break;
+        case CREATEALIAS:
+          createAlias(zkStateReader.getAliases(), message);
+          break;
+        case DELETEALIAS:
+          deleteAlias(zkStateReader.getAliases(), message);
+          break;
+        case SPLITSHARD:
+          splitShard(zkStateReader.getClusterState(), message, results);
+          break;
+        case DELETESHARD:
+          deleteShard(zkStateReader.getClusterState(), message, results);
+          break;
+        case CREATESHARD:
+          createShard(zkStateReader.getClusterState(), message, results);
+          break;
+        case DELETEREPLICA:
+          deleteReplica(zkStateReader.getClusterState(), message, results);
+          break;
+        case MIGRATE:
+          migrate(zkStateReader.getClusterState(), message, results);
+          break;
+        case ADDROLE:
+          processRoleCommand(message, operation);
+          break;
+        case REMOVEROLE:
+          processRoleCommand(message, operation);
+          break;
+        case ADDREPLICA:
+          addReplica(zkStateReader.getClusterState(), message, results);
+          break;
+        case OVERSEERSTATUS:
+          getOverseerStatus(message, results);
+          break;
+        case CLUSTERSTATUS:
+          getClusterStatus(zkStateReader.getClusterState(), message, results);
+          break;
+        case ADDREPLICAPROP:
+          processReplicaAddPropertyCommand(message);
+          break;
+        case DELETEREPLICAPROP:
+          processReplicaDeletePropertyCommand(message);
+          break;
+        case BALANCESHARDUNIQUE:
+          balanceProperty(message);
+          break;
+        case REBALANCELEADERS:
+          processRebalanceLeaders(message);
+          break;
+        default:
+          throw new SolrException(ErrorCode.BAD_REQUEST, "Unknown operation:"
+              + operation);
       }
     } catch (Exception e) {
-      SolrException.log(log, "Collection " + operation + " of " + operation
-          + " failed", e);
+      String collName = message.getStr("collection");
+      if (collName == null) collName = message.getStr(NAME);
+
+      if (collName == null) {
+        SolrException.log(log, "Operation " + operation + " failed", e);
+      } else  {
+        SolrException.log(log, "Collection: " + collName + " operation: " + operation
+            + " failed", e);
+      }
+
       results.add("Operation " + operation + " caused exception:", e);
       SimpleOrderedMap nl = new SimpleOrderedMap();
       nl.add("msg", e.getMessage());
@@ -597,6 +639,73 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     return new OverseerSolrResponse(results);
   }
 
+  @SuppressWarnings("unchecked")
+  private void processRebalanceLeaders(ZkNodeProps message) throws KeeperException, InterruptedException {
+    checkRequired(message, COLLECTION_PROP, SHARD_ID_PROP, CORE_NAME_PROP, ELECTION_NODE_PROP,
+        NODE_NAME_PROP, BASE_URL_PROP, REJOIN_AT_HEAD_PROP);
+
+    ModifiableSolrParams params = new ModifiableSolrParams();
+    params.set(COLLECTION_PROP, message.getStr(COLLECTION_PROP));
+    params.set(SHARD_ID_PROP, message.getStr(SHARD_ID_PROP));
+    params.set(REJOIN_AT_HEAD_PROP, message.getStr(REJOIN_AT_HEAD_PROP));
+    params.set(CoreAdminParams.ACTION, CoreAdminAction.REJOINLEADERELECTION.toString());
+    params.set(CORE_NAME_PROP, message.getStr(CORE_NAME_PROP));
+    params.set(NODE_NAME_PROP, message.getStr(NODE_NAME_PROP));
+    params.set(ELECTION_NODE_PROP, message.getStr(ELECTION_NODE_PROP));
+    params.set(BASE_URL_PROP, message.getStr(BASE_URL_PROP));
+
+    String baseUrl = message.getStr(BASE_URL_PROP);
+    ShardRequest sreq = new ShardRequest();
+    sreq.nodeName = message.getStr(ZkStateReader.CORE_NAME_PROP);
+    // yes, they must use same admin handler path everywhere...
+    params.set("qt", adminPath);
+    sreq.purpose = ShardRequest.PURPOSE_PRIVATE;
+    sreq.shards = new String[] {baseUrl};
+    sreq.actualShards = sreq.shards;
+    sreq.params = params;
+    ShardHandler shardHandler = shardHandlerFactory.getShardHandler();
+    shardHandler.submit(sreq, baseUrl, sreq.params);
+  }
+
+  @SuppressWarnings("unchecked")
+  private void processReplicaAddPropertyCommand(ZkNodeProps message) throws KeeperException, InterruptedException {
+    checkRequired(message, COLLECTION_PROP, SHARD_ID_PROP, REPLICA_PROP, PROPERTY_PROP, PROPERTY_VALUE_PROP);
+    SolrZkClient zkClient = zkStateReader.getZkClient();
+    DistributedQueue inQueue = Overseer.getInQueue(zkClient);
+    Map<String, Object> propMap = new HashMap<>();
+    propMap.put(Overseer.QUEUE_OPERATION, ADDREPLICAPROP.toLower());
+    propMap.putAll(message.getProperties());
+    ZkNodeProps m = new ZkNodeProps(propMap);
+    inQueue.offer(ZkStateReader.toJSON(m));
+  }
+
+  private void processReplicaDeletePropertyCommand(ZkNodeProps message) throws KeeperException, InterruptedException {
+    checkRequired(message, COLLECTION_PROP, SHARD_ID_PROP, REPLICA_PROP, PROPERTY_PROP);
+    SolrZkClient zkClient = zkStateReader.getZkClient();
+    DistributedQueue inQueue = Overseer.getInQueue(zkClient);
+    Map<String, Object> propMap = new HashMap<>();
+    propMap.put(Overseer.QUEUE_OPERATION, DELETEREPLICAPROP.toLower());
+    propMap.putAll(message.getProperties());
+    ZkNodeProps m = new ZkNodeProps(propMap);
+    inQueue.offer(ZkStateReader.toJSON(m));
+  }
+
+  private void balanceProperty(ZkNodeProps message) throws KeeperException, InterruptedException {
+    if (StringUtils.isBlank(message.getStr(COLLECTION_PROP)) || StringUtils.isBlank(message.getStr(PROPERTY_PROP))) {
+      throw new SolrException(ErrorCode.BAD_REQUEST,
+          "The '" + COLLECTION_PROP + "' and '" + PROPERTY_PROP +
+              "' parameters are required for the BALANCESHARDUNIQUE operation, no action taken");
+    }
+    SolrZkClient zkClient = zkStateReader.getZkClient();
+    DistributedQueue inQueue = Overseer.getInQueue(zkClient);
+    Map<String, Object> propMap = new HashMap<>();
+    propMap.put(Overseer.QUEUE_OPERATION, BALANCESHARDUNIQUE.toLower());
+    propMap.putAll(message.getProperties());
+    inQueue.offer(ZkStateReader.toJSON(new ZkNodeProps(propMap)));
+  }
+
+
+  @SuppressWarnings("unchecked")
   private void getOverseerStatus(ZkNodeProps message, NamedList results) throws KeeperException, InterruptedException {
     String leaderNode = getLeaderNode(zkStateReader.getZkClient());
     results.add("leader", leaderNode);
@@ -670,6 +779,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
 
   }
 
+  @SuppressWarnings("unchecked")
   private void getClusterStatus(ClusterState clusterState, ZkNodeProps message, NamedList results) throws KeeperException, InterruptedException {
     String collection = message.getStr(ZkStateReader.COLLECTION_PROP);
 
@@ -701,7 +811,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
 
     // convert cluster state into a map of writable types
     byte[] bytes = ZkStateReader.toJSON(clusterState);
-    Map<String, Object> stateMap = (Map<String, Object>) ZkStateReader.fromJSON(bytes);
+    Map<String, Object> stateMap = (Map<String,Object>) ZkStateReader.fromJSON(bytes);
 
     String shard = message.getStr(ZkStateReader.SHARD_ID_PROP);
     NamedList<Object> collectionProps = new SimpleOrderedMap<Object>();
@@ -709,22 +819,36 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
       Set<String> collections = clusterState.getCollections();
       for (String name : collections) {
         Map<String, Object> collectionStatus = null;
-        collectionStatus = getCollectionStatus((Map<String, Object>) stateMap.get(name), name, shard);
+        if (clusterState.getCollection(name).getStateFormat() > 1) {
+          bytes = ZkStateReader.toJSON(clusterState.getCollection(name));
+          Map<String, Object> docCollection = (Map<String,Object>) ZkStateReader.fromJSON(bytes);
+          collectionStatus = getCollectionStatus(docCollection, name, shard);
+        } else  {
+          collectionStatus = getCollectionStatus((Map<String,Object>) stateMap.get(name), name, shard);
+        }
         if (collectionVsAliases.containsKey(name) && !collectionVsAliases.get(name).isEmpty())  {
           collectionStatus.put("aliases", collectionVsAliases.get(name));
         }
+        String configName = zkStateReader.readConfigName(name);
+        collectionStatus.put("configName", configName);
         collectionProps.add(name, collectionStatus);
       }
     } else {
       String routeKey = message.getStr(ShardParams._ROUTE_);
       Map<String, Object> docCollection = null;
-
-      docCollection = (Map<String, Object>) stateMap.get(collection);
+      if (clusterState.getCollection(collection).getStateFormat() > 1) {
+        bytes = ZkStateReader.toJSON(clusterState.getCollection(collection));
+        docCollection = (Map<String,Object>) ZkStateReader.fromJSON(bytes);
+      } else  {
+        docCollection = (Map<String,Object>) stateMap.get(collection);
+      }
       if (routeKey == null) {
         Map<String, Object> collectionStatus = getCollectionStatus(docCollection, collection, shard);
         if (collectionVsAliases.containsKey(collection) && !collectionVsAliases.get(collection).isEmpty())  {
           collectionStatus.put("aliases", collectionVsAliases.get(collection));
         }
+        String configName = zkStateReader.readConfigName(collection);
+        collectionStatus.put("configName", configName);
         collectionProps.add(collection, collectionStatus);
       } else {
         DocCollection coll = clusterState.getCollection(collection);
@@ -741,10 +865,16 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
         if (collectionVsAliases.containsKey(collection) && !collectionVsAliases.get(collection).isEmpty())  {
           collectionStatus.put("aliases", collectionVsAliases.get(collection));
         }
+        String configName = zkStateReader.readConfigName(collection);
+        collectionStatus.put("configName", configName);
         collectionProps.add(collection, collectionStatus);
       }
     }
 
+    List<String> liveNodes = zkStateReader.getZkClient().getChildren(ZkStateReader.LIVE_NODES_ZKNODE, null, true);
+
+    // now we need to walk the collectionProps tree to cross-check replica state with live nodes
+    crossCheckReplicaStateWithLiveNodes(liveNodes, collectionProps);
 
     NamedList<Object> clusterStatus = new SimpleOrderedMap<>();
     clusterStatus.add("collections", collectionProps);
@@ -766,10 +896,42 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     }
 
     // add live_nodes
-    List<String> liveNodes = zkStateReader.getZkClient().getChildren(ZkStateReader.LIVE_NODES_ZKNODE, null, true);
     clusterStatus.add("live_nodes", liveNodes);
 
     results.add("cluster", clusterStatus);
+  }
+
+  /**
+   * Walks the tree of collection status to verify that any replicas not reporting a "down" status is
+   * on a live node, if any replicas reporting their status as "active" but the node is not live is
+   * marked as "down"; used by CLUSTERSTATUS.
+   * @param liveNodes List of currently live node names.
+   * @param collectionProps Map of collection status information pulled directly from ZooKeeper.
+   */
+
+  @SuppressWarnings("unchecked")
+  protected void crossCheckReplicaStateWithLiveNodes(List<String> liveNodes, NamedList<Object> collectionProps) {
+    Iterator<Map.Entry<String,Object>> colls = collectionProps.iterator();
+    while (colls.hasNext()) {
+      Map.Entry<String,Object> next = colls.next();
+      Map<String,Object> collMap = (Map<String,Object>)next.getValue();
+      Map<String,Object> shards = (Map<String,Object>)collMap.get("shards");
+      for (Object nextShard : shards.values()) {
+        Map<String,Object> shardMap = (Map<String,Object>)nextShard;
+        Map<String,Object> replicas = (Map<String,Object>)shardMap.get("replicas");
+        for (Object nextReplica : replicas.values()) {
+          Map<String,Object> replicaMap = (Map<String,Object>)nextReplica;
+          if (Replica.State.getState((String) replicaMap.get(ZkStateReader.STATE_PROP)) != Replica.State.DOWN) {
+            // not down, so verify the node is live
+            String node_name = (String)replicaMap.get(ZkStateReader.NODE_NAME_PROP);
+            if (!liveNodes.contains(node_name)) {
+              // node is not live, so this replica is actually down
+              replicaMap.put(ZkStateReader.STATE_PROP, Replica.State.DOWN.toString());
+            }
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -782,6 +944,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
    * @param shardStr comma separated shard names
    * @return map of collection properties
    */
+  @SuppressWarnings("unchecked")
   private Map<String, Object> getCollectionStatus(Map<String, Object> collection, String name, String shardStr) {
     if (collection == null)  {
       throw new SolrException(ErrorCode.BAD_REQUEST, "Collection: " + name + " not found");
@@ -803,15 +966,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     }
   }
 
-  private void listCollections(ClusterState clusterState, NamedList results) {
-    Set<String> collections = clusterState.getCollections();
-    List<String> collectionList = new ArrayList<String>();
-    for (String collection : collections) {
-      collectionList.add(collection);
-    }
-    results.add("collections", collectionList);
-  }
-
+  @SuppressWarnings("unchecked")
   private void processRoleCommand(ZkNodeProps message, String operation) throws KeeperException, InterruptedException {
     SolrZkClient zkClient = zkStateReader.getZkClient();
     Map roles = null;
@@ -855,53 +1010,69 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     }.start();
   }
 
+  @SuppressWarnings("unchecked")
   private void deleteReplica(ClusterState clusterState, ZkNodeProps message, NamedList results) throws KeeperException, InterruptedException {
     checkRequired(message, COLLECTION_PROP, SHARD_ID_PROP,REPLICA_PROP);
     String collectionName = message.getStr(COLLECTION_PROP);
     String shard = message.getStr(SHARD_ID_PROP);
     String replicaName = message.getStr(REPLICA_PROP);
-    DocCollection coll = clusterState.getCollection(collectionName);
-    Slice slice = coll.getSlice(shard);
-    ShardHandler shardHandler = shardHandlerFactory.getShardHandler();
-    if(slice==null){
-      throw new SolrException(ErrorCode.BAD_REQUEST, "Invalid shard name : "+shard+" in collection : "+ collectionName);
-    }
-    Replica replica = slice.getReplica(replicaName);
-    if(replica == null){
-      ArrayList<String> l = new ArrayList<>();
-      for (Replica r : slice.getReplicas()) l.add(r.getName());
-      throw new SolrException(ErrorCode.BAD_REQUEST, "Invalid replica : " + replicaName + " in shard/collection : "
-          + shard + "/"+ collectionName + " available replicas are "+ StrUtils.join(l,','));
-    }
-
-    String baseUrl = replica.getStr(ZkStateReader.BASE_URL_PROP);
-    String core = replica.getStr(ZkStateReader.CORE_NAME_PROP);
-    
-    // assume the core exists and try to unload it
-    Map m = ZkNodeProps.makeMap("qt", adminPath, CoreAdminParams.ACTION,
-        CoreAdminAction.UNLOAD.toString(), CoreAdminParams.CORE, core,
-        CoreAdminParams.DELETE_INSTANCE_DIR, "true",
-        CoreAdminParams.DELETE_DATA_DIR, "true");
-    
-    ShardRequest sreq = new ShardRequest();
-    sreq.purpose = 1;
-    sreq.shards = new String[] {baseUrl};
-    sreq.actualShards = sreq.shards;
-    sreq.params = new ModifiableSolrParams(new MapSolrParams(m));
+    Map previousMDCContext = MDC.getCopyOfContextMap();
+    MDCUtils.setMDC(collectionName, shard, replicaName, null);
     try {
-      shardHandler.submit(sreq, baseUrl, sreq.params);
-    } catch (Exception e) {
-      log.warn("Exception trying to unload core " + sreq, e);
-    }
-    
-    collectShardResponses(!Slice.ACTIVE.equals(replica.getStr(Slice.STATE)) ? new NamedList() : results,
-        false, null, shardHandler);
-    
-    if (waitForCoreNodeGone(collectionName, shard, replicaName, 5000)) return;//check if the core unload removed the corenode zk enry
-    deleteCoreNode(collectionName, replicaName, replica, core); // try and ensure core info is removed from clusterstate
-    if(waitForCoreNodeGone(collectionName, shard, replicaName, 30000)) return;
+      DocCollection coll = clusterState.getCollection(collectionName);
+      Slice slice = coll.getSlice(shard);
+      ShardHandler shardHandler = shardHandlerFactory.getShardHandler();
+      if (slice == null) {
+        throw new SolrException(ErrorCode.BAD_REQUEST, "Invalid shard name : " + shard + " in collection : " + collectionName);
+      }
+      Replica replica = slice.getReplica(replicaName);
+      if (replica == null) {
+        ArrayList<String> l = new ArrayList<>();
+        for (Replica r : slice.getReplicas()) l.add(r.getName());
+        throw new SolrException(ErrorCode.BAD_REQUEST, "Invalid replica : " + replicaName + " in shard/collection : "
+            + shard + "/" + collectionName + " available replicas are " + StrUtils.join(l, ','));
+      }
 
-    throw new SolrException(ErrorCode.SERVER_ERROR, "Could not  remove replica : " + collectionName + "/" + shard+"/" + replicaName);
+      // If users are being safe and only want to remove a shard if it is down, they can specify onlyIfDown=true
+      // on the command.
+      if (Boolean.parseBoolean(message.getStr(ONLY_IF_DOWN)) && replica.getState() != Replica.State.DOWN) {
+        throw new SolrException(ErrorCode.BAD_REQUEST, "Attempted to remove replica : " + collectionName + "/" +
+            shard + "/" + replicaName +
+            " with onlyIfDown='true', but state is '" + replica.getStr(ZkStateReader.STATE_PROP) + "'");
+      }
+
+      String baseUrl = replica.getStr(ZkStateReader.BASE_URL_PROP);
+      String core = replica.getStr(ZkStateReader.CORE_NAME_PROP);
+
+      // assume the core exists and try to unload it
+      Map m = ZkNodeProps.makeMap("qt", adminPath, CoreAdminParams.ACTION,
+          CoreAdminAction.UNLOAD.toString(), CoreAdminParams.CORE, core,
+          CoreAdminParams.DELETE_INSTANCE_DIR, "true",
+          CoreAdminParams.DELETE_DATA_DIR, "true");
+
+      ShardRequest sreq = new ShardRequest();
+      sreq.purpose = 1;
+      sreq.shards = new String[]{baseUrl};
+      sreq.actualShards = sreq.shards;
+      sreq.params = new ModifiableSolrParams(new MapSolrParams(m));
+      try {
+        shardHandler.submit(sreq, baseUrl, sreq.params);
+      } catch (Exception e) {
+        log.warn("Exception trying to unload core " + sreq, e);
+      }
+
+      collectShardResponses(replica.getState() != Replica.State.ACTIVE ? new NamedList() : results,
+          false, null, shardHandler);
+
+      if (waitForCoreNodeGone(collectionName, shard, replicaName, 5000))
+        return;//check if the core unload removed the corenode zk enry
+      deleteCoreNode(collectionName, replicaName, replica, core); // try and ensure core info is removed from clusterstate
+      if (waitForCoreNodeGone(collectionName, shard, replicaName, 30000)) return;
+
+      throw new SolrException(ErrorCode.SERVER_ERROR, "Could not  remove replica : " + collectionName + "/" + shard + "/" + replicaName);
+    } finally {
+      MDCUtils.cleanupMDC(previousMDCContext);
+    }
   }
 
   private boolean waitForCoreNodeGone(String collectionName, String shard, String replicaName, int timeoutms) throws InterruptedException {
@@ -924,7 +1095,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
 
   private void deleteCoreNode(String collectionName, String replicaName, Replica replica, String core) throws KeeperException, InterruptedException {
     ZkNodeProps m = new ZkNodeProps(
-        Overseer.QUEUE_OPERATION, Overseer.DELETECORE,
+        Overseer.QUEUE_OPERATION, OverseerAction.DELETECORE.toLower(),
         ZkStateReader.CORE_NAME_PROP, core,
         ZkStateReader.NODE_NAME_PROP, replica.getStr(ZkStateReader.NODE_NAME_PROP),
         ZkStateReader.COLLECTION_PROP, collectionName,
@@ -943,7 +1114,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
 
   private void deleteCollection(ZkNodeProps message, NamedList results)
       throws KeeperException, InterruptedException {
-    String collection = message.getStr("name");
+    final String collection = message.getStr(NAME);
     try {
       ModifiableSolrParams params = new ModifiableSolrParams();
       params.set(CoreAdminParams.ACTION, CoreAdminAction.UNLOAD.toString());
@@ -951,19 +1122,19 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
       params.set(CoreAdminParams.DELETE_DATA_DIR, true);
       collectionCmd(zkStateReader.getClusterState(), message, params, results,
           null);
-      
+
       ZkNodeProps m = new ZkNodeProps(Overseer.QUEUE_OPERATION,
-          Overseer.REMOVECOLLECTION, "name", collection);
+          DELETE.toLower(), NAME, collection);
       Overseer.getInQueue(zkStateReader.getZkClient()).offer(
           ZkStateReader.toJSON(m));
-      
+
       // wait for a while until we don't see the collection
       long now = System.nanoTime();
       long timeout = now + TimeUnit.NANOSECONDS.convert(30, TimeUnit.SECONDS);
       boolean removed = false;
       while (System.nanoTime() < timeout) {
         Thread.sleep(100);
-        removed = !zkStateReader.getClusterState().hasCollection(message.getStr(collection));
+        removed = !zkStateReader.getClusterState().hasCollection(collection);
         if (removed) {
           Thread.sleep(500); // just a bit of time so it's more likely other
                              // readers see on return
@@ -972,11 +1143,11 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
       }
       if (!removed) {
         throw new SolrException(ErrorCode.SERVER_ERROR,
-            "Could not fully remove collection: " + message.getStr("name"));
+            "Could not fully remove collection: " + collection);
       }
-      
+
     } finally {
-      
+
       try {
         if (zkStateReader.getZkClient().exists(
             ZkStateReader.COLLECTIONS_ZKNODE + "/" + collection, true)) {
@@ -995,39 +1166,46 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
   }
 
   private void createAlias(Aliases aliases, ZkNodeProps message) {
-    String aliasName = message.getStr("name");
+    String aliasName = message.getStr(NAME);
     String collections = message.getStr("collections");
-    
-    Map<String,Map<String,String>> newAliasesMap = new HashMap<>();
-    Map<String,String> newCollectionAliasesMap = new HashMap<>();
-    Map<String,String> prevColAliases = aliases.getCollectionAliasMap();
-    if (prevColAliases != null) {
-      newCollectionAliasesMap.putAll(prevColAliases);
-    }
-    newCollectionAliasesMap.put(aliasName, collections);
-    newAliasesMap.put("collection", newCollectionAliasesMap);
-    Aliases newAliases = new Aliases(newAliasesMap);
-    byte[] jsonBytes = null;
-    if (newAliases.collectionAliasSize() > 0) { // only sub map right now
-      jsonBytes  = ZkStateReader.toJSON(newAliases.getAliasMap());
-    }
+
+    Map previousMDCContext = MDC.getCopyOfContextMap();
+    MDCUtils.setCollection(aliasName);
+
     try {
-      zkStateReader.getZkClient().setData(ZkStateReader.ALIASES,
-          jsonBytes, true);
-      
-      checkForAlias(aliasName, collections);
-      // some fudge for other nodes
-      Thread.sleep(100);
-    } catch (KeeperException e) {
-      log.error("", e);
-      throw new SolrException(ErrorCode.SERVER_ERROR, e);
-    } catch (InterruptedException e) {
-      log.warn("", e);
-      throw new SolrException(ErrorCode.SERVER_ERROR, e);
+      Map<String, Map<String, String>> newAliasesMap = new HashMap<>();
+      Map<String, String> newCollectionAliasesMap = new HashMap<>();
+      Map<String, String> prevColAliases = aliases.getCollectionAliasMap();
+      if (prevColAliases != null) {
+        newCollectionAliasesMap.putAll(prevColAliases);
+      }
+      newCollectionAliasesMap.put(aliasName, collections);
+      newAliasesMap.put("collection", newCollectionAliasesMap);
+      Aliases newAliases = new Aliases(newAliasesMap);
+      byte[] jsonBytes = null;
+      if (newAliases.collectionAliasSize() > 0) { // only sub map right now
+        jsonBytes = ZkStateReader.toJSON(newAliases.getAliasMap());
+      }
+      try {
+        zkStateReader.getZkClient().setData(ZkStateReader.ALIASES,
+            jsonBytes, true);
+
+        checkForAlias(aliasName, collections);
+        // some fudge for other nodes
+        Thread.sleep(100);
+      } catch (KeeperException e) {
+        log.error("", e);
+        throw new SolrException(ErrorCode.SERVER_ERROR, e);
+      } catch (InterruptedException e) {
+        log.warn("", e);
+        throw new SolrException(ErrorCode.SERVER_ERROR, e);
+      }
+    } finally {
+      MDCUtils.cleanupMDC(previousMDCContext);
     }
 
   }
-  
+
   private void checkForAlias(String name, String value) {
 
     long now = System.nanoTime();
@@ -1046,7 +1224,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
       log.warn("Timeout waiting to be notified of Alias change...");
     }
   }
-  
+
   private void checkForAliasAbsence(String name) {
 
     long now = System.nanoTime();
@@ -1067,7 +1245,9 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
   }
 
   private void deleteAlias(Aliases aliases, ZkNodeProps message) {
-    String aliasName = message.getStr("name");
+    String aliasName = message.getStr(NAME);
+    Map previousMDCContext = MDC.getCopyOfContextMap();
+    MDCUtils.setCollection(aliasName);
 
     Map<String,Map<String,String>> newAliasesMap = new HashMap<>();
     Map<String,String> newCollectionAliasesMap = new HashMap<>();
@@ -1091,406 +1271,283 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     } catch (InterruptedException e) {
       log.warn("", e);
       throw new SolrException(ErrorCode.SERVER_ERROR, e);
+    } finally {
+      MDCUtils.cleanupMDC(previousMDCContext);
     }
-    
+
   }
 
   private boolean createShard(ClusterState clusterState, ZkNodeProps message, NamedList results)
       throws KeeperException, InterruptedException {
-    log.info("Create shard invoked: {}", message);
+    Map previousMDCContext = MDC.getCopyOfContextMap();
     String collectionName = message.getStr(COLLECTION_PROP);
-    String shard = message.getStr(SHARD_ID_PROP);
-    if(collectionName == null || shard ==null)
-      throw new SolrException(ErrorCode.BAD_REQUEST, "'collection' and 'shard' are required parameters" );
-    int numSlices = 1;
+    String sliceName = message.getStr(SHARD_ID_PROP);
 
-    ShardHandler shardHandler = shardHandlerFactory.getShardHandler();
-    DocCollection collection = clusterState.getCollection(collectionName);
-    int maxShardsPerNode = collection.getInt(ZkStateReader.MAX_SHARDS_PER_NODE, 1);
-    int repFactor = message.getInt(ZkStateReader.REPLICATION_FACTOR, collection.getInt(ZkStateReader.REPLICATION_FACTOR, 1));
-    String createNodeSetStr = message.getStr(CREATE_NODE_SET);
+    MDCUtils.setMDC(collectionName, sliceName, null, null);
+    try {
+      log.info("Create shard invoked: {}", message);
+      if (collectionName == null || sliceName == null)
+        throw new SolrException(ErrorCode.BAD_REQUEST, "'collection' and 'shard' are required parameters");
+      int numSlices = 1;
 
-    ArrayList<Node> sortedNodeList = getNodesForNewShard(clusterState, collectionName, numSlices, maxShardsPerNode, repFactor, createNodeSetStr);
+      ShardHandler shardHandler = shardHandlerFactory.getShardHandler();
+      DocCollection collection = clusterState.getCollection(collectionName);
+      int maxShardsPerNode = collection.getInt(ZkStateReader.MAX_SHARDS_PER_NODE, 1);
+      int repFactor = message.getInt(ZkStateReader.REPLICATION_FACTOR, collection.getInt(ZkStateReader.REPLICATION_FACTOR, 1));
+      String createNodeSetStr = message.getStr(CREATE_NODE_SET);
 
-    Overseer.getInQueue(zkStateReader.getZkClient()).offer(ZkStateReader.toJSON(message));
-    // wait for a while until we see the shard
-    long waitUntil = System.nanoTime() + TimeUnit.NANOSECONDS.convert(30, TimeUnit.SECONDS);;
-    boolean created = false;
-    while (System.nanoTime() < waitUntil) {
-      Thread.sleep(100);
-      created = zkStateReader.getClusterState().getCollection(collectionName).getSlice(shard) != null;
-      if (created) break;
+      ArrayList<Node> sortedNodeList = getNodesForNewShard(clusterState, collectionName, numSlices, maxShardsPerNode, repFactor, createNodeSetStr);
+
+      Overseer.getInQueue(zkStateReader.getZkClient()).offer(ZkStateReader.toJSON(message));
+      // wait for a while until we see the shard
+      long waitUntil = System.nanoTime() + TimeUnit.NANOSECONDS.convert(30, TimeUnit.SECONDS);
+      boolean created = false;
+      while (System.nanoTime() < waitUntil) {
+        Thread.sleep(100);
+        created = zkStateReader.getClusterState().getCollection(collectionName).getSlice(sliceName) != null;
+        if (created) break;
+      }
+      if (!created)
+        throw new SolrException(ErrorCode.SERVER_ERROR, "Could not fully create shard: " + message.getStr(NAME));
+
+
+      String configName = message.getStr(COLL_CONF);
+      for (int j = 1; j <= repFactor; j++) {
+        String nodeName = sortedNodeList.get(((j - 1)) % sortedNodeList.size()).nodeName;
+        String shardName = collectionName + "_" + sliceName + "_replica" + j;
+        log.info("Creating shard " + shardName + " as part of slice "
+            + sliceName + " of collection " + collectionName + " on "
+            + nodeName);
+
+        // Need to create new params for each request
+        ModifiableSolrParams params = new ModifiableSolrParams();
+        params.set(CoreAdminParams.ACTION, CoreAdminAction.CREATE.toString());
+
+        params.set(CoreAdminParams.NAME, shardName);
+        params.set(COLL_CONF, configName);
+        params.set(CoreAdminParams.COLLECTION, collectionName);
+        params.set(CoreAdminParams.SHARD, sliceName);
+        params.set(ZkStateReader.NUM_SHARDS_PROP, numSlices);
+        addPropertyParams(message, params);
+
+        ShardRequest sreq = new ShardRequest();
+        params.set("qt", adminPath);
+        sreq.purpose = 1;
+        String replica = zkStateReader.getBaseUrlForNodeName(nodeName);
+        sreq.shards = new String[]{replica};
+        sreq.actualShards = sreq.shards;
+        sreq.params = params;
+
+        shardHandler.submit(sreq, replica, sreq.params);
+
+      }
+
+      processResponses(results, shardHandler);
+
+      log.info("Finished create command on all shards for collection: "
+          + collectionName);
+
+      return true;
+    } finally {
+      MDCUtils.cleanupMDC(previousMDCContext);
     }
-    if (!created)
-      throw new SolrException(ErrorCode.SERVER_ERROR, "Could not fully create shard: " + message.getStr("name"));
-
-
-    String configName = message.getStr(COLL_CONF);
-    String sliceName = shard;
-    for (int j = 1; j <= repFactor; j++) {
-      String nodeName = sortedNodeList.get(((j - 1)) % sortedNodeList.size()).nodeName;
-      String shardName = collectionName + "_" + sliceName + "_replica" + j;
-      log.info("Creating shard " + shardName + " as part of slice "
-          + sliceName + " of collection " + collectionName + " on "
-          + nodeName);
-
-      // Need to create new params for each request
-      ModifiableSolrParams params = new ModifiableSolrParams();
-      params.set(CoreAdminParams.ACTION, CoreAdminAction.CREATE.toString());
-
-      params.set(CoreAdminParams.NAME, shardName);
-      params.set(COLL_CONF, configName);
-      params.set(CoreAdminParams.COLLECTION, collectionName);
-      params.set(CoreAdminParams.SHARD, sliceName);
-      params.set(ZkStateReader.NUM_SHARDS_PROP, numSlices);
-      addPropertyParams(message, params);
-
-      ShardRequest sreq = new ShardRequest();
-      params.set("qt", adminPath);
-      sreq.purpose = 1;
-      String replica = zkStateReader.getBaseUrlForNodeName(nodeName);
-      sreq.shards = new String[]{replica};
-      sreq.actualShards = sreq.shards;
-      sreq.params = params;
-
-      shardHandler.submit(sreq, replica, sreq.params);
-
-    }
-
-    processResponses(results, shardHandler);
-
-    log.info("Finished create command on all shards for collection: "
-        + collectionName);
-
-    return true;
   }
 
 
   private boolean splitShard(ClusterState clusterState, ZkNodeProps message, NamedList results) {
-    log.info("Split shard invoked");
     String collectionName = message.getStr("collection");
     String slice = message.getStr(ZkStateReader.SHARD_ID_PROP);
-    String splitKey = message.getStr("split.key");
-    ShardHandler shardHandler = shardHandlerFactory.getShardHandler();
+    Map previousMDCContext = MDC.getCopyOfContextMap();
+    MDCUtils.setMDC(collectionName, slice, null, null);
+    try {
+      log.info("Split shard invoked");
+      String splitKey = message.getStr("split.key");
+      ShardHandler shardHandler = shardHandlerFactory.getShardHandler();
 
-    DocCollection collection = clusterState.getCollection(collectionName);
-    DocRouter router = collection.getRouter() != null ? collection.getRouter() : DocRouter.DEFAULT;
+      DocCollection collection = clusterState.getCollection(collectionName);
+      DocRouter router = collection.getRouter() != null ? collection.getRouter() : DocRouter.DEFAULT;
 
-    Slice parentSlice = null;
+      Slice parentSlice = null;
 
-    if (slice == null)  {
-      if (router instanceof CompositeIdRouter) {
-        Collection<Slice> searchSlices = router.getSearchSlicesSingle(splitKey, new ModifiableSolrParams(), collection);
-        if (searchSlices.isEmpty()) {
-          throw new SolrException(ErrorCode.BAD_REQUEST, "Unable to find an active shard for split.key: " + splitKey);
-        }
-        if (searchSlices.size() > 1)  {
+      if (slice == null) {
+        if (router instanceof CompositeIdRouter) {
+          Collection<Slice> searchSlices = router.getSearchSlicesSingle(splitKey, new ModifiableSolrParams(), collection);
+          if (searchSlices.isEmpty()) {
+            throw new SolrException(ErrorCode.BAD_REQUEST, "Unable to find an active shard for split.key: " + splitKey);
+          }
+          if (searchSlices.size() > 1) {
+            throw new SolrException(ErrorCode.BAD_REQUEST,
+                "Splitting a split.key: " + splitKey + " which spans multiple shards is not supported");
+          }
+          parentSlice = searchSlices.iterator().next();
+          slice = parentSlice.getName();
+          log.info("Split by route.key: {}, parent shard is: {} ", splitKey, slice);
+        } else {
           throw new SolrException(ErrorCode.BAD_REQUEST,
-              "Splitting a split.key: " + splitKey + " which spans multiple shards is not supported");
+              "Split by route key can only be used with CompositeIdRouter or subclass. Found router: " + router.getClass().getName());
         }
-        parentSlice = searchSlices.iterator().next();
-        slice = parentSlice.getName();
-        log.info("Split by route.key: {}, parent shard is: {} ", splitKey, slice);
-      } else  {
-        throw new SolrException(ErrorCode.BAD_REQUEST,
-            "Split by route key can only be used with CompositeIdRouter or subclass. Found router: " + router.getClass().getName());
-      }
-    } else  {
-      parentSlice = clusterState.getSlice(collectionName, slice);
-    }
-
-    if (parentSlice == null) {
-      if(clusterState.hasCollection(collectionName)) {
-        throw new SolrException(ErrorCode.BAD_REQUEST, "No shard with the specified name exists: " + slice);
       } else {
-        throw new SolrException(ErrorCode.BAD_REQUEST, "No collection with the specified name exists: " + collectionName);
-      }      
-    }
-    
-    // find the leader for the shard
-    Replica parentShardLeader = null;
-    try {
-      parentShardLeader = zkStateReader.getLeaderRetry(collectionName, slice, 10000);
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-    }
+        parentSlice = clusterState.getSlice(collectionName, slice);
+      }
 
-    DocRouter.Range range = parentSlice.getRange();
-    if (range == null) {
-      range = new PlainIdRouter().fullRange();
-    }
-
-    List<DocRouter.Range> subRanges = null;
-    String rangesStr = message.getStr(CoreAdminParams.RANGES);
-    if (rangesStr != null)  {
-      String[] ranges = rangesStr.split(",");
-      if (ranges.length == 0 || ranges.length == 1) {
-        throw new SolrException(ErrorCode.BAD_REQUEST, "There must be at least two ranges specified to split a shard");
-      } else  {
-        subRanges = new ArrayList<>(ranges.length);
-        for (int i = 0; i < ranges.length; i++) {
-          String r = ranges[i];
-          try {
-            subRanges.add(DocRouter.DEFAULT.fromString(r));
-          } catch (Exception e) {
-            throw new SolrException(ErrorCode.BAD_REQUEST, "Exception in parsing hexadecimal hash range: " + r, e);
-          }
-          if (!subRanges.get(i).isSubsetOf(range)) {
-            throw new SolrException(ErrorCode.BAD_REQUEST,
-                "Specified hash range: " + r + " is not a subset of parent shard's range: " + range.toString());
-          }
-        }
-        List<DocRouter.Range> temp = new ArrayList<>(subRanges); // copy to preserve original order
-        Collections.sort(temp);
-        if (!range.equals(new DocRouter.Range(temp.get(0).min, temp.get(temp.size() - 1).max)))  {
-          throw new SolrException(ErrorCode.BAD_REQUEST,
-              "Specified hash ranges: " + rangesStr + " do not cover the entire range of parent shard: " + range);
-        }
-        for (int i = 1; i < temp.size(); i++) {
-          if (temp.get(i - 1).max + 1 != temp.get(i).min) {
-            throw new SolrException(ErrorCode.BAD_REQUEST,
-                "Specified hash ranges: " + rangesStr + " either overlap with each other or " +
-                    "do not cover the entire range of parent shard: " + range);
-          }
+      if (parentSlice == null) {
+        if (clusterState.hasCollection(collectionName)) {
+          throw new SolrException(ErrorCode.BAD_REQUEST, "No shard with the specified name exists: " + slice);
+        } else {
+          throw new SolrException(ErrorCode.BAD_REQUEST, "No collection with the specified name exists: " + collectionName);
         }
       }
-    } else if (splitKey != null)  {
-      if (router instanceof CompositeIdRouter) {
-        CompositeIdRouter compositeIdRouter = (CompositeIdRouter) router;
-        subRanges = compositeIdRouter.partitionRangeByKey(splitKey, range);
-        if (subRanges.size() == 1)  {
-          throw new SolrException(ErrorCode.BAD_REQUEST,
-              "The split.key: " + splitKey + " has a hash range that is exactly equal to hash range of shard: " + slice);
-        }
-        for (DocRouter.Range subRange : subRanges) {
-          if (subRange.min == subRange.max) {
-            throw new SolrException(ErrorCode.BAD_REQUEST, "The split.key: " + splitKey + " must be a compositeId");
+
+      // find the leader for the shard
+      Replica parentShardLeader = null;
+      try {
+        parentShardLeader = zkStateReader.getLeaderRetry(collectionName, slice, 10000);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+
+      DocRouter.Range range = parentSlice.getRange();
+      if (range == null) {
+        range = new PlainIdRouter().fullRange();
+      }
+
+      List<DocRouter.Range> subRanges = null;
+      String rangesStr = message.getStr(CoreAdminParams.RANGES);
+      if (rangesStr != null) {
+        String[] ranges = rangesStr.split(",");
+        if (ranges.length == 0 || ranges.length == 1) {
+          throw new SolrException(ErrorCode.BAD_REQUEST, "There must be at least two ranges specified to split a shard");
+        } else {
+          subRanges = new ArrayList<>(ranges.length);
+          for (int i = 0; i < ranges.length; i++) {
+            String r = ranges[i];
+            try {
+              subRanges.add(DocRouter.DEFAULT.fromString(r));
+            } catch (Exception e) {
+              throw new SolrException(ErrorCode.BAD_REQUEST, "Exception in parsing hexadecimal hash range: " + r, e);
+            }
+            if (!subRanges.get(i).isSubsetOf(range)) {
+              throw new SolrException(ErrorCode.BAD_REQUEST,
+                  "Specified hash range: " + r + " is not a subset of parent shard's range: " + range.toString());
+            }
+          }
+          List<DocRouter.Range> temp = new ArrayList<>(subRanges); // copy to preserve original order
+          Collections.sort(temp);
+          if (!range.equals(new DocRouter.Range(temp.get(0).min, temp.get(temp.size() - 1).max))) {
+            throw new SolrException(ErrorCode.BAD_REQUEST,
+                "Specified hash ranges: " + rangesStr + " do not cover the entire range of parent shard: " + range);
+          }
+          for (int i = 1; i < temp.size(); i++) {
+            if (temp.get(i - 1).max + 1 != temp.get(i).min) {
+              throw new SolrException(ErrorCode.BAD_REQUEST,
+                  "Specified hash ranges: " + rangesStr + " either overlap with each other or " +
+                      "do not cover the entire range of parent shard: " + range);
+            }
           }
         }
-        log.info("Partitioning parent shard " + slice + " range: " + parentSlice.getRange() + " yields: " + subRanges);
-        rangesStr = "";
+      } else if (splitKey != null) {
+        if (router instanceof CompositeIdRouter) {
+          CompositeIdRouter compositeIdRouter = (CompositeIdRouter) router;
+          subRanges = compositeIdRouter.partitionRangeByKey(splitKey, range);
+          if (subRanges.size() == 1) {
+            throw new SolrException(ErrorCode.BAD_REQUEST,
+                "The split.key: " + splitKey + " has a hash range that is exactly equal to hash range of shard: " + slice);
+          }
+          for (DocRouter.Range subRange : subRanges) {
+            if (subRange.min == subRange.max) {
+              throw new SolrException(ErrorCode.BAD_REQUEST, "The split.key: " + splitKey + " must be a compositeId");
+            }
+          }
+          log.info("Partitioning parent shard " + slice + " range: " + parentSlice.getRange() + " yields: " + subRanges);
+          rangesStr = "";
+          for (int i = 0; i < subRanges.size(); i++) {
+            DocRouter.Range subRange = subRanges.get(i);
+            rangesStr += subRange.toString();
+            if (i < subRanges.size() - 1)
+              rangesStr += ',';
+          }
+        }
+      } else {
+        // todo: fixed to two partitions?
+        subRanges = router.partitionRange(2, range);
+      }
+
+      try {
+        List<String> subSlices = new ArrayList<>(subRanges.size());
+        List<String> subShardNames = new ArrayList<>(subRanges.size());
+        String nodeName = parentShardLeader.getNodeName();
         for (int i = 0; i < subRanges.size(); i++) {
-          DocRouter.Range subRange = subRanges.get(i);
-          rangesStr += subRange.toString();
-          if (i < subRanges.size() - 1)
-            rangesStr += ',';
-        }
-      }
-    } else  {
-      // todo: fixed to two partitions?
-      subRanges = router.partitionRange(2, range);
-    }
+          String subSlice = slice + "_" + i;
+          subSlices.add(subSlice);
+          String subShardName = collectionName + "_" + subSlice + "_replica1";
+          subShardNames.add(subShardName);
 
-    try {
-      List<String> subSlices = new ArrayList<>(subRanges.size());
-      List<String> subShardNames = new ArrayList<>(subRanges.size());
-      String nodeName = parentShardLeader.getNodeName();
-      for (int i = 0; i < subRanges.size(); i++) {
-        String subSlice = slice + "_" + i;
-        subSlices.add(subSlice);
-        String subShardName = collectionName + "_" + subSlice + "_replica1";
-        subShardNames.add(subShardName);
-
-        Slice oSlice = clusterState.getSlice(collectionName, subSlice);
-        if (oSlice != null) {
-          if (Slice.ACTIVE.equals(oSlice.getState())) {
-            throw new SolrException(ErrorCode.BAD_REQUEST, "Sub-shard: " + subSlice + " exists in active state. Aborting split shard.");
-          } else if (Slice.CONSTRUCTION.equals(oSlice.getState()) || Slice.RECOVERY.equals(oSlice.getState()))  {
-            // delete the shards
-            for (String sub : subSlices) {
-              log.info("Sub-shard: {} already exists therefore requesting its deletion", sub);
-              Map<String, Object> propMap = new HashMap<>();
-              propMap.put(Overseer.QUEUE_OPERATION, "deleteshard");
-              propMap.put(COLLECTION_PROP, collectionName);
-              propMap.put(SHARD_ID_PROP, sub);
-              ZkNodeProps m = new ZkNodeProps(propMap);
-              try {
-                deleteShard(clusterState, m, new NamedList());
-              } catch (Exception e) {
-                throw new SolrException(ErrorCode.SERVER_ERROR, "Unable to delete already existing sub shard: " + sub, e);
+          Slice oSlice = clusterState.getSlice(collectionName, subSlice);
+          if (oSlice != null) {
+            final Slice.State state = oSlice.getState();
+            if (state == Slice.State.ACTIVE) {
+              throw new SolrException(ErrorCode.BAD_REQUEST, "Sub-shard: " + subSlice + " exists in active state. Aborting split shard.");
+            } else if (state == Slice.State.CONSTRUCTION || state == Slice.State.RECOVERY) {
+              // delete the shards
+              for (String sub : subSlices) {
+                log.info("Sub-shard: {} already exists therefore requesting its deletion", sub);
+                Map<String, Object> propMap = new HashMap<>();
+                propMap.put(Overseer.QUEUE_OPERATION, "deleteshard");
+                propMap.put(COLLECTION_PROP, collectionName);
+                propMap.put(SHARD_ID_PROP, sub);
+                ZkNodeProps m = new ZkNodeProps(propMap);
+                try {
+                  deleteShard(clusterState, m, new NamedList());
+                } catch (Exception e) {
+                  throw new SolrException(ErrorCode.SERVER_ERROR, "Unable to delete already existing sub shard: " + sub, e);
+                }
               }
             }
           }
         }
-      }
 
-      // do not abort splitshard if the unloading fails
-      // this can happen because the replicas created previously may be down
-      // the only side effect of this is that the sub shard may end up having more replicas than we want
-      collectShardResponses(results, false, null, shardHandler);
+        // do not abort splitshard if the unloading fails
+        // this can happen because the replicas created previously may be down
+        // the only side effect of this is that the sub shard may end up having more replicas than we want
+        collectShardResponses(results, false, null, shardHandler);
 
-      String asyncId = message.getStr(ASYNC);
-      HashMap<String, String> requestMap = new HashMap<String, String>();
+        String asyncId = message.getStr(ASYNC);
+        HashMap<String, String> requestMap = new HashMap<String, String>();
 
-      for (int i=0; i<subRanges.size(); i++)  {
-        String subSlice = subSlices.get(i);
-        String subShardName = subShardNames.get(i);
-        DocRouter.Range subRange = subRanges.get(i);
+        for (int i = 0; i < subRanges.size(); i++) {
+          String subSlice = subSlices.get(i);
+          String subShardName = subShardNames.get(i);
+          DocRouter.Range subRange = subRanges.get(i);
 
-        log.info("Creating slice "
-            + subSlice + " of collection " + collectionName + " on "
-            + nodeName);
+          log.info("Creating slice "
+              + subSlice + " of collection " + collectionName + " on "
+              + nodeName);
 
-        Map<String, Object> propMap = new HashMap<>();
-        propMap.put(Overseer.QUEUE_OPERATION, "createshard");
-        propMap.put(ZkStateReader.SHARD_ID_PROP, subSlice);
-        propMap.put(ZkStateReader.COLLECTION_PROP, collectionName);
-        propMap.put(ZkStateReader.SHARD_RANGE_PROP, subRange.toString());
-        propMap.put(ZkStateReader.SHARD_STATE_PROP, Slice.CONSTRUCTION);
-        propMap.put(ZkStateReader.SHARD_PARENT_PROP, parentSlice.getName());
-        DistributedQueue inQueue = Overseer.getInQueue(zkStateReader.getZkClient());
-        inQueue.offer(ZkStateReader.toJSON(new ZkNodeProps(propMap)));
+          Map<String, Object> propMap = new HashMap<>();
+          propMap.put(Overseer.QUEUE_OPERATION, CREATESHARD.toLower());
+          propMap.put(ZkStateReader.SHARD_ID_PROP, subSlice);
+          propMap.put(ZkStateReader.COLLECTION_PROP, collectionName);
+          propMap.put(ZkStateReader.SHARD_RANGE_PROP, subRange.toString());
+          propMap.put(ZkStateReader.SHARD_STATE_PROP, Slice.State.CONSTRUCTION.toString());
+          propMap.put(ZkStateReader.SHARD_PARENT_PROP, parentSlice.getName());
+          DistributedQueue inQueue = Overseer.getInQueue(zkStateReader.getZkClient());
+          inQueue.offer(ZkStateReader.toJSON(new ZkNodeProps(propMap)));
 
-        // wait until we are able to see the new shard in cluster state
-        waitForNewShard(collectionName, subSlice);
+          // wait until we are able to see the new shard in cluster state
+          waitForNewShard(collectionName, subSlice);
 
-        // refresh cluster state
-        clusterState = zkStateReader.getClusterState();
+          // refresh cluster state
+          clusterState = zkStateReader.getClusterState();
 
-        log.info("Adding replica " + subShardName + " as part of slice "
-            + subSlice + " of collection " + collectionName + " on "
-            + nodeName);
-        propMap = new HashMap<>();
-        propMap.put(Overseer.QUEUE_OPERATION, ADDREPLICA.toLower());
-        propMap.put(COLLECTION_PROP, collectionName);
-        propMap.put(SHARD_ID_PROP, subSlice);
-        propMap.put("node", nodeName);
-        propMap.put(CoreAdminParams.NAME, subShardName);
-        // copy over property params:
-        for (String key : message.keySet()) {
-          if (key.startsWith(COLL_PROP_PREFIX)) {
-            propMap.put(key, message.getStr(key));
-          }
-        }
-        // add async param
-        if(asyncId != null) {
-          propMap.put(ASYNC, asyncId);
-        }
-        addReplica(clusterState, new ZkNodeProps(propMap), results);
-      }
-
-      collectShardResponses(results, true,
-          "SPLITSHARD failed to create subshard leaders", shardHandler);
-
-      completeAsyncRequest(asyncId, requestMap, results);
-
-      for (String subShardName : subShardNames) {
-        // wait for parent leader to acknowledge the sub-shard core
-        log.info("Asking parent leader to wait for: " + subShardName + " to be alive on: " + nodeName);
-        String coreNodeName = waitForCoreNodeName(collectionName, nodeName, subShardName);
-        CoreAdminRequest.WaitForState cmd = new CoreAdminRequest.WaitForState();
-        cmd.setCoreName(subShardName);
-        cmd.setNodeName(nodeName);
-        cmd.setCoreNodeName(coreNodeName);
-        cmd.setState(ZkStateReader.ACTIVE);
-        cmd.setCheckLive(true);
-        cmd.setOnlyIfLeader(true);
-
-        ModifiableSolrParams p = new ModifiableSolrParams(cmd.getParams());
-        setupAsyncRequest(asyncId, requestMap, p, nodeName);
-
-        sendShardRequest(nodeName, p, shardHandler);
-      }
-
-      collectShardResponses(results, true,
-          "SPLITSHARD timed out waiting for subshard leaders to come up", shardHandler);
-
-      completeAsyncRequest(asyncId, requestMap, results);
-
-      log.info("Successfully created all sub-shards for collection "
-          + collectionName + " parent shard: " + slice + " on: " + parentShardLeader);
-
-      log.info("Splitting shard " + parentShardLeader.getName() + " as part of slice "
-          + slice + " of collection " + collectionName + " on "
-          + parentShardLeader);
-
-      ModifiableSolrParams params = new ModifiableSolrParams();
-      params.set(CoreAdminParams.ACTION, CoreAdminAction.SPLIT.toString());
-      params.set(CoreAdminParams.CORE, parentShardLeader.getStr("core"));
-      for (int i = 0; i < subShardNames.size(); i++) {
-        String subShardName = subShardNames.get(i);
-        params.add(CoreAdminParams.TARGET_CORE, subShardName);
-      }
-      params.set(CoreAdminParams.RANGES, rangesStr);
-      setupAsyncRequest(asyncId, requestMap, params, parentShardLeader.getNodeName());
-
-      sendShardRequest(parentShardLeader.getNodeName(), params, shardHandler);
-
-      collectShardResponses(results, true, "SPLITSHARD failed to invoke SPLIT core admin command",
-          shardHandler);
-      completeAsyncRequest(asyncId, requestMap, results);
-
-      log.info("Index on shard: " + nodeName + " split into two successfully");
-
-      // apply buffered updates on sub-shards
-      for (int i = 0; i < subShardNames.size(); i++) {
-        String subShardName = subShardNames.get(i);
-
-        log.info("Applying buffered updates on : " + subShardName);
-
-        params = new ModifiableSolrParams();
-        params.set(CoreAdminParams.ACTION, CoreAdminAction.REQUESTAPPLYUPDATES.toString());
-        params.set(CoreAdminParams.NAME, subShardName);
-
-        setupAsyncRequest(asyncId, requestMap, params, nodeName);
-
-        sendShardRequest(nodeName, params, shardHandler);
-      }
-
-      collectShardResponses(results, true,
-          "SPLITSHARD failed while asking sub shard leaders to apply buffered updates",
-          shardHandler);
-
-      completeAsyncRequest(asyncId, requestMap, results);
-
-      log.info("Successfully applied buffered updates on : " + subShardNames);
-
-      // Replica creation for the new Slices
-
-      // look at the replication factor and see if it matches reality
-      // if it does not, find best nodes to create more cores
-
-      // TODO: Have replication factor decided in some other way instead of numShards for the parent
-
-      int repFactor = clusterState.getSlice(collectionName, slice).getReplicas().size();
-
-      // we need to look at every node and see how many cores it serves
-      // add our new cores to existing nodes serving the least number of cores
-      // but (for now) require that each core goes on a distinct node.
-
-      // TODO: add smarter options that look at the current number of cores per
-      // node?
-      // for now we just go random
-      Set<String> nodes = clusterState.getLiveNodes();
-      List<String> nodeList = new ArrayList<>(nodes.size());
-      nodeList.addAll(nodes);
-      
-      Collections.shuffle(nodeList);
-
-      // TODO: Have maxShardsPerNode param for this operation?
-
-      // Remove the node that hosts the parent shard for replica creation.
-      nodeList.remove(nodeName);
-      
-      // TODO: change this to handle sharding a slice into > 2 sub-shards.
-
-      for (int i = 1; i <= subSlices.size(); i++) {
-        Collections.shuffle(nodeList);
-        String sliceName = subSlices.get(i - 1);
-        for (int j = 2; j <= repFactor; j++) {
-          String subShardNodeName = nodeList.get((repFactor * (i - 1) + (j - 2)) % nodeList.size());
-          String shardName = collectionName + "_" + sliceName + "_replica" + (j);
-
-          log.info("Creating replica shard " + shardName + " as part of slice "
-              + sliceName + " of collection " + collectionName + " on "
-              + subShardNodeName);
-
-          HashMap<String, Object> propMap = new HashMap<>();
+          log.info("Adding replica " + subShardName + " as part of slice "
+              + subSlice + " of collection " + collectionName + " on "
+              + nodeName);
+          propMap = new HashMap<>();
           propMap.put(Overseer.QUEUE_OPERATION, ADDREPLICA.toLower());
           propMap.put(COLLECTION_PROP, collectionName);
-          propMap.put(SHARD_ID_PROP, sliceName);
-          propMap.put("node", subShardNodeName);
-          propMap.put(CoreAdminParams.NAME, shardName);
+          propMap.put(SHARD_ID_PROP, subSlice);
+          propMap.put("node", nodeName);
+          propMap.put(CoreAdminParams.NAME, subShardName);
           // copy over property params:
           for (String key : message.keySet()) {
             if (key.startsWith(COLL_PROP_PREFIX)) {
@@ -1502,68 +1559,199 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
             propMap.put(ASYNC, asyncId);
           }
           addReplica(clusterState, new ZkNodeProps(propMap), results);
+        }
 
-          String coreNodeName = waitForCoreNodeName(collectionName, subShardNodeName, shardName);
-          // wait for the replicas to be seen as active on sub shard leader
-          log.info("Asking sub shard leader to wait for: " + shardName + " to be alive on: " + subShardNodeName);
+        collectShardResponses(results, true,
+            "SPLITSHARD failed to create subshard leaders", shardHandler);
+
+        completeAsyncRequest(asyncId, requestMap, results);
+
+        for (String subShardName : subShardNames) {
+          // wait for parent leader to acknowledge the sub-shard core
+          log.info("Asking parent leader to wait for: " + subShardName + " to be alive on: " + nodeName);
+          String coreNodeName = waitForCoreNodeName(collectionName, nodeName, subShardName);
           CoreAdminRequest.WaitForState cmd = new CoreAdminRequest.WaitForState();
-          cmd.setCoreName(subShardNames.get(i-1));
-          cmd.setNodeName(subShardNodeName);
+          cmd.setCoreName(subShardName);
+          cmd.setNodeName(nodeName);
           cmd.setCoreNodeName(coreNodeName);
-          cmd.setState(ZkStateReader.RECOVERING);
+          cmd.setState(Replica.State.ACTIVE);
           cmd.setCheckLive(true);
           cmd.setOnlyIfLeader(true);
+
           ModifiableSolrParams p = new ModifiableSolrParams(cmd.getParams());
-
-          setupAsyncRequest(asyncId, requestMap, p, nodeName);
-
-          sendShardRequest(nodeName, p, shardHandler);
-
+          sendShardRequest(nodeName, p, shardHandler, asyncId, requestMap);
         }
+
+        collectShardResponses(results, true,
+            "SPLITSHARD timed out waiting for subshard leaders to come up", shardHandler);
+
+        completeAsyncRequest(asyncId, requestMap, results);
+
+        log.info("Successfully created all sub-shards for collection "
+            + collectionName + " parent shard: " + slice + " on: " + parentShardLeader);
+
+        log.info("Splitting shard " + parentShardLeader.getName() + " as part of slice "
+            + slice + " of collection " + collectionName + " on "
+            + parentShardLeader);
+
+        ModifiableSolrParams params = new ModifiableSolrParams();
+        params.set(CoreAdminParams.ACTION, CoreAdminAction.SPLIT.toString());
+        params.set(CoreAdminParams.CORE, parentShardLeader.getStr("core"));
+        for (int i = 0; i < subShardNames.size(); i++) {
+          String subShardName = subShardNames.get(i);
+          params.add(CoreAdminParams.TARGET_CORE, subShardName);
+        }
+        params.set(CoreAdminParams.RANGES, rangesStr);
+
+        sendShardRequest(parentShardLeader.getNodeName(), params, shardHandler, asyncId, requestMap);
+
+        collectShardResponses(results, true, "SPLITSHARD failed to invoke SPLIT core admin command",
+            shardHandler);
+        completeAsyncRequest(asyncId, requestMap, results);
+
+        log.info("Index on shard: " + nodeName + " split into two successfully");
+
+        // apply buffered updates on sub-shards
+        for (int i = 0; i < subShardNames.size(); i++) {
+          String subShardName = subShardNames.get(i);
+
+          log.info("Applying buffered updates on : " + subShardName);
+
+          params = new ModifiableSolrParams();
+          params.set(CoreAdminParams.ACTION, CoreAdminAction.REQUESTAPPLYUPDATES.toString());
+          params.set(CoreAdminParams.NAME, subShardName);
+
+          sendShardRequest(nodeName, params, shardHandler, asyncId, requestMap);
+        }
+
+        collectShardResponses(results, true,
+            "SPLITSHARD failed while asking sub shard leaders to apply buffered updates",
+            shardHandler);
+
+        completeAsyncRequest(asyncId, requestMap, results);
+
+        log.info("Successfully applied buffered updates on : " + subShardNames);
+
+        // Replica creation for the new Slices
+
+        // look at the replication factor and see if it matches reality
+        // if it does not, find best nodes to create more cores
+
+        // TODO: Have replication factor decided in some other way instead of numShards for the parent
+
+        int repFactor = clusterState.getSlice(collectionName, slice).getReplicas().size();
+
+        // we need to look at every node and see how many cores it serves
+        // add our new cores to existing nodes serving the least number of cores
+        // but (for now) require that each core goes on a distinct node.
+
+        // TODO: add smarter options that look at the current number of cores per
+        // node?
+        // for now we just go random
+        Set<String> nodes = clusterState.getLiveNodes();
+        List<String> nodeList = new ArrayList<>(nodes.size());
+        nodeList.addAll(nodes);
+
+        Collections.shuffle(nodeList, RANDOM);
+
+        // TODO: Have maxShardsPerNode param for this operation?
+
+        // Remove the node that hosts the parent shard for replica creation.
+        nodeList.remove(nodeName);
+
+        // TODO: change this to handle sharding a slice into > 2 sub-shards.
+
+        for (int i = 1; i <= subSlices.size(); i++) {
+          Collections.shuffle(nodeList, RANDOM);
+          String sliceName = subSlices.get(i - 1);
+          for (int j = 2; j <= repFactor; j++) {
+            String subShardNodeName = nodeList.get((repFactor * (i - 1) + (j - 2)) % nodeList.size());
+            String shardName = collectionName + "_" + sliceName + "_replica" + (j);
+
+            log.info("Creating replica shard " + shardName + " as part of slice "
+                + sliceName + " of collection " + collectionName + " on "
+                + subShardNodeName);
+
+            HashMap<String, Object> propMap = new HashMap<>();
+            propMap.put(Overseer.QUEUE_OPERATION, ADDREPLICA.toLower());
+            propMap.put(COLLECTION_PROP, collectionName);
+            propMap.put(SHARD_ID_PROP, sliceName);
+            propMap.put("node", subShardNodeName);
+            propMap.put(CoreAdminParams.NAME, shardName);
+            // copy over property params:
+            for (String key : message.keySet()) {
+              if (key.startsWith(COLL_PROP_PREFIX)) {
+                propMap.put(key, message.getStr(key));
+              }
+            }
+            // add async param
+            if (asyncId != null) {
+              propMap.put(ASYNC, asyncId);
+            }
+            addReplica(clusterState, new ZkNodeProps(propMap), results);
+
+            String coreNodeName = waitForCoreNodeName(collectionName, subShardNodeName, shardName);
+            // wait for the replicas to be seen as active on sub shard leader
+            log.info("Asking sub shard leader to wait for: " + shardName + " to be alive on: " + subShardNodeName);
+            CoreAdminRequest.WaitForState cmd = new CoreAdminRequest.WaitForState();
+            cmd.setCoreName(subShardNames.get(i - 1));
+            cmd.setNodeName(subShardNodeName);
+            cmd.setCoreNodeName(coreNodeName);
+            cmd.setState(Replica.State.RECOVERING);
+            cmd.setCheckLive(true);
+            cmd.setOnlyIfLeader(true);
+            ModifiableSolrParams p = new ModifiableSolrParams(cmd.getParams());
+
+            sendShardRequest(nodeName, p, shardHandler, asyncId, requestMap);
+
+          }
+        }
+
+        collectShardResponses(results, true,
+            "SPLITSHARD failed to create subshard replicas or timed out waiting for them to come up",
+            shardHandler);
+
+        completeAsyncRequest(asyncId, requestMap, results);
+
+        log.info("Successfully created all replica shards for all sub-slices " + subSlices);
+
+        commit(results, slice, parentShardLeader);
+
+        if (repFactor == 1) {
+          // switch sub shard states to 'active'
+          log.info("Replication factor is 1 so switching shard states");
+          DistributedQueue inQueue = Overseer.getInQueue(zkStateReader.getZkClient());
+          Map<String, Object> propMap = new HashMap<>();
+          propMap.put(Overseer.QUEUE_OPERATION, OverseerAction.UPDATESHARDSTATE.toLower());
+          propMap.put(slice, Slice.State.INACTIVE.toString());
+          for (String subSlice : subSlices) {
+            propMap.put(subSlice, Slice.State.ACTIVE.toString());
+          }
+          propMap.put(ZkStateReader.COLLECTION_PROP, collectionName);
+          ZkNodeProps m = new ZkNodeProps(propMap);
+          inQueue.offer(ZkStateReader.toJSON(m));
+        } else {
+          log.info("Requesting shard state be set to 'recovery'");
+          DistributedQueue inQueue = Overseer.getInQueue(zkStateReader.getZkClient());
+          Map<String, Object> propMap = new HashMap<>();
+          propMap.put(Overseer.QUEUE_OPERATION, OverseerAction.UPDATESHARDSTATE.toLower());
+          for (String subSlice : subSlices) {
+            propMap.put(subSlice, Slice.State.RECOVERY.toString());
+          }
+          propMap.put(ZkStateReader.COLLECTION_PROP, collectionName);
+          ZkNodeProps m = new ZkNodeProps(propMap);
+          inQueue.offer(ZkStateReader.toJSON(m));
+        }
+
+        return true;
+      } catch (SolrException e) {
+        throw e;
+      } catch (Exception e) {
+        log.error("Error executing split operation for collection: " + collectionName + " parent shard: " + slice, e);
+        throw new SolrException(ErrorCode.SERVER_ERROR, null, e);
       }
-
-      collectShardResponses(results, true,
-          "SPLITSHARD failed to create subshard replicas or timed out waiting for them to come up",
-          shardHandler);
-
-      completeAsyncRequest(asyncId, requestMap, results);
-
-      log.info("Successfully created all replica shards for all sub-slices " + subSlices);
-
-      commit(results, slice, parentShardLeader);
-
-      if (repFactor == 1) {
-        // switch sub shard states to 'active'
-        log.info("Replication factor is 1 so switching shard states");
-        DistributedQueue inQueue = Overseer.getInQueue(zkStateReader.getZkClient());
-        Map<String, Object> propMap = new HashMap<>();
-        propMap.put(Overseer.QUEUE_OPERATION, "updateshardstate");
-        propMap.put(slice, Slice.INACTIVE);
-        for (String subSlice : subSlices) {
-          propMap.put(subSlice, Slice.ACTIVE);
-        }
-        propMap.put(ZkStateReader.COLLECTION_PROP, collectionName);
-        ZkNodeProps m = new ZkNodeProps(propMap);
-        inQueue.offer(ZkStateReader.toJSON(m));
-      } else  {
-        log.info("Requesting shard state be set to 'recovery'");
-        DistributedQueue inQueue = Overseer.getInQueue(zkStateReader.getZkClient());
-        Map<String, Object> propMap = new HashMap<>();
-        propMap.put(Overseer.QUEUE_OPERATION, "updateshardstate");
-        for (String subSlice : subSlices) {
-          propMap.put(subSlice, Slice.RECOVERY);
-        }
-        propMap.put(ZkStateReader.COLLECTION_PROP, collectionName);
-        ZkNodeProps m = new ZkNodeProps(propMap);
-        inQueue.offer(ZkStateReader.toJSON(m));
-      }
-
-      return true;
-    } catch (SolrException e) {
-      throw e;
-    } catch (Exception e) {
-      log.error("Error executing split operation for collection: " + collectionName + " parent shard: " + slice, e);
-      throw new SolrException(ErrorCode.SERVER_ERROR, null, e);
+    } finally {
+      MDCUtils.cleanupMDC(previousMDCContext);
     }
   }
 
@@ -1584,36 +1772,31 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
 
 
   static UpdateResponse softCommit(String url) throws SolrServerException, IOException {
-    HttpSolrServer server = null;
-    try {
-      server = new HttpSolrServer(url);
-      server.setConnectionTimeout(30000);
-      server.setSoTimeout(120000);
+
+    try (HttpSolrClient client = new HttpSolrClient(url)) {
+      client.setConnectionTimeout(30000);
+      client.setSoTimeout(120000);
       UpdateRequest ureq = new UpdateRequest();
       ureq.setParams(new ModifiableSolrParams());
       ureq.setAction(AbstractUpdateRequest.ACTION.COMMIT, false, true, true);
-      return ureq.process(server);
-    } finally {
-      if (server != null) {
-        server.shutdown();
-      }
+      return ureq.process(client);
     }
   }
-  
+
   private String waitForCoreNodeName(String collectionName, String msgNodeName, String msgCore) {
     int retryCount = 320;
     while (retryCount-- > 0) {
       Map<String,Slice> slicesMap = zkStateReader.getClusterState()
           .getSlicesMap(collectionName);
       if (slicesMap != null) {
-        
+
         for (Slice slice : slicesMap.values()) {
           for (Replica replica : slice.getReplicas()) {
             // TODO: for really large clusters, we could 'index' on this
-            
+
             String nodeName = replica.getStr(ZkStateReader.NODE_NAME_PROP);
             String core = replica.getStr(ZkStateReader.CORE_NAME_PROP);
-            
+
             if (nodeName.equals(msgNodeName) && core.equals(msgCore)) {
               return replica.getName();
             }
@@ -1675,67 +1858,73 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
   }
 
   private void deleteShard(ClusterState clusterState, ZkNodeProps message, NamedList results) {
-    log.info("Delete shard invoked");
     String collection = message.getStr(ZkStateReader.COLLECTION_PROP);
-
     String sliceId = message.getStr(ZkStateReader.SHARD_ID_PROP);
-    Slice slice = clusterState.getSlice(collection, sliceId);
-    
-    if (slice == null) {
-      if(clusterState.hasCollection(collection)) {
-        throw new SolrException(ErrorCode.BAD_REQUEST,
-            "No shard with name " + sliceId + " exists for collection " + collection);
-      } else {
-        throw new SolrException(ErrorCode.BAD_REQUEST,
-            "No collection with the specified name exists: " + collection);
-      }
-    }
-    // For now, only allow for deletions of Inactive slices or custom hashes (range==null).
-    // TODO: Add check for range gaps on Slice deletion
-    if (!(slice.getRange() == null || slice.getState().equals(Slice.INACTIVE)
-        || slice.getState().equals(Slice.RECOVERY) || slice.getState().equals(Slice.CONSTRUCTION))) {
-      throw new SolrException(ErrorCode.BAD_REQUEST,
-          "The slice: " + slice.getName() + " is currently "
-          + slice.getState() + ". Only non-active (or custom-hashed) slices can be deleted.");
-    }
-    ShardHandler shardHandler = shardHandlerFactory.getShardHandler();
-
+    Map previousMDCContext = MDC.getCopyOfContextMap();
+    MDCUtils.setMDC(collection, sliceId, null, null);
     try {
-      ModifiableSolrParams params = new ModifiableSolrParams();
-      params.set(CoreAdminParams.ACTION, CoreAdminAction.UNLOAD.toString());
-      params.set(CoreAdminParams.DELETE_INDEX, "true");
-      sliceCmd(clusterState, params, null, slice, shardHandler);
+      log.info("Delete shard invoked");
+      Slice slice = clusterState.getSlice(collection, sliceId);
 
-      processResponses(results, shardHandler);
-
-      ZkNodeProps m = new ZkNodeProps(Overseer.QUEUE_OPERATION,
-          Overseer.REMOVESHARD, ZkStateReader.COLLECTION_PROP, collection,
-          ZkStateReader.SHARD_ID_PROP, sliceId);
-      Overseer.getInQueue(zkStateReader.getZkClient()).offer(ZkStateReader.toJSON(m));
-
-      // wait for a while until we don't see the shard
-      long now = System.nanoTime();
-      long timeout = now + TimeUnit.NANOSECONDS.convert(30, TimeUnit.SECONDS);;
-      boolean removed = false;
-      while (System.nanoTime() < timeout) {
-        Thread.sleep(100);
-        removed = zkStateReader.getClusterState().getSlice(collection, sliceId) == null;
-        if (removed) {
-          Thread.sleep(100); // just a bit of time so it's more likely other readers see on return
-          break;
+      if (slice == null) {
+        if (clusterState.hasCollection(collection)) {
+          throw new SolrException(ErrorCode.BAD_REQUEST,
+              "No shard with name " + sliceId + " exists for collection " + collection);
+        } else {
+          throw new SolrException(ErrorCode.BAD_REQUEST,
+              "No collection with the specified name exists: " + collection);
         }
       }
-      if (!removed) {
-        throw new SolrException(ErrorCode.SERVER_ERROR,
-            "Could not fully remove collection: " + collection + " shard: " + sliceId);
+      // For now, only allow for deletions of Inactive slices or custom hashes (range==null).
+      // TODO: Add check for range gaps on Slice deletion
+      final Slice.State state = slice.getState();
+      if (!(slice.getRange() == null || state == Slice.State.INACTIVE
+          || state == Slice.State.RECOVERY || state == Slice.State.CONSTRUCTION)) {
+        throw new SolrException(ErrorCode.BAD_REQUEST,
+            "The slice: " + slice.getName() + " is currently "
+                + state + ". Only non-active (or custom-hashed) slices can be deleted.");
       }
+      ShardHandler shardHandler = shardHandlerFactory.getShardHandler();
 
-      log.info("Successfully deleted collection: " + collection + ", shard: " + sliceId);
+      try {
+        ModifiableSolrParams params = new ModifiableSolrParams();
+        params.set(CoreAdminParams.ACTION, CoreAdminAction.UNLOAD.toString());
+        params.set(CoreAdminParams.DELETE_INDEX, "true");
+        sliceCmd(clusterState, params, null, slice, shardHandler);
 
-    } catch (SolrException e) {
-      throw e;
-    } catch (Exception e) {
-      throw new SolrException(ErrorCode.SERVER_ERROR, "Error executing delete operation for collection: " + collection + " shard: " + sliceId, e);
+        processResponses(results, shardHandler);
+
+        ZkNodeProps m = new ZkNodeProps(Overseer.QUEUE_OPERATION,
+            DELETESHARD.toLower(), ZkStateReader.COLLECTION_PROP, collection,
+            ZkStateReader.SHARD_ID_PROP, sliceId);
+        Overseer.getInQueue(zkStateReader.getZkClient()).offer(ZkStateReader.toJSON(m));
+
+        // wait for a while until we don't see the shard
+        long now = System.nanoTime();
+        long timeout = now + TimeUnit.NANOSECONDS.convert(30, TimeUnit.SECONDS);
+        boolean removed = false;
+        while (System.nanoTime() < timeout) {
+          Thread.sleep(100);
+          removed = zkStateReader.getClusterState().getSlice(collection, sliceId) == null;
+          if (removed) {
+            Thread.sleep(100); // just a bit of time so it's more likely other readers see on return
+            break;
+          }
+        }
+        if (!removed) {
+          throw new SolrException(ErrorCode.SERVER_ERROR,
+              "Could not fully remove collection: " + collection + " shard: " + sliceId);
+        }
+
+        log.info("Successfully deleted collection: " + collection + ", shard: " + sliceId);
+
+      } catch (SolrException e) {
+        throw e;
+      } catch (Exception e) {
+        throw new SolrException(ErrorCode.SERVER_ERROR, "Error executing delete operation for collection: " + collection + " shard: " + sliceId, e);
+      }
+    } finally {
+      MDCUtils.cleanupMDC(previousMDCContext);
     }
   }
 
@@ -1793,8 +1982,8 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     if (clusterState.hasCollection(tempSourceCollectionName)) {
       log.info("Deleting temporary collection: " + tempSourceCollectionName);
       Map<String, Object> props = ZkNodeProps.makeMap(
-          Overseer.QUEUE_OPERATION, DELETECOLLECTION,
-          "name", tempSourceCollectionName);
+          Overseer.QUEUE_OPERATION, DELETE.toLower(),
+          NAME, tempSourceCollectionName);
 
       try {
         deleteCollection(new ZkNodeProps(props), results);
@@ -1829,9 +2018,8 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     params.set(CoreAdminParams.ACTION, CoreAdminAction.REQUESTBUFFERUPDATES.toString());
     params.set(CoreAdminParams.NAME, targetLeader.getStr("core"));
     String nodeName = targetLeader.getNodeName();
-    setupAsyncRequest(asyncId, requestMap, params, nodeName);
 
-    sendShardRequest(targetLeader.getNodeName(), params, shardHandler);
+    sendShardRequest(targetLeader.getNodeName(), params, shardHandler, asyncId, requestMap);
 
     collectShardResponses(results, true, "MIGRATE failed to request node to buffer updates",
         shardHandler);
@@ -1839,7 +2027,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     completeAsyncRequest(asyncId, requestMap, results);
 
     ZkNodeProps m = new ZkNodeProps(
-        Overseer.QUEUE_OPERATION, Overseer.ADD_ROUTING_RULE,
+        Overseer.QUEUE_OPERATION, OverseerAction.ADDROUTINGRULE.toLower(),
         COLLECTION_PROP, sourceCollection.getName(),
         SHARD_ID_PROP, sourceSlice.getName(),
         "routeKey", SolrIndexSplitter.getRouteKey(splitKey) + "!",
@@ -1878,8 +2066,8 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     // create a temporary collection with just one node on the shard leader
     String configName = zkStateReader.readConfigName(sourceCollection.getName());
     Map<String, Object> props = ZkNodeProps.makeMap(
-        Overseer.QUEUE_OPERATION, CREATECOLLECTION,
-        "name", tempSourceCollectionName,
+        Overseer.QUEUE_OPERATION, CREATE.toLower(),
+        NAME, tempSourceCollectionName,
         ZkStateReader.REPLICATION_FACTOR, 1,
         NUM_SLICES, 1,
         COLL_CONF, configName,
@@ -1905,10 +2093,11 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     cmd.setCoreName(tempCollectionReplica1);
     cmd.setNodeName(sourceLeader.getNodeName());
     cmd.setCoreNodeName(coreNodeName);
-    cmd.setState(ZkStateReader.ACTIVE);
+    cmd.setState(Replica.State.ACTIVE);
     cmd.setCheckLive(true);
     cmd.setOnlyIfLeader(true);
-    sendShardRequest(tempSourceLeader.getNodeName(), new ModifiableSolrParams(cmd.getParams()), shardHandler);
+    // we don't want this to happen asynchronously
+    sendShardRequest(tempSourceLeader.getNodeName(), new ModifiableSolrParams(cmd.getParams()), shardHandler, null, null);
 
     collectShardResponses(results, true,
         "MIGRATE failed to create temp collection leader or timed out waiting for it to come up",
@@ -1924,9 +2113,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
 
     String tempNodeName = sourceLeader.getNodeName();
 
-    setupAsyncRequest(asyncId, requestMap, params, tempNodeName);
-
-    sendShardRequest(tempNodeName, params, shardHandler);
+    sendShardRequest(tempNodeName, params, shardHandler, asyncId, requestMap);
     collectShardResponses(results, true, "MIGRATE failed to invoke SPLIT core admin command", shardHandler);
     completeAsyncRequest(asyncId, requestMap, results);
 
@@ -1965,14 +2152,12 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     cmd.setCoreName(tempSourceLeader.getStr("core"));
     cmd.setNodeName(targetLeader.getNodeName());
     cmd.setCoreNodeName(coreNodeName);
-    cmd.setState(ZkStateReader.ACTIVE);
+    cmd.setState(Replica.State.ACTIVE);
     cmd.setCheckLive(true);
     cmd.setOnlyIfLeader(true);
     params = new ModifiableSolrParams(cmd.getParams());
 
-    setupAsyncRequest(asyncId, requestMap, params, tempSourceLeader.getNodeName());
-
-    sendShardRequest(tempSourceLeader.getNodeName(), params, shardHandler);
+    sendShardRequest(tempSourceLeader.getNodeName(), params, shardHandler, asyncId, requestMap);
 
     collectShardResponses(results, true,
         "MIGRATE failed to create temp collection replica or timed out waiting for them to come up",
@@ -1987,9 +2172,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     params.set(CoreAdminParams.CORE, targetLeader.getStr("core"));
     params.set(CoreAdminParams.SRC_CORE, tempCollectionReplica2);
 
-    setupAsyncRequest(asyncId, requestMap, params, sourceLeader.getNodeName());
-
-    sendShardRequest(targetLeader.getNodeName(), params, shardHandler);
+    sendShardRequest(targetLeader.getNodeName(), params, shardHandler, asyncId, requestMap);
     collectShardResponses(results, true,
         "MIGRATE failed to merge " + tempCollectionReplica2 +
             " to " + targetLeader.getStr("core") + " on node: " + targetLeader.getNodeName(),
@@ -2001,9 +2184,8 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     params = new ModifiableSolrParams();
     params.set(CoreAdminParams.ACTION, CoreAdminAction.REQUESTAPPLYUPDATES.toString());
     params.set(CoreAdminParams.NAME, targetLeader.getStr("core"));
-    setupAsyncRequest(asyncId, requestMap, params, targetLeader.getNodeName());
 
-    sendShardRequest(targetLeader.getNodeName(), params, shardHandler);
+    sendShardRequest(targetLeader.getNodeName(), params, shardHandler, asyncId, requestMap);
     collectShardResponses(results, true,
         "MIGRATE failed to request node to apply buffered updates",
         shardHandler);
@@ -2013,8 +2195,8 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     try {
       log.info("Deleting temporary collection: " + tempSourceCollectionName);
       props = ZkNodeProps.makeMap(
-          Overseer.QUEUE_OPERATION, DELETECOLLECTION,
-          "name", tempSourceCollectionName);
+          Overseer.QUEUE_OPERATION, DELETE.toLower(),
+          NAME, tempSourceCollectionName);
       deleteCollection(new ZkNodeProps(props), results);
     } catch (Exception e) {
       log.error("Unable to delete temporary collection: " + tempSourceCollectionName
@@ -2026,14 +2208,6 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     if(asyncId != null) {
       waitForAsyncCallsToComplete(requestMap, results);
       requestMap.clear();
-    }
-  }
-
-  private void setupAsyncRequest(String asyncId, HashMap<String, String> requestMap, ModifiableSolrParams params, String nodeName) {
-    if(asyncId != null) {
-      String coreAdminAsyncId = asyncId + Math.abs(System.nanoTime());
-      params.set(ASYNC, coreAdminAsyncId);
-      requestMap.put(nodeName, coreAdminAsyncId);
     }
   }
 
@@ -2051,7 +2225,13 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     }
   }
 
-  private void sendShardRequest(String nodeName, ModifiableSolrParams params, ShardHandler shardHandler) {
+  private void sendShardRequest(String nodeName, ModifiableSolrParams params, ShardHandler shardHandler, String asyncId, Map<String, String> requestMap) {
+    if (asyncId != null) {
+      String coreAdminAsyncId = asyncId + Math.abs(System.nanoTime());
+      params.set(ASYNC, coreAdminAsyncId);
+      requestMap.put(nodeName, coreAdminAsyncId);
+    }
+
     ShardRequest sreq = new ShardRequest();
     params.set("qt", adminPath);
     sreq.purpose = 1;
@@ -2072,16 +2252,47 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     }
   }
 
+  private static List<String> getLiveOrLiveAndCreateNodeSetList(final Set<String> liveNodes, final ZkNodeProps message, final Random random) {
+    // TODO: add smarter options that look at the current number of cores per
+    // node?
+    // for now we just go random (except when createNodeSet and createNodeSet.shuffle=false are passed in)
+
+    List<String> nodeList;
+
+    final String createNodeSetStr = message.getStr(CREATE_NODE_SET);
+    final List<String> createNodeList = (createNodeSetStr == null)?null:StrUtils.splitSmart(createNodeSetStr, ",", true);
+
+    if (createNodeList != null) {
+      nodeList = new ArrayList<>(createNodeList);
+      nodeList.retainAll(liveNodes);
+      if (message.getBool(CREATE_NODE_SET_SHUFFLE, CREATE_NODE_SET_SHUFFLE_DEFAULT)) {
+        Collections.shuffle(nodeList, random);
+      }
+    } else {
+      nodeList = new ArrayList<>(liveNodes);
+      Collections.shuffle(nodeList, random);
+    }
+
+    return nodeList;
+  }
+
   private void createCollection(ClusterState clusterState, ZkNodeProps message, NamedList results) throws KeeperException, InterruptedException {
-    String collectionName = message.getStr("name");
+    String collectionName = message.getStr(NAME);
     if (clusterState.hasCollection(collectionName)) {
       throw new SolrException(ErrorCode.BAD_REQUEST, "collection already exists: " + collectionName);
     }
-    
+
+    String configName = getConfigName(collectionName, message);
+    if (configName == null) {
+      throw new SolrException(ErrorCode.BAD_REQUEST, "No config set found to associate with the collection.");
+    } else if (!validateConfig(configName)) {
+      throw new SolrException(ErrorCode.BAD_REQUEST, "Can not find the specified config set: " + configName);
+    }
+
     try {
       // look at the replication factor and see if it matches reality
       // if it does not, find best nodes to create more cores
-      
+
       int repFactor = message.getInt(ZkStateReader.REPLICATION_FACTOR, 1);
 
       ShardHandler shardHandler = shardHandlerFactory.getShardHandler();
@@ -2092,46 +2303,31 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
       String router = message.getStr("router.name", DocRouter.DEFAULT_NAME);
       List<String> shardNames = new ArrayList<>();
       if(ImplicitDocRouter.NAME.equals(router)){
-        Overseer.getShardNames(shardNames, message.getStr("shards",null));
+        ClusterStateMutator.getShardNames(shardNames, message.getStr("shards", null));
         numSlices = shardNames.size();
       } else {
-        Overseer.getShardNames(numSlices,shardNames);
-      }
-
-      if (numSlices == null ) {
-        throw new SolrException(ErrorCode.BAD_REQUEST, NUM_SLICES + " is a required param");
+        if (numSlices == null ) {
+          throw new SolrException(ErrorCode.BAD_REQUEST, NUM_SLICES + " is a required param (when using CompositeId router).");
+        }
+        ClusterStateMutator.getShardNames(numSlices, shardNames);
       }
 
       int maxShardsPerNode = message.getInt(ZkStateReader.MAX_SHARDS_PER_NODE, 1);
-      String createNodeSetStr; 
-      List<String> createNodeList = ((createNodeSetStr = message.getStr(CREATE_NODE_SET)) == null)?null:StrUtils.splitSmart(createNodeSetStr, ",", true);
-      
+
       if (repFactor <= 0) {
         throw new SolrException(ErrorCode.BAD_REQUEST, ZkStateReader.REPLICATION_FACTOR + " must be greater than 0");
       }
-      
+
       if (numSlices <= 0) {
         throw new SolrException(ErrorCode.BAD_REQUEST, NUM_SLICES + " must be > 0");
       }
-      
+
       // we need to look at every node and see how many cores it serves
       // add our new cores to existing nodes serving the least number of cores
       // but (for now) require that each core goes on a distinct node.
-      
-      // TODO: add smarter options that look at the current number of cores per
-      // node?
-      // for now we just go random
-      Set<String> nodes = clusterState.getLiveNodes();
-      List<String> nodeList = new ArrayList<>(nodes.size());
-      nodeList.addAll(nodes);
-      if (createNodeList != null) nodeList.retainAll(createNodeList);
-      Collections.shuffle(nodeList);
-      
-      if (nodeList.size() <= 0) {
-        throw new SolrException(ErrorCode.BAD_REQUEST, "Cannot create collection " + collectionName
-            + ". No live Solr-instances" + ((createNodeList != null)?" among Solr-instances specified in " + CREATE_NODE_SET + ":" + createNodeSetStr:""));
-      }
-      
+
+      final List<String> nodeList = getLiveOrLiveAndCreateNodeSetList(clusterState.getLiveNodes(), message, RANDOM);
+
       if (repFactor > nodeList.size()) {
         log.warn("Specified "
             + ZkStateReader.REPLICATION_FACTOR
@@ -2139,26 +2335,28 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
             + repFactor
             + " on collection "
             + collectionName
-            + " is higher than or equal to the number of Solr instances currently live or part of your " + CREATE_NODE_SET + "("
+            + " is higher than or equal to the number of Solr instances currently live or live and part of your " + CREATE_NODE_SET + "("
             + nodeList.size()
-            + "). Its unusual to run two replica of the same slice on the same Solr-instance.");
+            + "). It's unusual to run two replica of the same slice on the same Solr-instance.");
       }
-      
+
       int maxShardsAllowedToCreate = maxShardsPerNode * nodeList.size();
       int requestedShardsToCreate = numSlices * repFactor;
       if (maxShardsAllowedToCreate < requestedShardsToCreate) {
         throw new SolrException(ErrorCode.BAD_REQUEST, "Cannot create collection " + collectionName + ". Value of "
             + ZkStateReader.MAX_SHARDS_PER_NODE + " is " + maxShardsPerNode
-            + ", and the number of live nodes is " + nodeList.size()
+            + ", and the number of nodes currently live or live and part of your "+CREATE_NODE_SET+" is " + nodeList.size()
             + ". This allows a maximum of " + maxShardsAllowedToCreate
             + " to be created. Value of " + NUM_SLICES + " is " + numSlices
             + " and value of " + ZkStateReader.REPLICATION_FACTOR + " is " + repFactor
             + ". This requires " + requestedShardsToCreate
             + " shards to be created (higher than the allowed number)");
       }
+
+      Map<Position, String> positionVsNodes = identifyNodes(clusterState, nodeList, message, shardNames, repFactor);
       boolean isLegacyCloud =  Overseer.isLegacy(zkStateReader.getClusterProps());
 
-      String configName = createConfNode(collectionName, message, isLegacyCloud);
+      createConfNode(configName, collectionName, isLegacyCloud);
 
       Overseer.getInQueue(zkStateReader.getZkClient()).offer(ZkStateReader.toJSON(message));
 
@@ -2167,68 +2365,69 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
       boolean created = false;
       while (System.nanoTime() < waitUntil) {
         Thread.sleep(100);
-        created = zkStateReader.getClusterState().getCollections().contains(message.getStr("name"));
+        created = zkStateReader.getClusterState().getCollections().contains(message.getStr(NAME));
         if(created) break;
       }
       if (!created)
-        throw new SolrException(ErrorCode.SERVER_ERROR, "Could not fully createcollection: " + message.getStr("name"));
+        throw new SolrException(ErrorCode.SERVER_ERROR, "Could not fully create collection: " + message.getStr(NAME));
 
       // For tracking async calls.
       HashMap<String, String> requestMap = new HashMap<String, String>();
 
-      log.info("Creating SolrCores for new collection {}, shardNames {} , replicationFactor : {}",
-          collectionName, shardNames, repFactor);
+
+      log.info(formatString("Creating SolrCores for new collection {0}, shardNames {1} , replicationFactor : {2}",
+          collectionName, shardNames, repFactor));
       Map<String ,ShardRequest> coresToCreate = new LinkedHashMap<>();
-      for (int i = 1; i <= shardNames.size(); i++) {
-        String sliceName = shardNames.get(i-1);
-        for (int j = 1; j <= repFactor; j++) {
-          String nodeName = nodeList.get((repFactor * (i - 1) + (j - 1)) % nodeList.size());
-          String coreName = collectionName + "_" + sliceName + "_replica" + j;
-          log.info("Creating shard " + coreName + " as part of slice "
-              + sliceName + " of collection " + collectionName + " on "
-              + nodeName);
+      for (Map.Entry<Position, String> e : positionVsNodes.entrySet()) {
+        Position position = e.getKey();
+        String nodeName = e.getValue();
+        String coreName = collectionName + "_" + position.shard + "_replica" + (position.index + 1);
+        log.info(formatString("Creating core {0} as part of shard {1} of collection {2} on {3}"
+            , coreName, position.shard, collectionName, nodeName));
 
 
-          String baseUrl = zkStateReader.getBaseUrlForNodeName(nodeName);
-          //in the new mode, create the replica in clusterstate prior to creating the core.
-          // Otherwise the core creation fails
-          if(!isLegacyCloud){
-            ZkNodeProps props = new ZkNodeProps(
-                Overseer.QUEUE_OPERATION, CollectionParams.CollectionAction.ADDREPLICA.toString(),
-                ZkStateReader.COLLECTION_PROP, collectionName,
-                ZkStateReader.SHARD_ID_PROP, sliceName,
-                ZkStateReader.CORE_NAME_PROP, coreName,
-                ZkStateReader.STATE_PROP, ZkStateReader.DOWN,
-                ZkStateReader.BASE_URL_PROP,baseUrl);
-                Overseer.getInQueue(zkStateReader.getZkClient()).offer(ZkStateReader.toJSON(props));
-          }
+        String baseUrl = zkStateReader.getBaseUrlForNodeName(nodeName);
+        //in the new mode, create the replica in clusterstate prior to creating the core.
+        // Otherwise the core creation fails
+        if (!isLegacyCloud) {
+          ZkNodeProps props = new ZkNodeProps(
+              Overseer.QUEUE_OPERATION, ADDREPLICA.toString(),
+              ZkStateReader.COLLECTION_PROP, collectionName,
+              ZkStateReader.SHARD_ID_PROP, position.shard,
+              ZkStateReader.CORE_NAME_PROP, coreName,
+              ZkStateReader.STATE_PROP, Replica.State.DOWN.toString(),
+              ZkStateReader.BASE_URL_PROP, baseUrl);
+          Overseer.getInQueue(zkStateReader.getZkClient()).offer(ZkStateReader.toJSON(props));
+        }
 
-          // Need to create new params for each request
-          ModifiableSolrParams params = new ModifiableSolrParams();
-          params.set(CoreAdminParams.ACTION, CoreAdminAction.CREATE.toString());
+        // Need to create new params for each request
+        ModifiableSolrParams params = new ModifiableSolrParams();
+        params.set(CoreAdminParams.ACTION, CoreAdminAction.CREATE.toString());
 
-          params.set(CoreAdminParams.NAME, coreName);
-          params.set(COLL_CONF, configName);
-          params.set(CoreAdminParams.COLLECTION, collectionName);
-          params.set(CoreAdminParams.SHARD, sliceName);
-          params.set(ZkStateReader.NUM_SHARDS_PROP, numSlices);
+        params.set(CoreAdminParams.NAME, coreName);
+        params.set(COLL_CONF, configName);
+        params.set(CoreAdminParams.COLLECTION, collectionName);
+        params.set(CoreAdminParams.SHARD, position.shard);
+        params.set(ZkStateReader.NUM_SHARDS_PROP, numSlices);
 
-          setupAsyncRequest(async, requestMap, params, nodeName);
+        if (async != null) {
+          String coreAdminAsyncId = async + Math.abs(System.nanoTime());
+          params.add(ASYNC, coreAdminAsyncId);
+          requestMap.put(nodeName, coreAdminAsyncId);
+        }
+        addPropertyParams(message, params);
 
-          addPropertyParams(message, params);
+        ShardRequest sreq = new ShardRequest();
+        params.set("qt", adminPath);
+        sreq.purpose = 1;
+        sreq.shards = new String[]{baseUrl};
+        sreq.actualShards = sreq.shards;
+        sreq.params = params;
 
-          ShardRequest sreq = new ShardRequest();
-          params.set("qt", adminPath);
-          sreq.purpose = 1;
-          sreq.shards = new String[] {baseUrl};
-          sreq.actualShards = sreq.shards;
-          sreq.params = params;
-
-          if(isLegacyCloud) {
-            shardHandler.submit(sreq, sreq.shards[0], sreq.params);
-          } else {
-            coresToCreate.put(coreName, sreq);
-          }
+        if (isLegacyCloud) {
+          shardHandler.submit(sreq, sreq.shards[0], sreq.params);
+        } else {
+          coresToCreate.put(coreName, sreq);
         }
       }
 
@@ -2254,6 +2453,57 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     } catch (Exception ex) {
       throw new SolrException(ErrorCode.SERVER_ERROR, null, ex);
     }
+  }
+
+  private Map<Position, String> identifyNodes(ClusterState clusterState,
+                                              List<String> nodeList,
+                                              ZkNodeProps message,
+                                              List<String> shardNames,
+                                              int repFactor) throws IOException {
+    List<Map> maps = (List) message.get("rule");
+    if (maps == null) {
+      int i = 0;
+      Map<Position, String> result = new HashMap<>();
+      for (String aShard : shardNames) {
+        for (int j = 0; j < repFactor; j++){
+          result.put(new Position(aShard, j), nodeList.get(i % nodeList.size()));
+          i++;
+        }
+      }
+      return result;
+    }
+
+    List<Rule> rules = new ArrayList<>();
+    for (Object map : maps) rules.add(new Rule((Map) map));
+
+    Map<String, Integer> sharVsReplicaCount = new HashMap<>();
+
+    for (String shard : shardNames) sharVsReplicaCount.put(shard, repFactor);
+    maps = (List<Map>) message.get("snitch");
+    List snitchList = maps == null? Collections.emptyList(): maps;
+    ReplicaAssigner replicaAssigner = new ReplicaAssigner(rules,
+        sharVsReplicaCount,
+        snitchList,
+        new HashMap<>(),//this is a new collection. So, there are no nodes in any shard
+        nodeList,
+        overseer.getZkController().getCoreContainer(),
+        clusterState);
+
+    Map<Position, String> nodeMappings = replicaAssigner.getNodeMappings();
+    if(nodeMappings == null){
+      String msg = "Could not identify nodes matching the rules " + rules ;
+      if(!replicaAssigner.failedNodes.isEmpty()){
+        Map<String, String> failedNodes = new HashMap<>();
+        for (Map.Entry<String, SnitchContext> e : replicaAssigner.failedNodes.entrySet()) {
+          failedNodes.put(e.getKey(), e.getValue().getErrMsg());
+        }
+        msg+=" Some nodes where excluded from assigning replicas because tags could not be obtained from them "+ failedNodes;
+      }
+      msg+= ZkStateReader.toJSONString(replicaAssigner.getNodeVsTags());
+
+      throw new SolrException(ErrorCode.BAD_REQUEST, msg);
+    }
+    return nodeMappings;
   }
 
   private Map<String, Replica> waitToSeeReplicasInState(String collectionName, Collection<String> coreNames) throws InterruptedException {
@@ -2290,98 +2540,103 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     String node = message.getStr("node");
     String shard = message.getStr(SHARD_ID_PROP);
     String coreName = message.getStr(CoreAdminParams.NAME);
-    String asyncId = message.getStr("async");
+    Map previousMDCContext = MDC.getCopyOfContextMap();
+    MDCUtils.setMDC(collection, shard, null, coreName);
+    try {
+      String asyncId = message.getStr("async");
 
-    DocCollection coll = clusterState.getCollection(collection);
-    if (coll == null) {
-      throw new SolrException(ErrorCode.BAD_REQUEST, "Collection: " + collection + " does not exist");
-    }
-    if (coll.getSlice(shard) == null) {
-      throw new SolrException(ErrorCode.BAD_REQUEST,
-          "Collection: " + collection + " shard: " + shard + " does not exist");
-    }
-    ShardHandler shardHandler = shardHandlerFactory.getShardHandler();
+      DocCollection coll = clusterState.getCollection(collection);
+      if (coll == null) {
+        throw new SolrException(ErrorCode.BAD_REQUEST, "Collection: " + collection + " does not exist");
+      }
+      if (coll.getSlice(shard) == null) {
+        throw new SolrException(ErrorCode.BAD_REQUEST,
+            "Collection: " + collection + " shard: " + shard + " does not exist");
+      }
+      ShardHandler shardHandler = shardHandlerFactory.getShardHandler();
 
-    if (node == null) {
-      node = getNodesForNewShard(clusterState, collection, coll.getSlices().size(), coll.getInt(ZkStateReader.MAX_SHARDS_PER_NODE, 1), coll.getInt(ZkStateReader.REPLICATION_FACTOR, 1), null).get(0).nodeName;
-      log.info("Node not provided, Identified {} for creating new replica", node);
-    }
+      if (node == null) {
+        node = getNodesForNewShard(clusterState, collection, coll.getSlices().size(), coll.getInt(ZkStateReader.MAX_SHARDS_PER_NODE, 1), coll.getInt(ZkStateReader.REPLICATION_FACTOR, 1), null).get(0).nodeName;
+        log.info("Node not provided, Identified {} for creating new replica", node);
+      }
 
 
-    if (!clusterState.liveNodesContain(node))  {
-      throw new SolrException(ErrorCode.BAD_REQUEST, "Node: " + node + " is not live");
-    }
-    if (coreName == null) {
-      // assign a name to this core
-      Slice slice = coll.getSlice(shard);
-      int replicaNum = slice.getReplicas().size();
-      for (;;)  {
-        String replicaName = collection + "_" + shard + "_replica" + replicaNum;
-        boolean exists = false;
-        for (Replica replica : slice.getReplicas()) {
-          if (replicaName.equals(replica.getStr("core"))) {
-            exists = true;
-            break;
+      if (!clusterState.liveNodesContain(node)) {
+        throw new SolrException(ErrorCode.BAD_REQUEST, "Node: " + node + " is not live");
+      }
+      if (coreName == null) {
+        // assign a name to this core
+        Slice slice = coll.getSlice(shard);
+        int replicaNum = slice.getReplicas().size();
+        for (; ; ) {
+          String replicaName = collection + "_" + shard + "_replica" + replicaNum;
+          boolean exists = false;
+          for (Replica replica : slice.getReplicas()) {
+            if (replicaName.equals(replica.getStr("core"))) {
+              exists = true;
+              break;
+            }
           }
+          if (exists) replicaNum++;
+          else break;
         }
-        if (exists) replicaNum++;
-        else break;
+        coreName = collection + "_" + shard + "_replica" + replicaNum;
       }
-      coreName = collection + "_" + shard + "_replica" + replicaNum;
-    }
-    ModifiableSolrParams params = new ModifiableSolrParams();
+      ModifiableSolrParams params = new ModifiableSolrParams();
 
-    if(!Overseer.isLegacy(zkStateReader.getClusterProps())){
-      ZkNodeProps props = new ZkNodeProps(
-          Overseer.QUEUE_OPERATION, ADDREPLICA.toString(),
-          ZkStateReader.COLLECTION_PROP, collection,
-          ZkStateReader.SHARD_ID_PROP, shard,
-          ZkStateReader.CORE_NAME_PROP, coreName,
-          ZkStateReader.STATE_PROP, ZkStateReader.DOWN,
-          ZkStateReader.BASE_URL_PROP,zkStateReader.getBaseUrlForNodeName(node));
-      Overseer.getInQueue(zkStateReader.getZkClient()).offer(ZkStateReader.toJSON(props));
-      params.set(CoreAdminParams.CORE_NODE_NAME, waitToSeeReplicasInState(collection, Collections.singletonList(coreName)).get(coreName).getName());
-    }
+      if (!Overseer.isLegacy(zkStateReader.getClusterProps())) {
+        ZkNodeProps props = new ZkNodeProps(
+            Overseer.QUEUE_OPERATION, ADDREPLICA.toLower(),
+            ZkStateReader.COLLECTION_PROP, collection,
+            ZkStateReader.SHARD_ID_PROP, shard,
+            ZkStateReader.CORE_NAME_PROP, coreName,
+            ZkStateReader.STATE_PROP, Replica.State.DOWN.toString(),
+            ZkStateReader.BASE_URL_PROP, zkStateReader.getBaseUrlForNodeName(node));
+        Overseer.getInQueue(zkStateReader.getZkClient()).offer(ZkStateReader.toJSON(props));
+        params.set(CoreAdminParams.CORE_NODE_NAME, waitToSeeReplicasInState(collection, Collections.singletonList(coreName)).get(coreName).getName());
+      }
 
 
-    String configName = zkStateReader.readConfigName(collection);
-    String routeKey = message.getStr(ShardParams._ROUTE_);
-    String dataDir = message.getStr(CoreAdminParams.DATA_DIR);
-    String instanceDir = message.getStr(CoreAdminParams.INSTANCE_DIR);
+      String configName = zkStateReader.readConfigName(collection);
+      String routeKey = message.getStr(ShardParams._ROUTE_);
+      String dataDir = message.getStr(CoreAdminParams.DATA_DIR);
+      String instanceDir = message.getStr(CoreAdminParams.INSTANCE_DIR);
 
-    params.set(CoreAdminParams.ACTION, CoreAdminAction.CREATE.toString());
-    params.set(CoreAdminParams.NAME, coreName);
-    params.set(COLL_CONF, configName);
-    params.set(CoreAdminParams.COLLECTION, collection);
-    if (shard != null)  {
-      params.set(CoreAdminParams.SHARD, shard);
-    } else if (routeKey != null)  {
-      Collection<Slice> slices = coll.getRouter().getSearchSlicesSingle(routeKey, null, coll);
-      if (slices.isEmpty()) {
-        throw new SolrException(ErrorCode.BAD_REQUEST, "No active shard serving _route_=" + routeKey + " found");
+      params.set(CoreAdminParams.ACTION, CoreAdminAction.CREATE.toString());
+      params.set(CoreAdminParams.NAME, coreName);
+      params.set(COLL_CONF, configName);
+      params.set(CoreAdminParams.COLLECTION, collection);
+      if (shard != null) {
+        params.set(CoreAdminParams.SHARD, shard);
+      } else if (routeKey != null) {
+        Collection<Slice> slices = coll.getRouter().getSearchSlicesSingle(routeKey, null, coll);
+        if (slices.isEmpty()) {
+          throw new SolrException(ErrorCode.BAD_REQUEST, "No active shard serving _route_=" + routeKey + " found");
+        } else {
+          params.set(CoreAdminParams.SHARD, slices.iterator().next().getName());
+        }
       } else  {
-        params.set(CoreAdminParams.SHARD, slices.iterator().next().getName());
+        throw new SolrException(ErrorCode.BAD_REQUEST, "Specify either 'shard' or _route_ param");
       }
-    } else  {
-      throw new SolrException(ErrorCode.BAD_REQUEST, "Specify either 'shard' or _route_ param");
-    }
-    if (dataDir != null)  {
-      params.set(CoreAdminParams.DATA_DIR, dataDir);
-    }
-    if (instanceDir != null)  {
-      params.set(CoreAdminParams.INSTANCE_DIR, instanceDir);
-    }
-    addPropertyParams(message, params);
+      if (dataDir != null) {
+        params.set(CoreAdminParams.DATA_DIR, dataDir);
+      }
+      if (instanceDir != null) {
+        params.set(CoreAdminParams.INSTANCE_DIR, instanceDir);
+      }
+      addPropertyParams(message, params);
 
-    // For tracking async calls.
-    HashMap<String, String> requestMap = new HashMap<>();
-    setupAsyncRequest(asyncId, requestMap, params, node);
-    sendShardRequest(node, params, shardHandler);
+      // For tracking async calls.
+      HashMap<String, String> requestMap = new HashMap<>();
+      sendShardRequest(node, params, shardHandler, asyncId, requestMap);
 
-    collectShardResponses(results, true,
-        "ADDREPLICA failed to create replica", shardHandler);
+      collectShardResponses(results, true,
+          "ADDREPLICA failed to create replica", shardHandler);
 
-    completeAsyncRequest(asyncId, requestMap, results);
+      completeAsyncRequest(asyncId, requestMap, results);
+    } finally {
+      MDCUtils.cleanupMDC(previousMDCContext);
+    }
   }
 
   private void processResponses(NamedList results, ShardHandler shardHandler) {
@@ -2394,29 +2649,47 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     } while (srsp != null);
   }
 
-  private String createConfNode(String coll, ZkNodeProps message, boolean isLegacyCloud) throws KeeperException, InterruptedException {
+  private String getConfigName(String coll, ZkNodeProps message) throws KeeperException, InterruptedException {
     String configName = message.getStr(OverseerCollectionProcessor.COLL_CONF);
-    if(configName == null){
+    
+    if (configName == null) {
       // if there is only one conf, use that
-      List<String> configNames=null;
+      List<String> configNames = null;
       try {
-        configNames = zkStateReader.getZkClient().getChildren(ZkController.CONFIGS_ZKNODE, null, true);
+        configNames = zkStateReader.getZkClient().getChildren(ZkConfigManager.CONFIGS_ZKNODE, null, true);
         if (configNames != null && configNames.size() == 1) {
           configName = configNames.get(0);
           // no config set named, but there is only 1 - use it
           log.info("Only one config set found in zk - using it:" + configName);
+        } else if (configNames.contains(coll)) {
+          configName = coll;
         }
       } catch (KeeperException.NoNodeException e) {
 
       }
-
     }
+    return configName;
+  }
+  
+  private boolean validateConfig(String configName) throws KeeperException, InterruptedException {
+    return zkStateReader.getZkClient().exists(ZkConfigManager.CONFIGS_ZKNODE + "/" + configName, true);
+  }
 
-    if(configName!= null){
-      log.info("creating collections conf node {} ",ZkStateReader.COLLECTIONS_ZKNODE + "/" + coll);
-      zkStateReader.getZkClient().makePath(ZkStateReader.COLLECTIONS_ZKNODE + "/" + coll,
-          ZkStateReader.toJSON(ZkNodeProps.makeMap(ZkController.CONFIGNAME_PROP,configName)),true );
-
+  /**
+   * This doesn't validate the config (path) itself and is just responsible for creating the confNode.
+   * That check should be done before the config node is created.
+   */
+  private void createConfNode(String configName, String coll, boolean isLegacyCloud) throws KeeperException, InterruptedException {
+    
+    if (configName != null) {
+      String collDir = ZkStateReader.COLLECTIONS_ZKNODE + "/" + coll;
+      log.info("creating collections conf node {} ", collDir);
+      byte[] data = ZkStateReader.toJSON(ZkNodeProps.makeMap(ZkController.CONFIGNAME_PROP, configName));
+      if (zkStateReader.getZkClient().exists(collDir, true)) {
+        zkStateReader.getZkClient().setData(collDir, data, true);
+      } else {
+        zkStateReader.getZkClient().makePath(collDir, data, true);
+      }
     } else {
       if(isLegacyCloud){
         log.warn("Could not obtain config name");
@@ -2424,13 +2697,12 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
         throw new SolrException(ErrorCode.BAD_REQUEST,"Unable to get config name");
       }
     }
-    return configName;
 
   }
 
-  private void collectionCmd(ClusterState clusterState, ZkNodeProps message, ModifiableSolrParams params, NamedList results, String stateMatcher) {
+  private void collectionCmd(ClusterState clusterState, ZkNodeProps message, ModifiableSolrParams params, NamedList results, Replica.State stateMatcher) {
     log.info("Executing Collection Cmd : " + params);
-    String collectionName = message.getStr("name");
+    String collectionName = message.getStr(NAME);
     ShardHandler shardHandler = shardHandlerFactory.getShardHandler();
     
     DocCollection coll = clusterState.getCollection(collectionName);
@@ -2444,18 +2716,18 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
 
   }
 
-  private void sliceCmd(ClusterState clusterState, ModifiableSolrParams params, String stateMatcher,
+  private void sliceCmd(ClusterState clusterState, ModifiableSolrParams params, Replica.State stateMatcher,
                         Slice slice, ShardHandler shardHandler) {
     Map<String,Replica> shards = slice.getReplicasMap();
     Set<Map.Entry<String,Replica>> shardEntries = shards.entrySet();
     for (Map.Entry<String,Replica> shardEntry : shardEntries) {
       final ZkNodeProps node = shardEntry.getValue();
-      if (clusterState.liveNodesContain(node.getStr(ZkStateReader.NODE_NAME_PROP)) && (stateMatcher != null ? node.getStr(ZkStateReader.STATE_PROP).equals(stateMatcher) : true)) {
+      if (clusterState.liveNodesContain(node.getStr(ZkStateReader.NODE_NAME_PROP)) 
+          && (stateMatcher == null || Replica.State.getState(node.getStr(ZkStateReader.STATE_PROP)) == stateMatcher)) {
         // For thread safety, only simple clone the ModifiableSolrParams
         ModifiableSolrParams cloneParams = new ModifiableSolrParams();
         cloneParams.add(params);
-        cloneParams.set(CoreAdminParams.CORE,
-            node.getStr(ZkStateReader.CORE_NAME_PROP));
+        cloneParams.set(CoreAdminParams.CORE, node.getStr(ZkStateReader.CORE_NAME_PROP));
 
         String replica = node.getStr(ZkStateReader.BASE_URL_PROP);
         ShardRequest sreq = new ShardRequest();
@@ -2482,6 +2754,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     processResponse(results, e, nodeName, solrResponse, shard);
   }
 
+  @SuppressWarnings("unchecked")
   private void processResponse(NamedList results, Throwable e, String nodeName, SolrResponse solrResponse, String shard) {
     if (e != null) {
       log.error("Error from shard: " + shard, e);
@@ -2510,6 +2783,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     return isClosed;
   }
 
+  @SuppressWarnings("unchecked")
   private void waitForAsyncCallsToComplete(Map<String, String> requestMap, NamedList results) {
     for(String k:requestMap.keySet()) {
       log.debug("I am Waiting for :{}/{}", k, requestMap.get(k));
@@ -2542,7 +2816,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
           NamedList results = new NamedList();
           processResponse(results, srsp);
           String r = (String) srsp.getSolrResponse().getResponse().get("STATUS");
-          if(r.equals("running")) {
+          if (r.equals("running")) {
             log.debug("The task is still RUNNING, continuing to wait.");
             try {
               Thread.sleep(1000);
@@ -2551,7 +2825,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
             }
             continue;
 
-          } else if(r.equals("completed")) {
+          } else if (r.equals("completed")) {
             log.debug("The task is COMPLETED, returning");
             return srsp.getSolrResponse().getResponse();
           } else if (r.equals("failed")) {
@@ -2560,15 +2834,15 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
             return srsp.getSolrResponse().getResponse();
           } else if (r.equals("notfound")) {
             log.debug("The task is notfound, retry");
-            if(counter++ < 5) {
+            if (counter++ < 5) {
               try {
                 Thread.sleep(1000);
               } catch (InterruptedException e) {
               }
               break;
             }
-            throw new SolrException(ErrorCode.BAD_REQUEST, "Invalid status request: " + srsp.getSolrResponse().getResponse().get("STATUS") +
-            "retried " + counter + "times");
+            throw new SolrException(ErrorCode.BAD_REQUEST, "Invalid status request for requestId: " + requestId + "" + srsp.getSolrResponse().getResponse().get("STATUS") +
+                "retried " + counter + "times");
           } else {
             throw new SolrException(ErrorCode.BAD_REQUEST, "Invalid status request " + srsp.getSolrResponse().getResponse().get("STATUS"));
           }
@@ -2577,6 +2851,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
     } while(true);
   }
 
+  @SuppressWarnings("unchecked")
   private void markTaskAsRunning(QueueEvent head, String collectionName,
                                  String asyncId, ZkNodeProps message)
       throws KeeperException, InterruptedException {
@@ -2619,7 +2894,9 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
       boolean success = false;
       String asyncId = message.getStr(ASYNC);
       String collectionName = message.containsKey(COLLECTION_PROP) ?
-          message.getStr(COLLECTION_PROP) : message.getStr("name");
+          message.getStr(COLLECTION_PROP) : message.getStr(NAME);
+      Map previousMDCContext = MDC.getCopyOfContextMap();
+      MDCUtils.setCollection(collectionName);
       try {
         try {
           log.debug("Runner processing {}", head.getId());
@@ -2664,6 +2941,7 @@ public class OverseerCollectionProcessor implements Runnable, Closeable {
         synchronized (waitLock){
           waitLock.notifyAll();
         }
+        MDCUtils.cleanupMDC(previousMDCContext);
       }
     }
 

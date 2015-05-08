@@ -17,10 +17,11 @@ package org.apache.lucene.index;
  * limitations under the License.
  */
 
-import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -37,10 +38,11 @@ import org.apache.lucene.document.StringField;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.IndexWriterConfig.OpenMode;
 import org.apache.lucene.search.DocIdSetIterator;
+import org.apache.lucene.store.BaseDirectoryWrapper;
 import org.apache.lucene.store.Directory;
-import org.apache.lucene.store.NoSuchDirectoryException;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.BytesRef;
+import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.TestUtil;
 import org.junit.Assume;
@@ -89,16 +91,16 @@ public class TestDirectoryReader extends LuceneTestCase {
     MultiReader mr3 = new MultiReader(readers2);
 
     // test mixing up TermDocs and TermEnums from different readers.
-    TermsEnum te2 = MultiFields.getTerms(mr2, "body").iterator(null);
+    TermsEnum te2 = MultiFields.getTerms(mr2, "body").iterator();
     te2.seekCeil(new BytesRef("wow"));
-    DocsEnum td = TestUtil.docs(random(), mr2,
+    PostingsEnum td = TestUtil.docs(random(), mr2,
         "body",
         te2.term(),
         MultiFields.getLiveDocs(mr2),
         null,
         0);
 
-    TermsEnum te3 = MultiFields.getTerms(mr3, "body").iterator(null);
+    TermsEnum te3 = MultiFields.getTerms(mr3, "body").iterator();
     te3.seekCeil(new BytesRef("wow"));
     td = TestUtil.docs(random(), te3, MultiFields.getLiveDocs(mr3),
         td,
@@ -253,7 +255,7 @@ public class TestDirectoryReader extends LuceneTestCase {
       for(FieldInfo fieldInfo : fieldInfos) {
         final String name = fieldInfo.name;
         allFieldNames.add(name);
-        if (fieldInfo.isIndexed()) {
+        if (fieldInfo.getIndexOptions() != IndexOptions.NONE) {
           indexedFieldNames.add(name);
         } else {
           notIndexedFieldNames.add(name);
@@ -346,7 +348,7 @@ void assertTermDocsCount(String msg,
                                    Term term,
                                    int expected)
   throws IOException {
-  DocsEnum tdocs = TestUtil.docs(random(), reader,
+  PostingsEnum tdocs = TestUtil.docs(random(), reader,
       term.field(),
       new BytesRef(term.text()),
       MultiFields.getLiveDocs(reader),
@@ -438,7 +440,7 @@ void assertTermDocsCount(String msg,
   
 public void testFilesOpenClose() throws IOException {
       // Create initial data set
-      File dirFile = createTempDir("TestIndexReader.testFilesOpenClose");
+      Path dirFile = createTempDir("TestIndexReader.testFilesOpenClose");
       Directory dir = newFSDirectory(dirFile);
       IndexWriter writer  = new IndexWriter(dir, newIndexWriterConfig(new MockAnalyzer(random())));
       addDoc(writer, "test");
@@ -446,7 +448,7 @@ public void testFilesOpenClose() throws IOException {
       dir.close();
 
       // Try to erase the data - this ensures that the writer closed all files
-      TestUtil.rm(dirFile);
+      IOUtils.rm(dirFile);
       dir = newFSDirectory(dirFile);
 
       // Now create the data set again, just as before
@@ -464,12 +466,15 @@ public void testFilesOpenClose() throws IOException {
 
       // The following will fail if reader did not close
       // all files
-      TestUtil.rm(dirFile);
+      IOUtils.rm(dirFile);
   }
 
   public void testOpenReaderAfterDelete() throws IOException {
-    File dirFile = createTempDir("deletetest");
+    Path dirFile = createTempDir("deletetest");
     Directory dir = newFSDirectory(dirFile);
+    if (dir instanceof BaseDirectoryWrapper) {
+      ((BaseDirectoryWrapper)dir).setCheckIndexOnClose(false); // we will hit NoSuchFileException in MDW since we nuked it!
+    }
     try {
       DirectoryReader.open(dir);
       fail("expected FileNotFoundException/NoSuchFileException");
@@ -477,7 +482,7 @@ public void testFilesOpenClose() throws IOException {
       // expected
     }
 
-    dirFile.delete();
+    IOUtils.rm(dirFile);
 
     // Make sure we still get a CorruptIndexException (not NPE):
     try {
@@ -620,16 +625,16 @@ public void testFilesOpenClose() throws IOException {
         assertNull(fields2.terms(field1));
         continue;
       }
-      TermsEnum enum1 = terms1.iterator(null);
+      TermsEnum enum1 = terms1.iterator();
 
       Terms terms2 = fields2.terms(field1);
       assertNotNull(terms2);
-      TermsEnum enum2 = terms2.iterator(null);
+      TermsEnum enum2 = terms2.iterator();
 
       while(enum1.next() != null) {
         assertEquals("Different terms", enum1.term(), enum2.next());
-        DocsAndPositionsEnum tp1 = enum1.docsAndPositions(liveDocs, null);
-        DocsAndPositionsEnum tp2 = enum2.docsAndPositions(liveDocs, null);
+        PostingsEnum tp1 = enum1.postings(liveDocs, null, PostingsEnum.ALL);
+        PostingsEnum tp2 = enum2.postings(liveDocs, null, PostingsEnum.ALL);
 
         while(tp1.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
           assertTrue(tp2.nextDoc() != DocIdSetIterator.NO_MORE_DOCS);
@@ -659,8 +664,7 @@ public void testFilesOpenClose() throws IOException {
       addDocumentWithFields(writer);
     writer.close();
 
-    SegmentInfos sis = new SegmentInfos();
-    sis.read(d);
+    SegmentInfos sis = SegmentInfos.readLatestCommit(d);
     DirectoryReader r = DirectoryReader.open(d);
     IndexCommit c = r.getIndexCommit();
 
@@ -715,13 +719,13 @@ public void testFilesOpenClose() throws IOException {
   // DirectoryReader on a non-existent directory, you get a
   // good exception
   public void testNoDir() throws Throwable {
-    File tempDir = createTempDir("doesnotexist");
-    TestUtil.rm(tempDir);
+    Path tempDir = createTempDir("doesnotexist");
+    IOUtils.rm(tempDir);
     Directory dir = newFSDirectory(tempDir);
     try {
       DirectoryReader.open(dir);
       fail("did not hit expected exception");
-    } catch (NoSuchDirectoryException nsde) {
+    } catch (IndexNotFoundException nsde) {
       // expected
     }
     dir.close();
@@ -764,7 +768,7 @@ public void testFilesOpenClose() throws IOException {
     writer.commit();
   
     DirectoryReader r = DirectoryReader.open(dir);
-    AtomicReader r1 = getOnlySegmentReader(r);
+    LeafReader r1 = getOnlySegmentReader(r);
     assertEquals(26, r1.terms("field").size());
     assertEquals(10, r1.terms("number").size());
     writer.addDocument(doc);
@@ -773,7 +777,7 @@ public void testFilesOpenClose() throws IOException {
     assertNotNull(r2);
     r.close();
   
-    for(AtomicReaderContext s : r2.leaves()) {
+    for(LeafReaderContext s : r2.leaves()) {
       assertEquals(26, s.reader().terms("field").size());
       assertEquals(10, s.reader().terms("number").size());
     }
@@ -935,7 +939,7 @@ public void testFilesOpenClose() throws IOException {
   
     reader.close();
   
-    // Close the top reader, its the only one that should be closed
+    // Close the top reader, it's the only one that should be closed
     assertEquals(1, closeCount[0]);
     writer.close();
   
@@ -1051,8 +1055,8 @@ public void testFilesOpenClose() throws IOException {
   }
 
   public void testIndexExistsOnNonExistentDirectory() throws Exception {
-    File tempDir = createTempDir("testIndexExistsOnNonExistentDirectory");
-    tempDir.delete();
+    Path tempDir = createTempDir("testIndexExistsOnNonExistentDirectory");
+    IOUtils.rm(tempDir);
     Directory dir = newFSDirectory(tempDir);
     assertFalse(DirectoryReader.indexExists(dir));
     dir.close();

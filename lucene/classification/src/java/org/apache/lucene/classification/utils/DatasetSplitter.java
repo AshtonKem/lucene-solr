@@ -17,22 +17,23 @@ package org.apache.lucene.classification.utils;
  * limitations under the License.
  */
 
+import java.io.IOException;
+
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
 import org.apache.lucene.document.TextField;
-import org.apache.lucene.index.AtomicReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.LeafReader;
 import org.apache.lucene.index.StorableField;
+import org.apache.lucene.index.StoredDocument;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.Directory;
-
-import java.io.IOException;
 
 /**
  * Utility class for creating training / test / cross validation indexes from the original index.
@@ -56,7 +57,7 @@ public class DatasetSplitter {
   /**
    * Split a given index into 3 indexes for training, test and cross validation tasks respectively
    *
-   * @param originalIndex        an {@link AtomicReader} on the source index
+   * @param originalIndex        an {@link org.apache.lucene.index.LeafReader} on the source index
    * @param trainingIndex        a {@link Directory} used to write the training index
    * @param testIndex            a {@link Directory} used to write the test index
    * @param crossValidationIndex a {@link Directory} used to write the cross validation index
@@ -64,11 +65,10 @@ public class DatasetSplitter {
    * @param fieldNames           names of fields that need to be put in the new indexes or <code>null</code> if all should be used
    * @throws IOException if any writing operation fails on any of the indexes
    */
-  public void split(AtomicReader originalIndex, Directory trainingIndex, Directory testIndex, Directory crossValidationIndex,
+  public void split(LeafReader originalIndex, Directory trainingIndex, Directory testIndex, Directory crossValidationIndex,
                     Analyzer analyzer, String... fieldNames) throws IOException {
 
     // create IWs for train / test / cv IDXs
-    // :Post-Release-Update-Version.LUCENE_XY:
     IndexWriter testWriter = new IndexWriter(testIndex, new IndexWriterConfig(analyzer));
     IndexWriter cvWriter = new IndexWriter(crossValidationIndex, new IndexWriterConfig(analyzer));
     IndexWriter trainingWriter = new IndexWriter(trainingIndex, new IndexWriterConfig(analyzer));
@@ -92,12 +92,16 @@ public class DatasetSplitter {
 
         // create a new document for indexing
         Document doc = new Document();
+        StoredDocument document = originalIndex.document(scoreDoc.doc);
         if (fieldNames != null && fieldNames.length > 0) {
           for (String fieldName : fieldNames) {
-            doc.add(new Field(fieldName, originalIndex.document(scoreDoc.doc).getField(fieldName).stringValue(), ft));
+            StorableField field = document.getField(fieldName);
+            if (field != null) {
+              doc.add(new Field(fieldName, field.stringValue(), ft));
+            }
           }
         } else {
-          for (StorableField storableField : originalIndex.document(scoreDoc.doc).getFields()) {
+          for (StorableField storableField : document.getFields()) {
             if (storableField.readerValue() != null) {
               doc.add(new Field(storableField.name(), storableField.readerValue(), ft));
             } else if (storableField.binaryValue() != null) {

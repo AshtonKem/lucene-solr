@@ -32,11 +32,8 @@ import org.apache.lucene.util.TestUtil;
 public class TestForTooMuchCloning extends LuceneTestCase {
 
   // Make sure we don't clone IndexInputs too frequently
-  // during merging:
+  // during merging and searching:
   public void test() throws Exception {
-    // NOTE: if we see a fail on this test with "NestedPulsing" its because its 
-    // reuse isnt perfect (but reasonable). see TestPulsingReuse.testNestedPulsing 
-    // for more details
     final MockDirectoryWrapper dir = newMockDirectory();
     final TieredMergePolicy tmp = new TieredMergePolicy();
     tmp.setMaxMergeAtOnce(2);
@@ -58,12 +55,14 @@ public class TestForTooMuchCloning extends LuceneTestCase {
     final IndexReader r = w.getReader();
     w.close();
 
-    final int cloneCount = dir.getInputCloneCount();
     //System.out.println("merge clone count=" + cloneCount);
-    assertTrue("too many calls to IndexInput.clone during merging: " + dir.getInputCloneCount(), cloneCount < 500);
+    assertTrue("too many calls to IndexInput.clone during merging: " + dir.getInputCloneCount(), dir.getInputCloneCount() < 500);
 
     final IndexSearcher s = newSearcher(r);
-
+    // important: set this after newSearcher, it might have run checkindex
+    final int cloneCount = dir.getInputCloneCount();
+    // dir.setVerboseClone(true);
+    
     // MTQ that matches all terms so the AUTO_REWRITE should
     // cutover to filter rewrite and reuse a single DocsEnum
     // across all terms;

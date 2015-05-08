@@ -19,6 +19,7 @@ package org.apache.lucene.search.suggest.fst;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -31,6 +32,8 @@ import org.apache.lucene.store.ByteArrayDataInput;
 import org.apache.lucene.store.ByteArrayDataOutput;
 import org.apache.lucene.store.DataInput;
 import org.apache.lucene.store.DataOutput;
+import org.apache.lucene.util.Accountable;
+import org.apache.lucene.util.Accountables;
 import org.apache.lucene.util.ArrayUtil;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.BytesRefBuilder;
@@ -38,13 +41,13 @@ import org.apache.lucene.util.CharsRefBuilder;
 import org.apache.lucene.util.IntsRefBuilder;
 import org.apache.lucene.util.OfflineSorter.ByteSequencesWriter;
 import org.apache.lucene.util.fst.Builder;
+import org.apache.lucene.util.fst.FST;
 import org.apache.lucene.util.fst.FST.Arc;
 import org.apache.lucene.util.fst.FST.BytesReader;
-import org.apache.lucene.util.fst.FST;
 import org.apache.lucene.util.fst.PositiveIntOutputs;
+import org.apache.lucene.util.fst.Util;
 import org.apache.lucene.util.fst.Util.Result;
 import org.apache.lucene.util.fst.Util.TopResults;
-import org.apache.lucene.util.fst.Util;
 
 /**
  * Suggester based on a weighted FST: it first traverses the prefix, 
@@ -57,7 +60,8 @@ import org.apache.lucene.util.fst.Util;
  * 
  * @lucene.experimental
  */
-public class WFSTCompletionLookup extends Lookup {
+// redundant 'implements Accountable' to workaround javadocs bugs
+public class WFSTCompletionLookup extends Lookup implements Accountable {
   
   /**
    * FST<Long>, weights are encoded as costs: (Integer.MAX_VALUE-weight)
@@ -245,12 +249,12 @@ public class WFSTCompletionLookup extends Lookup {
     }
   }
   
-  /** cost -> weight */
+  /** cost -&gt; weight */
   private static int decodeWeight(long encoded) {
     return (int)(Integer.MAX_VALUE - encoded);
   }
   
-  /** weight -> cost */
+  /** weight -&gt; cost */
   private static int encodeWeight(long value) {
     if (value < 0 || value > Integer.MAX_VALUE) {
       throw new UnsupportedOperationException("cannot encode value: " + value);
@@ -298,6 +302,15 @@ public class WFSTCompletionLookup extends Lookup {
     return (fst == null) ? 0 : fst.ramBytesUsed();
   }
   
+  @Override
+  public Collection<Accountable> getChildResources() {
+    if (fst == null) {
+      return Collections.emptyList();
+    } else {
+      return Collections.singleton(Accountables.namedAccountable("fst", fst));
+    }
+  }
+
   @Override
   public long getCount() {
     return count;

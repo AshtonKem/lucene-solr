@@ -31,6 +31,7 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 
 import org.apache.commons.io.FileUtils;
@@ -44,15 +45,15 @@ import org.apache.hadoop.util.JarFinder;
 import org.apache.hadoop.util.ToolRunner;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.lucene.util.Constants;
+import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.LuceneTestCase.Slow;
-import org.apache.lucene.util.LuceneTestCase.SuppressCodecs;
 import org.apache.solr.SolrTestCaseJ4.SuppressSSL;
+import org.apache.solr.client.solrj.SolrClient;
 import org.apache.solr.client.solrj.SolrQuery;
 import org.apache.solr.client.solrj.SolrQuery.ORDER;
-import org.apache.solr.client.solrj.SolrServer;
 import org.apache.solr.client.solrj.SolrServerException;
 import org.apache.solr.client.solrj.embedded.JettySolrRunner;
-import org.apache.solr.client.solrj.impl.HttpSolrServer;
+import org.apache.solr.client.solrj.impl.HttpSolrClient;
 import org.apache.solr.client.solrj.request.QueryRequest;
 import org.apache.solr.client.solrj.response.QueryResponse;
 import org.apache.solr.cloud.AbstractFullDistribZkTestBase;
@@ -65,30 +66,30 @@ import org.apache.solr.common.cloud.Slice;
 import org.apache.solr.common.cloud.SolrZkClient;
 import org.apache.solr.common.cloud.ZkCoreNodeProps;
 import org.apache.solr.common.params.CollectionParams.CollectionAction;
+import org.apache.solr.common.params.CoreAdminParams;
 import org.apache.solr.common.params.ModifiableSolrParams;
 import org.apache.solr.common.util.NamedList;
 import org.apache.solr.hadoop.hack.MiniMRClientCluster;
 import org.apache.solr.hadoop.hack.MiniMRClientClusterFactory;
 import org.apache.solr.morphlines.solr.AbstractSolrMorphlineTestBase;
-import org.junit.After;
+import org.apache.solr.util.BadHdfsThreadsFilter;
 import org.junit.AfterClass;
-import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakAction;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakAction.Action;
+import com.carrotsearch.randomizedtesting.annotations.ThreadLeakFilters;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakLingering;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope.Scope;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakZombies;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakZombies.Consequence;
 
 @ThreadLeakAction({Action.WARN})
 @ThreadLeakLingering(linger = 0)
 @ThreadLeakZombies(Consequence.CONTINUE)
-@ThreadLeakScope(Scope.NONE)
-@SuppressCodecs({"Lucene3x", "Lucene40"})
+@ThreadLeakFilters(defaultFilters = true, filters = {
+    BadHdfsThreadsFilter.class // hdfs currently leaks thread(s)
+})
 @SuppressSSL // SSL does not work with this test for currently unknown reasons
 @Slow
 public class MorphlineGoLiveMiniMRTest extends AbstractFullDistribZkTestBase {
@@ -120,15 +121,18 @@ public class MorphlineGoLiveMiniMRTest extends AbstractFullDistribZkTestBase {
     this.inputAvroFile1 = "sample-statuses-20120521-100919.avro";
     this.inputAvroFile2 = "sample-statuses-20120906-141433.avro";
     this.inputAvroFile3 = "sample-statuses-20120906-141433-medium.avro";
-    
-    fixShardCount = true;
+
     sliceCount = TEST_NIGHTLY ? 7 : 3;
-    shardCount = TEST_NIGHTLY ? 7 : 3;
+    fixShardCount(TEST_NIGHTLY ? 7 : 3);
   }
   
   @BeforeClass
   public static void setupClass() throws Exception {
-    solrHomeDirectory = createTempDir();
+    System.setProperty("solr.hdfs.blockcache.global", Boolean.toString(LuceneTestCase.random().nextBoolean()));
+    System.setProperty("solr.hdfs.blockcache.enabled", Boolean.toString(LuceneTestCase.random().nextBoolean()));
+    System.setProperty("solr.hdfs.blockcache.blocksperbank", "2048");
+    
+    solrHomeDirectory = createTempDir().toFile();
     assumeTrue(
             "Currently this test can only be run without the lucene test security policy in place",
             System.getProperty("java.security.manager", "").equals(""));
@@ -137,12 +141,10 @@ public class MorphlineGoLiveMiniMRTest extends AbstractFullDistribZkTestBase {
         Boolean.parseBoolean(System.getProperty("tests.disableHdfs", "false")));
     
     assumeFalse("FIXME: This test does not work with Windows because of native library requirements", Constants.WINDOWS);
-    assumeFalse("FIXME: This test fails under Java 8 due to the Saxon dependency - see SOLR-1301", Constants.JRE_IS_MINIMUM_JAVA8);
-    assumeFalse("FIXME: This test fails under J9 due to the Saxon dependency - see SOLR-1301", System.getProperty("java.vm.info", "<?>").contains("IBM J9"));
     
     AbstractZkTestCase.SOLRHOME = solrHomeDirectory;
     FileUtils.copyDirectory(MINIMR_INSTANCE_DIR, AbstractZkTestCase.SOLRHOME);
-    tempDir = createTempDir().getAbsolutePath();
+    tempDir = createTempDir().toFile().getAbsolutePath();
 
     new File(tempDir).mkdirs();
 
@@ -155,8 +157,6 @@ public class MorphlineGoLiveMiniMRTest extends AbstractFullDistribZkTestBase {
     
     int taskTrackers = 2;
     int dataNodes = 2;
-    
-    System.setProperty("solr.hdfs.blockcache.enabled", "false");
     
     JobConf conf = new JobConf();
     conf.set("dfs.block.access.token.enable", "false");
@@ -197,9 +197,8 @@ public class MorphlineGoLiveMiniMRTest extends AbstractFullDistribZkTestBase {
   }
   
   @Override
-  @Before
-  public void setUp() throws Exception {
-    super.setUp();
+  public void distribSetUp() throws Exception {
+    super.distribSetUp();
     System.setProperty("host", "127.0.0.1");
     System.setProperty("numShards", Integer.toString(sliceCount));
     URI uri = dfsCluster.getFileSystem().getUri();
@@ -208,9 +207,8 @@ public class MorphlineGoLiveMiniMRTest extends AbstractFullDistribZkTestBase {
   }
   
   @Override
-  @After
-  public void tearDown() throws Exception {
-    super.tearDown();
+  public void distribTearDown() throws Exception {
+    super.distribTearDown();
     System.clearProperty("host");
     System.clearProperty("numShards");
     System.clearProperty("solr.hdfs.home");
@@ -218,6 +216,8 @@ public class MorphlineGoLiveMiniMRTest extends AbstractFullDistribZkTestBase {
   
   @AfterClass
   public static void teardownClass() throws Exception {
+    System.clearProperty("solr.hdfs.blockcache.global");
+    System.clearProperty("solr.hdfs.blockcache.blocksperbank");
     System.clearProperty("solr.hdfs.blockcache.enabled");
     System.clearProperty("hadoop.log.dir");
     System.clearProperty("test.build.dir");
@@ -238,12 +238,6 @@ public class MorphlineGoLiveMiniMRTest extends AbstractFullDistribZkTestBase {
   private JobConf getJobConf() throws IOException {
     JobConf jobConf = new JobConf(mrCluster.getConfig());
     return jobConf;
-  }
-  
-  @Test
-  @Override
-  public void testDistribSearch() throws Exception {
-    super.testDistribSearch();
   }
   
   @Test
@@ -348,9 +342,9 @@ public class MorphlineGoLiveMiniMRTest extends AbstractFullDistribZkTestBase {
     };
     return concat(head, args); 
   }
-  
-  @Override
-  public void doTest() throws Exception {
+
+  @Test
+  public void test() throws Exception {
     
     waitForRecoveriesToFinish(false);
     
@@ -379,143 +373,144 @@ public class MorphlineGoLiveMiniMRTest extends AbstractFullDistribZkTestBase {
     MapReduceIndexerTool tool;
     int res;
     QueryResponse results;
-    HttpSolrServer server = new HttpSolrServer(cloudJettys.get(0).url);
     String[] args = new String[]{};
-
-    args = new String[] {
-        "--solr-home-dir=" + MINIMR_CONF_DIR.getAbsolutePath(),
-        "--output-dir=" + outDir.toString(),
-        "--log4j=" + getFile("log4j.properties").getAbsolutePath(),
-        "--mappers=3",
-        random().nextBoolean() ? "--input-list=" + INPATH.toString() : dataDir.toString(),  
-        "--go-live-threads", Integer.toString(random().nextInt(15) + 1),
-        "--verbose",
-        "--go-live"
-    };
-    args = prependInitialArgs(args);
     List<String> argList = new ArrayList<>();
-    getShardUrlArgs(argList);
-    args = concat(args, argList.toArray(new String[0]));
-    
-    if (true) {
-      tool = new MapReduceIndexerTool();
-      res = ToolRunner.run(jobConf, tool, args);
-      assertEquals(0, res);
-      assertTrue(tool.job.isComplete());
-      assertTrue(tool.job.isSuccessful());
-      results = server.query(new SolrQuery("*:*"));
-      assertEquals(20, results.getResults().getNumFound());
-    }    
-    
-    fs.delete(inDir, true);   
-    fs.delete(outDir, true);  
-    fs.delete(dataDir, true); 
-    assertTrue(fs.mkdirs(inDir));
-    INPATH = upAvroFile(fs, inDir, DATADIR, dataDir, inputAvroFile2);
 
-    args = new String[] {
-        "--solr-home-dir=" + MINIMR_CONF_DIR.getAbsolutePath(),
-        "--output-dir=" + outDir.toString(),
-        "--mappers=3",
-        "--verbose",
-        "--go-live",
-        random().nextBoolean() ? "--input-list=" + INPATH.toString() : dataDir.toString(), 
-        "--go-live-threads", Integer.toString(random().nextInt(15) + 1)
-    };
-    args = prependInitialArgs(args);
-    argList = new ArrayList<>();
-    getShardUrlArgs(argList);
-    args = concat(args, argList.toArray(new String[0]));
-    
-    if (true) {
-      tool = new MapReduceIndexerTool();
-      res = ToolRunner.run(jobConf, tool, args);
-      assertEquals(0, res);
-      assertTrue(tool.job.isComplete());
-      assertTrue(tool.job.isSuccessful());      
-      results = server.query(new SolrQuery("*:*"));
-      
-      assertEquals(22, results.getResults().getNumFound());
-    }    
-    
-    // try using zookeeper
-    String collection = "collection1";
-    if (random().nextBoolean()) {
-      // sometimes, use an alias
-      createAlias("updatealias", "collection1");
-      collection = "updatealias";
-    }
-    
-    fs.delete(inDir, true);   
-    fs.delete(outDir, true);  
-    fs.delete(dataDir, true);    
-    INPATH = upAvroFile(fs, inDir, DATADIR, dataDir, inputAvroFile3);
+    try (HttpSolrClient server = new HttpSolrClient(cloudJettys.get(0).url)) {
 
-    cloudClient.deleteByQuery("*:*");
-    cloudClient.commit();
-    assertEquals(0, cloudClient.query(new SolrQuery("*:*")).getResults().getNumFound());      
+      args = new String[]{
+          "--solr-home-dir=" + MINIMR_CONF_DIR.getAbsolutePath(),
+          "--output-dir=" + outDir.toString(),
+          "--log4j=" + getFile("log4j.properties").getAbsolutePath(),
+          "--mappers=3",
+          random().nextBoolean() ? "--input-list=" + INPATH.toString() : dataDir.toString(),
+          "--go-live-threads", Integer.toString(random().nextInt(15) + 1),
+          "--verbose",
+          "--go-live"
+      };
+      args = prependInitialArgs(args);
+      getShardUrlArgs(argList);
+      args = concat(args, argList.toArray(new String[0]));
 
-    args = new String[] {
-        "--output-dir=" + outDir.toString(),
-        "--mappers=3",
-        "--reducers=12",
-        "--fanout=2",
-        "--verbose",
-        "--go-live",
-        random().nextBoolean() ? "--input-list=" + INPATH.toString() : dataDir.toString(), 
-        "--zk-host", zkServer.getZkAddress(), 
-        "--collection", collection
-    };
-    args = prependInitialArgs(args);
+      if (true) {
+        tool = new MapReduceIndexerTool();
+        res = ToolRunner.run(jobConf, tool, args);
+        assertEquals(0, res);
+        assertTrue(tool.job.isComplete());
+        assertTrue(tool.job.isSuccessful());
+        results = server.query(new SolrQuery("*:*"));
+        assertEquals(20, results.getResults().getNumFound());
+      }
 
-    if (true) {
-      tool = new MapReduceIndexerTool();
-      res = ToolRunner.run(jobConf, tool, args);
-      assertEquals(0, res);
-      assertTrue(tool.job.isComplete());
-      assertTrue(tool.job.isSuccessful());
-      
-      SolrDocumentList resultDocs = executeSolrQuery(cloudClient, "*:*");      
-      assertEquals(RECORD_COUNT, resultDocs.getNumFound());
-      assertEquals(RECORD_COUNT, resultDocs.size());
-      
-      // perform updates
-      for (int i = 0; i < RECORD_COUNT; i++) {
+      fs.delete(inDir, true);
+      fs.delete(outDir, true);
+      fs.delete(dataDir, true);
+      assertTrue(fs.mkdirs(inDir));
+      INPATH = upAvroFile(fs, inDir, DATADIR, dataDir, inputAvroFile2);
+
+      args = new String[]{
+          "--solr-home-dir=" + MINIMR_CONF_DIR.getAbsolutePath(),
+          "--output-dir=" + outDir.toString(),
+          "--mappers=3",
+          "--verbose",
+          "--go-live",
+          random().nextBoolean() ? "--input-list=" + INPATH.toString() : dataDir.toString(),
+          "--go-live-threads", Integer.toString(random().nextInt(15) + 1)
+      };
+      args = prependInitialArgs(args);
+
+      getShardUrlArgs(argList);
+      args = concat(args, argList.toArray(new String[0]));
+
+      if (true) {
+        tool = new MapReduceIndexerTool();
+        res = ToolRunner.run(jobConf, tool, args);
+        assertEquals(0, res);
+        assertTrue(tool.job.isComplete());
+        assertTrue(tool.job.isSuccessful());
+        results = server.query(new SolrQuery("*:*"));
+
+        assertEquals(22, results.getResults().getNumFound());
+      }
+
+      // try using zookeeper
+      String collection = "collection1";
+      if (random().nextBoolean()) {
+        // sometimes, use an alias
+        createAlias("updatealias", "collection1");
+        collection = "updatealias";
+      }
+
+      fs.delete(inDir, true);
+      fs.delete(outDir, true);
+      fs.delete(dataDir, true);
+      INPATH = upAvroFile(fs, inDir, DATADIR, dataDir, inputAvroFile3);
+
+      cloudClient.deleteByQuery("*:*");
+      cloudClient.commit();
+      assertEquals(0, cloudClient.query(new SolrQuery("*:*")).getResults().getNumFound());
+
+      args = new String[]{
+          "--output-dir=" + outDir.toString(),
+          "--mappers=3",
+          "--reducers=12",
+          "--fanout=2",
+          "--verbose",
+          "--go-live",
+          random().nextBoolean() ? "--input-list=" + INPATH.toString() : dataDir.toString(),
+          "--zk-host", zkServer.getZkAddress(),
+          "--collection", collection
+      };
+      args = prependInitialArgs(args);
+
+      if (true) {
+        tool = new MapReduceIndexerTool();
+        res = ToolRunner.run(jobConf, tool, args);
+        assertEquals(0, res);
+        assertTrue(tool.job.isComplete());
+        assertTrue(tool.job.isSuccessful());
+
+        SolrDocumentList resultDocs = executeSolrQuery(cloudClient, "*:*");
+        assertEquals(RECORD_COUNT, resultDocs.getNumFound());
+        assertEquals(RECORD_COUNT, resultDocs.size());
+
+        // perform updates
+        for (int i = 0; i < RECORD_COUNT; i++) {
           SolrDocument doc = resultDocs.get(i);
           SolrInputDocument update = new SolrInputDocument();
           for (Map.Entry<String, Object> entry : doc.entrySet()) {
-              update.setField(entry.getKey(), entry.getValue());
+            update.setField(entry.getKey(), entry.getValue());
           }
           update.setField("user_screen_name", "Nadja" + i);
           update.removeField("_version_");
           cloudClient.add(update);
-      }
-      cloudClient.commit();
-      
-      // verify updates
-      SolrDocumentList resultDocs2 = executeSolrQuery(cloudClient, "*:*");   
-      assertEquals(RECORD_COUNT, resultDocs2.getNumFound());
-      assertEquals(RECORD_COUNT, resultDocs2.size());
-      for (int i = 0; i < RECORD_COUNT; i++) {
+        }
+        cloudClient.commit();
+
+        // verify updates
+        SolrDocumentList resultDocs2 = executeSolrQuery(cloudClient, "*:*");
+        assertEquals(RECORD_COUNT, resultDocs2.getNumFound());
+        assertEquals(RECORD_COUNT, resultDocs2.size());
+        for (int i = 0; i < RECORD_COUNT; i++) {
           SolrDocument doc = resultDocs.get(i);
           SolrDocument doc2 = resultDocs2.get(i);
           assertEquals(doc.getFirstValue("id"), doc2.getFirstValue("id"));
           assertEquals("Nadja" + i, doc2.getFirstValue("user_screen_name"));
           assertEquals(doc.getFirstValue("text"), doc2.getFirstValue("text"));
-          
+
           // perform delete
-          cloudClient.deleteById((String)doc.getFirstValue("id"));
+          cloudClient.deleteById((String) doc.getFirstValue("id"));
+        }
+        cloudClient.commit();
+
+        // verify deletes
+        assertEquals(0, executeSolrQuery(cloudClient, "*:*").size());
       }
+
+      cloudClient.deleteByQuery("*:*");
       cloudClient.commit();
-      
-      // verify deletes
-      assertEquals(0, executeSolrQuery(cloudClient, "*:*").size());
-    }    
-    
-    cloudClient.deleteByQuery("*:*");
-    cloudClient.commit();
-    assertEquals(0, cloudClient.query(new SolrQuery("*:*")).getResults().getNumFound());      
-    server.shutdown();
+      assertEquals(0, cloudClient.query(new SolrQuery("*:*")).getResults().getNumFound());
+    }
     
     // try using zookeeper with replication
     String replicatedCollection = "replicated_collection";
@@ -627,43 +622,99 @@ public class MorphlineGoLiveMiniMRTest extends AbstractFullDistribZkTestBase {
       checkConsistency(replicatedCollection);
       
       assertEquals(RECORD_COUNT, executeSolrQuery(cloudClient, "*:*").size());
-    }  
+    }
     
+    // delete collection
+    ModifiableSolrParams params = new ModifiableSolrParams();
+    params.set("action", CollectionAction.DELETE.toString());
+    params.set(CoreAdminParams.DELETE_INSTANCE_DIR, true);
+    params.set(CoreAdminParams.DELETE_DATA_DIR, true);
+    params.set(CoreAdminParams.DELETE_INDEX, true);
+    params.set("name", replicatedCollection);
+    QueryRequest request = new QueryRequest(params);
+    request.setPath("/admin/collections");
+    cloudClient.request(request);
+
+    
+    long timeout = System.currentTimeMillis() + 10000;
+    while (cloudClient.getZkStateReader().getClusterState().hasCollection(replicatedCollection)) {
+      if (System.currentTimeMillis() > timeout) {
+        throw new AssertionError("Timeout waiting to see removed collection leave clusterstate");
+      }
+      
+      Thread.sleep(200);
+      cloudClient.getZkStateReader().updateClusterState(true);
+    }
+    
+    if (TEST_NIGHTLY) {
+      createCollection(replicatedCollection, 11, 3, 11);
+    } else {
+      createCollection(replicatedCollection, 2, 3, 2);
+    }
+    
+    waitForRecoveriesToFinish(replicatedCollection, false);
+    printLayout();
+    assertEquals(0, executeSolrQuery(cloudClient, "*:*").getNumFound());
+    
+    
+    args = new String[] {
+        "--solr-home-dir=" + MINIMR_CONF_DIR.getAbsolutePath(),
+        "--output-dir=" + outDir.toString(),
+        "--shards", "2",
+        "--mappers=3",
+        "--verbose",
+        "--go-live", 
+        "--go-live-threads", Integer.toString(random().nextInt(15) + 1),  dataDir.toString()
+    };
+    args = prependInitialArgs(args);
+
+    argList = new ArrayList<>();
+    getShardUrlArgs(argList, replicatedCollection);
+    args = concat(args, argList.toArray(new String[0]));
+    
+    tool = new MapReduceIndexerTool();
+    res = ToolRunner.run(jobConf, tool, args);
+    assertEquals(0, res);
+    assertTrue(tool.job.isComplete());
+    assertTrue(tool.job.isSuccessful());
+    
+    checkConsistency(replicatedCollection);
+    
+    assertEquals(RECORD_COUNT, executeSolrQuery(cloudClient, "*:*").size());
   }
 
   private void getShardUrlArgs(List<String> args) {
-    for (int i = 0; i < shardCount; i++) {
+    for (int i = 0; i < getShardCount(); i++) {
       args.add("--shard-url");
       args.add(cloudJettys.get(i).url);
     }
   }
   
-  private SolrDocumentList executeSolrQuery(SolrServer collection, String queryString) throws SolrServerException {
+  private SolrDocumentList executeSolrQuery(SolrClient collection, String queryString) throws SolrServerException, IOException {
     SolrQuery query = new SolrQuery(queryString).setRows(2 * RECORD_COUNT).addSort("id", ORDER.asc);
     QueryResponse response = collection.query(query);
     return response.getResults();
   }
 
   private void checkConsistency(String replicatedCollection)
-      throws SolrServerException {
+      throws Exception {
     Collection<Slice> slices = cloudClient.getZkStateReader().getClusterState()
         .getSlices(replicatedCollection);
     for (Slice slice : slices) {
       Collection<Replica> replicas = slice.getReplicas();
       long found = -1;
       for (Replica replica : replicas) {
-        HttpSolrServer client = new HttpSolrServer(
-            new ZkCoreNodeProps(replica).getCoreUrl());
-        SolrQuery query = new SolrQuery("*:*");
-        query.set("distrib", false);
-        QueryResponse replicaResults = client.query(query);
-        long count = replicaResults.getResults().getNumFound();
-        if (found != -1) {
-          assertEquals(slice.getName() + " is inconsistent "
-              + new ZkCoreNodeProps(replica).getCoreUrl(), found, count);
+        try (HttpSolrClient client = new HttpSolrClient(new ZkCoreNodeProps(replica).getCoreUrl())) {
+          SolrQuery query = new SolrQuery("*:*");
+          query.set("distrib", false);
+          QueryResponse replicaResults = client.query(query);
+          long count = replicaResults.getResults().getNumFound();
+          if (found != -1) {
+            assertEquals(slice.getName() + " is inconsistent "
+                + new ZkCoreNodeProps(replica).getCoreUrl(), found, count);
+          }
+          found = count;
         }
-        found = count;
-        client.shutdown();
       }
     }
   }
@@ -696,19 +747,21 @@ public class MorphlineGoLiveMiniMRTest extends AbstractFullDistribZkTestBase {
   public JettySolrRunner createJetty(File solrHome, String dataDir,
       String shardList, String solrConfigOverride, String schemaOverride)
       throws Exception {
-    
-    JettySolrRunner jetty = new JettySolrRunner(solrHome.getAbsolutePath(),
-        context, 0, solrConfigOverride, schemaOverride, true, null, sslConfig);
 
-    jetty.setShards(shardList);
-    
-    if (System.getProperty("collection") == null) {
-      System.setProperty("collection", "collection1");
-    }
-    
+    Properties props = new Properties();
+    if (solrConfigOverride != null)
+      props.setProperty("solrconfig", solrConfigOverride);
+    if (schemaOverride != null)
+      props.setProperty("schema", schemaOverride);
+    props.setProperty("shards", shardList);
+
+    String collection = System.getProperty("collection");
+    if (collection == null)
+      collection = "collection1";
+    props.setProperty("collection", collection);
+
+    JettySolrRunner jetty = new JettySolrRunner(solrHome.getAbsolutePath(), props, buildJettyConfig(context));
     jetty.start();
-    
-    System.clearProperty("collection");
     
     return jetty;
   }

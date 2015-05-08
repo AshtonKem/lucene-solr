@@ -25,13 +25,16 @@ import org.apache.lucene.analysis.NumericTokenStream;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 import org.apache.lucene.analysis.tokenattributes.OffsetAttribute;
+import org.apache.lucene.analysis.tokenattributes.TermToBytesRefAttribute;
 import org.apache.lucene.document.FieldType.NumericType;
+import org.apache.lucene.index.FieldInvertState; // javadocs
+import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.IndexWriter; // javadocs
 import org.apache.lucene.index.IndexableField;
 import org.apache.lucene.index.IndexableFieldType;
 import org.apache.lucene.index.StorableField;
+import org.apache.lucene.util.AttributeImpl;
 import org.apache.lucene.util.BytesRef;
-import org.apache.lucene.index.FieldInvertState; // javadocs
 
 /**
  * Expert: directly create a field for a document.  Most
@@ -41,13 +44,13 @@ import org.apache.lucene.index.FieldInvertState; // javadocs
  * NumericDocValuesField}, {@link SortedDocValuesField}, {@link
  * StringField}, {@link TextField}, {@link StoredField}.
  *
- * <p/> A field is a section of a Document. Each field has three
+ * <p> A field is a section of a Document. Each field has three
  * parts: name, type and value. Values may be text
  * (String, Reader or pre-analyzed TokenStream), binary
  * (byte[]), or numeric (a Number).  Fields are optionally stored in the
  * index, so that they may be returned with hits on the document.
  *
- * <p/>
+ * <p>
  * NOTE: the field type is an {@link IndexableFieldType}.  Making changes
  * to the state of the IndexableFieldType will impact any
  * Field it is used in.  It is strongly recommended that no
@@ -122,7 +125,7 @@ public class Field implements IndexableField, StorableField {
     if (type.stored()) {
       throw new IllegalArgumentException("fields with a Reader value cannot be stored");
     }
-    if (type.indexed() && !type.tokenized()) {
+    if (type.indexOptions() != IndexOptions.NONE && !type.tokenized()) {
       throw new IllegalArgumentException("non-tokenized fields must use String values");
     }
     
@@ -148,7 +151,7 @@ public class Field implements IndexableField, StorableField {
     if (tokenStream == null) {
       throw new NullPointerException("tokenStream cannot be null");
     }
-    if (!type.indexed() || !type.tokenized()) {
+    if (type.indexOptions() == IndexOptions.NONE || !type.tokenized()) {
       throw new IllegalArgumentException("TokenStream fields must be indexed and tokenized");
     }
     if (type.stored()) {
@@ -214,9 +217,6 @@ public class Field implements IndexableField, StorableField {
     if (bytes == null) {
       throw new IllegalArgumentException("bytes cannot be null");
     }
-    if (type.indexed()) {
-      throw new IllegalArgumentException("Fields with BytesRef values cannot be indexed");
-    }
     this.fieldsData = bytes;
     this.type = type;
     this.name = name;
@@ -241,7 +241,7 @@ public class Field implements IndexableField, StorableField {
     if (value == null) {
       throw new IllegalArgumentException("value cannot be null");
     }
-    if (!type.stored() && !type.indexed()) {
+    if (!type.stored() && type.indexOptions() == IndexOptions.NONE) {
       throw new IllegalArgumentException("it doesn't make sense to have a field that "
         + "is neither indexed nor stored");
     }
@@ -338,7 +338,7 @@ public class Field implements IndexableField, StorableField {
     if (!(fieldsData instanceof BytesRef)) {
       throw new IllegalArgumentException("cannot change value type from " + fieldsData.getClass().getSimpleName() + " to BytesRef");
     }
-    if (type.indexed()) {
+    if (type.indexOptions() != IndexOptions.NONE) {
       throw new IllegalArgumentException("cannot set a BytesRef value on an indexed field");
     }
     if (value == null) {
@@ -419,7 +419,7 @@ public class Field implements IndexableField, StorableField {
    * values from stringValue() or getBinaryValue()
    */
   public void setTokenStream(TokenStream tokenStream) {
-    if (!type.indexed() || !type.tokenized()) {
+    if (type.indexOptions() == IndexOptions.NONE || !type.tokenized()) {
       throw new IllegalArgumentException("TokenStream fields must be indexed and tokenized");
     }
     if (type.numericType() != null) {
@@ -452,7 +452,7 @@ public class Field implements IndexableField, StorableField {
    */
   public void setBoost(float boost) {
     if (boost != 1.0f) {
-      if (type.indexed() == false || type.omitNorms()) {
+      if (type.indexOptions() == IndexOptions.NONE || type.omitNorms()) {
         throw new IllegalArgumentException("You cannot set an index-time boost on an unindexed field, or one that omits norms");
       }
     }
@@ -502,7 +502,8 @@ public class Field implements IndexableField, StorableField {
 
   @Override
   public TokenStream tokenStream(Analyzer analyzer, TokenStream reuse) throws IOException {
-    if (!fieldType().indexed()) {
+    if (fieldType().indexOptions() == IndexOptions.NONE) {
+      // Not indexed
       return null;
     }
 
@@ -536,16 +537,25 @@ public class Field implements IndexableField, StorableField {
     }
 
     if (!fieldType().tokenized()) {
-      if (stringValue() == null) {
+      if (stringValue() != null) {
+        if (!(reuse instanceof StringTokenStream)) {
+          // lazy init the TokenStream as it is heavy to instantiate
+          // (attributes,...) if not needed
+          reuse = new StringTokenStream();
+        }
+        ((StringTokenStream) reuse).setValue(stringValue());
+        return reuse;
+      } else if (binaryValue() != null) {
+        if (!(reuse instanceof BinaryTokenStream)) {
+          // lazy init the TokenStream as it is heavy to instantiate
+          // (attributes,...) if not needed
+          reuse = new BinaryTokenStream();
+        }
+        ((BinaryTokenStream) reuse).setValue(binaryValue());
+        return reuse;
+      } else {
         throw new IllegalArgumentException("Non-Tokenized Fields must have a String value");
       }
-      if (!(reuse instanceof StringTokenStream)) {
-        // lazy init the TokenStream as it is heavy to instantiate
-        // (attributes,...) if not needed (stored field loading)
-        reuse = new StringTokenStream();
-      }
-      ((StringTokenStream) reuse).setValue(stringValue());
-      return reuse;
     }
 
     if (tokenStream != null) {
@@ -559,7 +569,69 @@ public class Field implements IndexableField, StorableField {
     throw new IllegalArgumentException("Field must have either TokenStream, String, Reader or Number value; got " + this);
   }
   
-  static final class StringTokenStream extends TokenStream {
+  private static final class BinaryTokenStream extends TokenStream {
+    private final ByteTermAttribute bytesAtt = addAttribute(ByteTermAttribute.class);
+
+    // Do not init this to true, becase caller must first call reset:
+    private boolean available;
+  
+    public BinaryTokenStream() {
+    }
+
+    public void setValue(BytesRef value) {
+      bytesAtt.setBytesRef(value);
+    }
+  
+    @Override
+    public boolean incrementToken() {
+      if (available) {
+        clearAttributes();
+        available = false;
+        return true;
+      }
+      return false;
+    }
+  
+    @Override
+    public void reset() {
+      available = true;
+    }
+  
+    public interface ByteTermAttribute extends TermToBytesRefAttribute {
+      public void setBytesRef(BytesRef bytes);
+    }
+  
+    public static class ByteTermAttributeImpl extends AttributeImpl implements ByteTermAttribute, TermToBytesRefAttribute {
+      private BytesRef bytes;
+    
+      @Override
+      public void fillBytesRef() {
+        // no-op: the bytes was already filled by our owner's incrementToken
+      }
+    
+      @Override
+      public BytesRef getBytesRef() {
+        return bytes;
+      }
+
+      @Override
+      public void setBytesRef(BytesRef bytes) {
+        this.bytes = bytes;
+      }
+    
+      @Override
+      public void clear() {
+      }
+    
+      @Override
+      public void copyTo(AttributeImpl target) {
+        ByteTermAttributeImpl other = (ByteTermAttributeImpl) target;
+        other.bytes = bytes;
+      }
+    }
+  }
+
+  private static final class StringTokenStream extends TokenStream {
     private final CharTermAttribute termAttribute = addAttribute(CharTermAttribute.class);
     private final OffsetAttribute offsetAttribute = addAttribute(OffsetAttribute.class);
     private boolean used = false;

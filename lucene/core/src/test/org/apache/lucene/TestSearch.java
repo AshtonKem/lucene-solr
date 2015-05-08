@@ -57,7 +57,7 @@ public class TestSearch extends LuceneTestCase {
       try {
         IndexSearcher searcher = newSearcher(reader);
         
-        ScoreDoc[] hits = searcher.search(q, null, 1000).scoreDocs;
+        ScoreDoc[] hits = searcher.search(q, 1000).scoreDocs;
         assertEquals(1, hits.length);
         assertTrue("score is not negative: " + hits[0].score,
                    hits[0].score < 0);
@@ -128,6 +128,7 @@ public class TestSearch extends LuceneTestCase {
         Document d = new Document();
         d.add(newTextField("contents", docs[j], Field.Store.YES));
         d.add(new IntField("id", j, Field.Store.NO));
+        d.add(new NumericDocValuesField("id", j));
         writer.addDocument(d);
       }
       writer.close();
@@ -146,7 +147,7 @@ public class TestSearch extends LuceneTestCase {
           System.out.println("TEST: query=" + query);
         }
 
-        hits = searcher.search(query, null, 1000, sort).scoreDocs;
+        hits = searcher.search(query, 1000, sort).scoreDocs;
 
         out.println(hits.length + " total results");
         for (int i = 0 ; i < hits.length && i < 10; i++) {

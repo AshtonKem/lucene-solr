@@ -168,7 +168,7 @@ public final class StemmerOverrideFilter extends TokenFilter {
     }
     
     /**
-     * Adds an input string and it's stemmer override output to this builder.
+     * Adds an input string and its stemmer override output to this builder.
      * 
      * @param input the input char sequence 
      * @param output the stemmer override output char sequence
@@ -181,9 +181,9 @@ public final class StemmerOverrideFilter extends TokenFilter {
         charsSpare.grow(length);
         final char[] buffer = charsSpare.chars();
         for (int i = 0; i < length; ) {
-            i += Character.toChars(
-                    Character.toLowerCase(
-                        Character.codePointAt(input, i)), buffer, i);
+          i += Character.toChars(
+                  Character.toLowerCase(
+                      Character.codePointAt(input, i)), buffer, i);
         }
         spare.copyChars(buffer, 0, length);
       } else {

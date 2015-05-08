@@ -168,7 +168,7 @@ public class PeerSync  {
   }
 
   /** Returns true if peer sync was successful, meaning that this core may not be considered to have the latest updates
-   *  when considering the last N updates between it and it's peers.
+   *  when considering the last N updates between it and its peers.
    *  A commit is not performed.
    */
   public boolean sync() {
@@ -296,20 +296,20 @@ public class PeerSync  {
         boolean connectTimeoutExceptionInChain = connectTimeoutExceptionInChain(srsp.getException());
         if (connectTimeoutExceptionInChain || solrException instanceof ConnectException || solrException instanceof ConnectTimeoutException
             || solrException instanceof NoHttpResponseException || solrException instanceof SocketException) {
-          log.warn(msg() + " couldn't connect to " + srsp.getShardAddress() + ", counting as success");
+          log.warn(msg() + " couldn't connect to " + srsp.getShardAddress() + ", counting as success", srsp.getException());
 
           return true;
         }
       }
       
       if (cantReachIsSuccess && sreq.purpose == 1 && srsp.getException() instanceof SolrException && ((SolrException) srsp.getException()).code() == 503) {
-        log.warn(msg() + " got a 503 from " + srsp.getShardAddress() + ", counting as success");
+        log.warn(msg() + " got a 503 from " + srsp.getShardAddress() + ", counting as success", srsp.getException());
         return true;
       }
       
       if (cantReachIsSuccess && sreq.purpose == 1 && srsp.getException() instanceof SolrException && ((SolrException) srsp.getException()).code() == 404) {
         log.warn(msg() + " got a 404 from " + srsp.getShardAddress() + ", counting as success. " +
-            "Perhaps /get is not registered?");
+            "Perhaps /get is not registered?", srsp.getException());
         return true;
       }
       
@@ -495,7 +495,7 @@ public class PeerSync  {
             cmd.setVersion(version);
             cmd.setFlags(UpdateCommand.PEER_SYNC | UpdateCommand.IGNORE_AUTOCOMMIT);
             if (debug) {
-              log.debug(msg() + "add " + cmd);
+              log.debug(msg() + "add " + cmd + " id " + sdoc.getField("id"));
             }
             proc.processAdd(cmd);
             break;
@@ -508,7 +508,7 @@ public class PeerSync  {
             cmd.setVersion(version);
             cmd.setFlags(UpdateCommand.PEER_SYNC | UpdateCommand.IGNORE_AUTOCOMMIT);
             if (debug) {
-              log.debug(msg() + "delete " + cmd);
+              log.debug(msg() + "delete " + cmd + " " + new BytesRef(idBytes).utf8ToString());
             }
             proc.processDelete(cmd);
             break;

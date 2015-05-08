@@ -21,9 +21,7 @@ import java.io.IOException;
 import java.io.PrintStream;
 
 import org.apache.lucene.codecs.BlockTermState;
-import org.apache.lucene.index.DocsAndPositionsEnum;
-import org.apache.lucene.index.DocsEnum;
-import org.apache.lucene.index.FieldInfo.IndexOptions;
+import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.TermState;
 import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.store.ByteArrayDataInput;
@@ -36,7 +34,9 @@ import org.apache.lucene.util.RamUsageEstimator;
 import org.apache.lucene.util.fst.FST;
 import org.apache.lucene.util.fst.Util;
 
-/** Iterates through terms in this field */
+/** Iterates through terms in this field.  This implementation skips
+ *  any auto-prefix terms it encounters. */
+
 final class SegmentTermsEnum extends TermsEnum {
 
   // Lazy init:
@@ -50,7 +50,7 @@ final class SegmentTermsEnum extends TermsEnum {
 
   private int targetBeforeCurrentLength;
 
-  // static boolean DEBUG = false;
+  //static boolean DEBUG = BlockTreeTermsWriter.DEBUG;
 
   private final ByteArrayDataInput scratchReader = new ByteArrayDataInput();
 
@@ -113,13 +113,15 @@ final class SegmentTermsEnum extends TermsEnum {
   // Not private to avoid synthetic access$NNN methods
   void initIndexInput() {
     if (this.in == null) {
-      this.in = fr.parent.in.clone();
+      this.in = fr.parent.termsIn.clone();
     }
   }
 
   /** Runs next() through the entire terms dict,
    *  computing aggregate statistics. */
   public Stats computeBlockStats() throws IOException {
+
+    // TODO: add total auto-prefix term count
 
     Stats stats = new Stats(fr.parent.segment, fr.fieldInfo.name);
     if (fr.index != null) {
@@ -154,8 +156,10 @@ final class SegmentTermsEnum extends TermsEnum {
       while (currentFrame.nextEnt == currentFrame.entCount) {
         stats.endBlock(currentFrame);
         if (!currentFrame.isLastInFloor) {
+          // Advance to next floor block
           currentFrame.loadNextFloorBlock();
           stats.startBlock(currentFrame, true);
+          break;
         } else {
           if (currentFrame.ord == 0) {
             break allTerms;
@@ -177,8 +181,6 @@ final class SegmentTermsEnum extends TermsEnum {
           // This is a "next" frame -- even if it's
           // floor'd we must pretend it isn't so we don't
           // try to scan to the right floor frame:
-          currentFrame.isFloor = false;
-          //currentFrame.hasTerms = true;
           currentFrame.loadBlock();
           stats.startBlock(currentFrame, !currentFrame.isLastInFloor);
         } else {
@@ -238,11 +240,11 @@ final class SegmentTermsEnum extends TermsEnum {
   SegmentTermsEnumFrame pushFrame(FST.Arc<BytesRef> arc, BytesRef frameData, int length) throws IOException {
     scratchReader.reset(frameData.bytes, frameData.offset, frameData.length);
     final long code = scratchReader.readVLong();
-    final long fpSeek = code >>> BlockTreeTermsWriter.OUTPUT_FLAGS_NUM_BITS;
+    final long fpSeek = code >>> BlockTreeTermsReader.OUTPUT_FLAGS_NUM_BITS;
     final SegmentTermsEnumFrame f = getFrame(1+currentFrame.ord);
-    f.hasTerms = (code & BlockTreeTermsWriter.OUTPUT_FLAG_HAS_TERMS) != 0;
+    f.hasTerms = (code & BlockTreeTermsReader.OUTPUT_FLAG_HAS_TERMS) != 0;
     f.hasTermsOrig = f.hasTerms;
-    f.isFloor = (code & BlockTreeTermsWriter.OUTPUT_FLAG_IS_FLOOR) != 0;
+    f.isFloor = (code & BlockTreeTermsReader.OUTPUT_FLAG_IS_FLOOR) != 0;
     if (f.isFloor) {
       f.setFloorData(scratchReader, frameData);
     }
@@ -296,6 +298,7 @@ final class SegmentTermsEnum extends TermsEnum {
     return true;
   }
 
+  /*
   // for debugging
   @SuppressWarnings("unused")
   static String brToString(BytesRef b) {
@@ -309,8 +312,15 @@ final class SegmentTermsEnum extends TermsEnum {
     }
   }
 
+  // for debugging
+  @SuppressWarnings("unused")
+  static String brToString(BytesRefBuilder b) {
+    return brToString(b.get());
+  }
+  */
+
   @Override
-  public boolean seekExact(final BytesRef target) throws IOException {
+  public boolean seekExact(BytesRef target) throws IOException {
 
     if (fr.index == null) {
       throw new IllegalStateException("terms index was not loaded");
@@ -370,8 +380,8 @@ final class SegmentTermsEnum extends TermsEnum {
         }
         arc = arcs[1+targetUpto];
         assert arc.label == (target.bytes[target.offset + targetUpto] & 0xFF): "arc.label=" + (char) arc.label + " targetLabel=" + (char) (target.bytes[target.offset + targetUpto] & 0xFF);
-        if (arc.output != BlockTreeTermsWriter.NO_OUTPUT) {
-          output = BlockTreeTermsWriter.FST_OUTPUTS.add(output, arc.output);
+        if (arc.output != BlockTreeTermsReader.NO_OUTPUT) {
+          output = BlockTreeTermsReader.FST_OUTPUTS.add(output, arc.output);
         }
         if (arc.isFinal()) {
           lastFrame = stack[1+lastFrame.ord];
@@ -461,7 +471,7 @@ final class SegmentTermsEnum extends TermsEnum {
 
       //term.length = 0;
       targetUpto = 0;
-      currentFrame = pushFrame(arc, BlockTreeTermsWriter.FST_OUTPUTS.add(output, arc.nextFinalOutput), 0);
+      currentFrame = pushFrame(arc, BlockTreeTermsReader.FST_OUTPUTS.add(output, arc.nextFinalOutput), 0);
     }
 
     // if (DEBUG) {
@@ -517,8 +527,8 @@ final class SegmentTermsEnum extends TermsEnum {
         term.setByteAt(targetUpto, (byte) targetLabel);
         // Aggregate output as we go:
         assert arc.output != null;
-        if (arc.output != BlockTreeTermsWriter.NO_OUTPUT) {
-          output = BlockTreeTermsWriter.FST_OUTPUTS.add(output, arc.output);
+        if (arc.output != BlockTreeTermsReader.NO_OUTPUT) {
+          output = BlockTreeTermsReader.FST_OUTPUTS.add(output, arc.output);
         }
 
         // if (DEBUG) {
@@ -528,7 +538,7 @@ final class SegmentTermsEnum extends TermsEnum {
 
         if (arc.isFinal()) {
           //if (DEBUG) System.out.println("    arc is final!");
-          currentFrame = pushFrame(arc, BlockTreeTermsWriter.FST_OUTPUTS.add(output, arc.nextFinalOutput), targetUpto);
+          currentFrame = pushFrame(arc, BlockTreeTermsReader.FST_OUTPUTS.add(output, arc.nextFinalOutput), targetUpto);
           //if (DEBUG) System.out.println("    curFrame.ord=" + currentFrame.ord + " hasTerms=" + currentFrame.hasTerms);
         }
       }
@@ -567,7 +577,8 @@ final class SegmentTermsEnum extends TermsEnum {
   }
 
   @Override
-  public SeekStatus seekCeil(final BytesRef target) throws IOException {
+  public SeekStatus seekCeil(BytesRef target) throws IOException {
+
     if (fr.index == null) {
       throw new IllegalStateException("terms index was not loaded");
     }
@@ -577,7 +588,7 @@ final class SegmentTermsEnum extends TermsEnum {
     assert clearEOF();
 
     // if (DEBUG) {
-    //   System.out.println("\nBTTR.seekCeil seg=" + fr.parent.segment + " target=" + fr.fieldInfo.name + ":" + target.utf8ToString() + " " + target + " current=" + brToString(term) + " (exists?=" + termExists + ") validIndexPrefix=  " + validIndexPrefix);
+    //   System.out.println("\nBTTR.seekCeil seg=" + fr.parent.segment + " target=" + fr.fieldInfo.name + ":" + brToString(target) + " " + target + " current=" + brToString(term) + " (exists?=" + termExists + ") validIndexPrefix=  " + validIndexPrefix);
     //   printSeekState(System.out);
     // }
 
@@ -612,27 +623,27 @@ final class SegmentTermsEnum extends TermsEnum {
 
       int cmp = 0;
 
-      // TOOD: we should write our vLong backwards (MSB
+      // TODO: we should write our vLong backwards (MSB
       // first) to get better sharing from the FST
 
       // First compare up to valid seek frames:
       while (targetUpto < targetLimit) {
         cmp = (term.byteAt(targetUpto)&0xFF) - (target.bytes[target.offset + targetUpto]&0xFF);
         //if (DEBUG) {
-        //System.out.println("    cycle targetUpto=" + targetUpto + " (vs limit=" + targetLimit + ") cmp=" + cmp + " (targetLabel=" + (char) (target.bytes[target.offset + targetUpto]) + " vs termLabel=" + (char) (term.bytes[targetUpto]) + ")"   + " arc.output=" + arc.output + " output=" + output);
+        //System.out.println("    cycle targetUpto=" + targetUpto + " (vs limit=" + targetLimit + ") cmp=" + cmp + " (targetLabel=" + (char) (target.bytes[target.offset + targetUpto]) + " vs termLabel=" + (char) (term.byteAt(targetUpto)) + ")"   + " arc.output=" + arc.output + " output=" + output);
         //}
         if (cmp != 0) {
           break;
         }
         arc = arcs[1+targetUpto];
         assert arc.label == (target.bytes[target.offset + targetUpto] & 0xFF): "arc.label=" + (char) arc.label + " targetLabel=" + (char) (target.bytes[target.offset + targetUpto] & 0xFF);
-        // TOOD: we could save the outputs in local
+        // TODO: we could save the outputs in local
         // byte[][] instead of making new objs ever
         // seek; but, often the FST doesn't have any
         // shared bytes (but this could change if we
         // reverse vLong byte order)
-        if (arc.output != BlockTreeTermsWriter.NO_OUTPUT) {
-          output = BlockTreeTermsWriter.FST_OUTPUTS.add(output, arc.output);
+        if (arc.output != BlockTreeTermsReader.NO_OUTPUT) {
+          output = BlockTreeTermsReader.FST_OUTPUTS.add(output, arc.output);
         }
         if (arc.isFinal()) {
           lastFrame = stack[1+lastFrame.ord];
@@ -649,7 +660,7 @@ final class SegmentTermsEnum extends TermsEnum {
         while (targetUpto < targetLimit2) {
           cmp = (term.byteAt(targetUpto)&0xFF) - (target.bytes[target.offset + targetUpto]&0xFF);
           //if (DEBUG) {
-          //System.out.println("    cycle2 targetUpto=" + targetUpto + " (vs limit=" + targetLimit + ") cmp=" + cmp + " (targetLabel=" + (char) (target.bytes[target.offset + targetUpto]) + " vs termLabel=" + (char) (term.bytes[targetUpto]) + ")");
+          //System.out.println("    cycle2 targetUpto=" + targetUpto + " (vs limit=" + targetLimit + ") cmp=" + cmp + " (targetLabel=" + (char) (target.bytes[target.offset + targetUpto]) + " vs termLabel=" + (char) (term.byteAt(targetUpto)) + ")");
           //}
           if (cmp != 0) {
             break;
@@ -717,7 +728,7 @@ final class SegmentTermsEnum extends TermsEnum {
 
       //term.length = 0;
       targetUpto = 0;
-      currentFrame = pushFrame(arc, BlockTreeTermsWriter.FST_OUTPUTS.add(output, arc.nextFinalOutput), 0);
+      currentFrame = pushFrame(arc, BlockTreeTermsReader.FST_OUTPUTS.add(output, arc.nextFinalOutput), 0);
     }
 
     //if (DEBUG) {
@@ -735,7 +746,7 @@ final class SegmentTermsEnum extends TermsEnum {
 
         // Index is exhausted
         // if (DEBUG) {
-        //   System.out.println("    index: index exhausted label=" + ((char) targetLabel) + " " + toHex(targetLabel));
+        //   System.out.println("    index: index exhausted label=" + ((char) targetLabel) + " " + targetLabel);
         // }
             
         validIndexPrefix = currentFrame.prefix;
@@ -745,6 +756,7 @@ final class SegmentTermsEnum extends TermsEnum {
 
         currentFrame.loadBlock();
 
+        //if (DEBUG) System.out.println("  now scanToTerm");
         final SeekStatus result = currentFrame.scanToTerm(target, false);
         if (result == SeekStatus.END) {
           term.copyBytes(target);
@@ -752,7 +764,7 @@ final class SegmentTermsEnum extends TermsEnum {
 
           if (next() != null) {
             //if (DEBUG) {
-            //System.out.println("  return NOT_FOUND term=" + brToString(term) + " " + term);
+            //System.out.println("  return NOT_FOUND term=" + brToString(term));
             //}
             return SeekStatus.NOT_FOUND;
           } else {
@@ -763,7 +775,7 @@ final class SegmentTermsEnum extends TermsEnum {
           }
         } else {
           //if (DEBUG) {
-          //System.out.println("  return " + result + " term=" + brToString(term) + " " + term);
+          //System.out.println("  return " + result + " term=" + brToString(term));
           //}
           return result;
         }
@@ -773,18 +785,18 @@ final class SegmentTermsEnum extends TermsEnum {
         arc = nextArc;
         // Aggregate output as we go:
         assert arc.output != null;
-        if (arc.output != BlockTreeTermsWriter.NO_OUTPUT) {
-          output = BlockTreeTermsWriter.FST_OUTPUTS.add(output, arc.output);
+        if (arc.output != BlockTreeTermsReader.NO_OUTPUT) {
+          output = BlockTreeTermsReader.FST_OUTPUTS.add(output, arc.output);
         }
 
         //if (DEBUG) {
-        //System.out.println("    index: follow label=" + toHex(target.bytes[target.offset + targetUpto]&0xff) + " arc.output=" + arc.output + " arc.nfo=" + arc.nextFinalOutput);
+        //System.out.println("    index: follow label=" + (target.bytes[target.offset + targetUpto]&0xff) + " arc.output=" + arc.output + " arc.nfo=" + arc.nextFinalOutput);
         //}
         targetUpto++;
 
         if (arc.isFinal()) {
           //if (DEBUG) System.out.println("    arc is final!");
-          currentFrame = pushFrame(arc, BlockTreeTermsWriter.FST_OUTPUTS.add(output, arc.nextFinalOutput), targetUpto);
+          currentFrame = pushFrame(arc, BlockTreeTermsReader.FST_OUTPUTS.add(output, arc.nextFinalOutput), targetUpto);
           //if (DEBUG) System.out.println("    curFrame.ord=" + currentFrame.ord + " hasTerms=" + currentFrame.hasTerms);
         }
       }
@@ -804,7 +816,7 @@ final class SegmentTermsEnum extends TermsEnum {
       termExists = false;
       if (next() != null) {
         //if (DEBUG) {
-        //System.out.println("  return NOT_FOUND term=" + term.utf8ToString() + " " + term);
+        //System.out.println("  return NOT_FOUND term=" + term.get().utf8ToString() + " " + term);
         //}
         return SeekStatus.NOT_FOUND;
       } else {
@@ -831,9 +843,9 @@ final class SegmentTermsEnum extends TermsEnum {
         assert f != null;
         final BytesRef prefix = new BytesRef(term.get().bytes, 0, f.prefix);
         if (f.nextEnt == -1) {
-          out.println("    frame " + (isSeekFrame ? "(seek)" : "(next)") + " ord=" + ord + " fp=" + f.fp + (f.isFloor ? (" (fpOrig=" + f.fpOrig + ")") : "") + " prefixLen=" + f.prefix + " prefix=" + prefix + (f.nextEnt == -1 ? "" : (" (of " + f.entCount + ")")) + " hasTerms=" + f.hasTerms + " isFloor=" + f.isFloor + " code=" + ((f.fp<<BlockTreeTermsWriter.OUTPUT_FLAGS_NUM_BITS) + (f.hasTerms ? BlockTreeTermsWriter.OUTPUT_FLAG_HAS_TERMS:0) + (f.isFloor ? BlockTreeTermsWriter.OUTPUT_FLAG_IS_FLOOR:0)) + " isLastInFloor=" + f.isLastInFloor + " mdUpto=" + f.metaDataUpto + " tbOrd=" + f.getTermBlockOrd());
+          out.println("    frame " + (isSeekFrame ? "(seek)" : "(next)") + " ord=" + ord + " fp=" + f.fp + (f.isFloor ? (" (fpOrig=" + f.fpOrig + ")") : "") + " prefixLen=" + f.prefix + " prefix=" + prefix + (f.nextEnt == -1 ? "" : (" (of " + f.entCount + ")")) + " hasTerms=" + f.hasTerms + " isFloor=" + f.isFloor + " code=" + ((f.fp<< BlockTreeTermsReader.OUTPUT_FLAGS_NUM_BITS) + (f.hasTerms ? BlockTreeTermsReader.OUTPUT_FLAG_HAS_TERMS:0) + (f.isFloor ? BlockTreeTermsReader.OUTPUT_FLAG_IS_FLOOR:0)) + " isLastInFloor=" + f.isLastInFloor + " mdUpto=" + f.metaDataUpto + " tbOrd=" + f.getTermBlockOrd());
         } else {
-          out.println("    frame " + (isSeekFrame ? "(seek, loaded)" : "(next, loaded)") + " ord=" + ord + " fp=" + f.fp + (f.isFloor ? (" (fpOrig=" + f.fpOrig + ")") : "") + " prefixLen=" + f.prefix + " prefix=" + prefix + " nextEnt=" + f.nextEnt + (f.nextEnt == -1 ? "" : (" (of " + f.entCount + ")")) + " hasTerms=" + f.hasTerms + " isFloor=" + f.isFloor + " code=" + ((f.fp<<BlockTreeTermsWriter.OUTPUT_FLAGS_NUM_BITS) + (f.hasTerms ? BlockTreeTermsWriter.OUTPUT_FLAG_HAS_TERMS:0) + (f.isFloor ? BlockTreeTermsWriter.OUTPUT_FLAG_IS_FLOOR:0)) + " lastSubFP=" + f.lastSubFP + " isLastInFloor=" + f.isLastInFloor + " mdUpto=" + f.metaDataUpto + " tbOrd=" + f.getTermBlockOrd());
+          out.println("    frame " + (isSeekFrame ? "(seek, loaded)" : "(next, loaded)") + " ord=" + ord + " fp=" + f.fp + (f.isFloor ? (" (fpOrig=" + f.fpOrig + ")") : "") + " prefixLen=" + f.prefix + " prefix=" + prefix + " nextEnt=" + f.nextEnt + (f.nextEnt == -1 ? "" : (" (of " + f.entCount + ")")) + " hasTerms=" + f.hasTerms + " isFloor=" + f.isFloor + " code=" + ((f.fp<< BlockTreeTermsReader.OUTPUT_FLAGS_NUM_BITS) + (f.hasTerms ? BlockTreeTermsReader.OUTPUT_FLAG_HAS_TERMS:0) + (f.isFloor ? BlockTreeTermsReader.OUTPUT_FLAG_IS_FLOOR:0)) + " lastSubFP=" + f.lastSubFP + " isLastInFloor=" + f.isLastInFloor + " mdUpto=" + f.metaDataUpto + " tbOrd=" + f.getTermBlockOrd());
         }
         if (fr.index != null) {
           assert !isSeekFrame || f.arc != null: "isSeekFrame=" + isSeekFrame + " f.arc=" + f.arc;
@@ -848,7 +860,7 @@ final class SegmentTermsEnum extends TermsEnum {
           } else if (isSeekFrame && !f.isFloor) {
             final ByteArrayDataInput reader = new ByteArrayDataInput(output.bytes, output.offset, output.length);
             final long codeOrig = reader.readVLong();
-            final long code = (f.fp << BlockTreeTermsWriter.OUTPUT_FLAGS_NUM_BITS) | (f.hasTerms ? BlockTreeTermsWriter.OUTPUT_FLAG_HAS_TERMS:0) | (f.isFloor ? BlockTreeTermsWriter.OUTPUT_FLAG_IS_FLOOR:0);
+            final long code = (f.fp << BlockTreeTermsReader.OUTPUT_FLAGS_NUM_BITS) | (f.hasTerms ? BlockTreeTermsReader.OUTPUT_FLAG_HAS_TERMS:0) | (f.isFloor ? BlockTreeTermsReader.OUTPUT_FLAG_IS_FLOOR:0);
             if (codeOrig != code) {
               out.println("      broken seek state: output code=" + codeOrig + " doesn't match frame code=" + code);
               throw new RuntimeException("seek state is broken");
@@ -908,7 +920,9 @@ final class SegmentTermsEnum extends TermsEnum {
     // Pop finished blocks
     while (currentFrame.nextEnt == currentFrame.entCount) {
       if (!currentFrame.isLastInFloor) {
+        // Advance to next floor block
         currentFrame.loadNextFloorBlock();
+        break;
       } else {
         //if (DEBUG) System.out.println("  pop frame");
         if (currentFrame.ord == 0) {
@@ -948,11 +962,9 @@ final class SegmentTermsEnum extends TermsEnum {
         // This is a "next" frame -- even if it's
         // floor'd we must pretend it isn't so we don't
         // try to scan to the right floor frame:
-        currentFrame.isFloor = false;
-        //currentFrame.hasTerms = true;
         currentFrame.loadBlock();
       } else {
-        //if (DEBUG) System.out.println("  return term=" + term.utf8ToString() + " " + term + " currentFrame.ord=" + currentFrame.ord);
+        //if (DEBUG) System.out.println("  return term=" + brToString(term) + " currentFrame.ord=" + currentFrame.ord);
         return term.get();
       }
     }
@@ -981,7 +993,7 @@ final class SegmentTermsEnum extends TermsEnum {
   }
 
   @Override
-  public DocsEnum docs(Bits skipDocs, DocsEnum reuse, int flags) throws IOException {
+  public PostingsEnum postings(Bits skipDocs, PostingsEnum reuse, int flags) throws IOException {
     assert !eof;
     //if (DEBUG) {
     //System.out.println("BTTR.docs seg=" + segment);
@@ -990,19 +1002,7 @@ final class SegmentTermsEnum extends TermsEnum {
     //if (DEBUG) {
     //System.out.println("  state=" + currentFrame.state);
     //}
-    return fr.parent.postingsReader.docs(fr.fieldInfo, currentFrame.state, skipDocs, reuse, flags);
-  }
-
-  @Override
-  public DocsAndPositionsEnum docsAndPositions(Bits skipDocs, DocsAndPositionsEnum reuse, int flags) throws IOException {
-    if (fr.fieldInfo.getIndexOptions().compareTo(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS) < 0) {
-      // Positions were not indexed:
-      return null;
-    }
-
-    assert !eof;
-    currentFrame.decodeMetaData();
-    return fr.parent.postingsReader.docsAndPositions(fr.fieldInfo, currentFrame.state, skipDocs, reuse, flags);
+    return fr.parent.postingsReader.postings(fr.fieldInfo, currentFrame.state, skipDocs, reuse, flags);
   }
 
   @Override
