@@ -23,8 +23,6 @@ import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.HashMap;
 
-import org.apache.lucene.document.FieldType;
-import org.apache.lucene.document.StoredField;
 import org.apache.solr.SolrTestCaseJ4;
 import org.apache.solr.common.SolrDocument;
 import org.apache.solr.common.SolrDocumentList;
@@ -151,8 +149,9 @@ public class TestTransitResponseWriter extends SolrTestCaseJ4 {
     document.put("score", "0.7");
     docs.add(document);
     response.put("start", 0);
-    response.put("documents", docs);
     response.put("numFound", 1);
+    response.put("documents", docs);
+    
     response.put("maxScore", 0.7);
     data.put("response", response);
     assertEquals( writeTransit(data), result);
@@ -195,8 +194,8 @@ public class TestTransitResponseWriter extends SolrTestCaseJ4 {
     document.put("tags", tags);
     docs.add(document);
     response.put("start", 0);
-    response.put("documents", docs);
     response.put("numFound", 1);
+    response.put("documents", docs);
     data.put("response", response);
     String expected = writeTransit(data);
     assertEquals( expected, result);
