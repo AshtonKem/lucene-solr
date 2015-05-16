@@ -169,6 +169,17 @@ New Features
 
 * SOLR-6220: Rule Based Replica Assignment during collection creation (Noble Paul)
 
+* SOLR-6968: New 'cardinality' option for stats.field, uses HyperLogLog to efficiently 
+  estimate the cardinality of a field w/bounded RAM. (hossman)
+
+* SOLR-4392: Make it possible to specify AES encrypted password in dataconfig.xml (Noble Paul)
+
+* SOLR-7461: stats.field now supports individual local params for 'countDistinct' and 'distinctValues'.
+  'calcdistinct' is still supported as an alias for both options (hossman)
+
+* SOLR-7522: Facet Module - Implement field/terms faceting over single-valued
+  numeric fields. (yonik)
+
 
 Bug Fixes
 ----------------------
@@ -242,6 +253,9 @@ Bug Fixes
 * SOLR-7494: Facet Module - unique() facet function was wildly inaccurate for high cardinality
   fields. (Andy Crossen, yonik)
 
+* SOLR-7502: start script should not try to create configset for .system collection (Noble Paul)
+
+* SOLR-7514: SolrClient.getByIds fails with ClassCastException (Tom Farnworth, Ramkumar Aiyengar)
 
 Optimizations
 ----------------------
